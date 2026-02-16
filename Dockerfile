@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
+ENV PROTOC=/usr/bin/protoc
+RUN protoc --version
+
 # 1. Copy manifests to cache dependencies
 COPY Cargo.toml Cargo.lock ./
 # Create dummy main.rs to build dependencies
