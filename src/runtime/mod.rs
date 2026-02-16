@@ -1,27 +1,41 @@
+pub mod docker;
 pub mod native;
 pub mod traits;
 
+pub use docker::DockerRuntime;
 pub use native::NativeRuntime;
 pub use traits::RuntimeAdapter;
 
 use crate::config::RuntimeConfig;
 
+pub const RUNTIME_SUPPORTED_VALUES: &str = "native, docker";
+pub const DOCKER_ROLLOUT_GATE_MESSAGE: &str =
+    "runtime.kind='docker' is disabled by rollout gate. Set runtime.enable_docker_runtime=true to enable experimental docker runtime.";
+pub const CLOUDFLARE_UNSUPPORTED_MESSAGE: &str =
+    "runtime.kind='cloudflare' is explicitly unsupported in this cycle. Use runtime.kind='native' for now.";
+
 /// Factory: create the right runtime from config
 pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeAdapter>> {
     match config.kind.as_str() {
         "native" => Ok(Box::new(NativeRuntime::new())),
-        "docker" => anyhow::bail!(
-            "runtime.kind='docker' is not implemented yet. Use runtime.kind='native' until container runtime support lands."
-        ),
-        "cloudflare" => anyhow::bail!(
-            "runtime.kind='cloudflare' is not implemented yet. Use runtime.kind='native' for now."
-        ),
-        other if other.trim().is_empty() => anyhow::bail!(
-            "runtime.kind cannot be empty. Supported values: native"
-        ),
-        other => anyhow::bail!(
-            "Unknown runtime kind '{other}'. Supported values: native"
-        ),
+        "docker" => {
+            if config.enable_docker_runtime {
+                Ok(Box::new(DockerRuntime::new()))
+            } else {
+                anyhow::bail!(DOCKER_ROLLOUT_GATE_MESSAGE)
+            }
+        }
+        "cloudflare" => anyhow::bail!(CLOUDFLARE_UNSUPPORTED_MESSAGE),
+        other if other.trim().is_empty() => {
+            anyhow::bail!(
+                "runtime.kind cannot be empty. Supported values: {RUNTIME_SUPPORTED_VALUES}"
+            )
+        }
+        other => {
+            anyhow::bail!(
+                "Unknown runtime kind '{other}'. Supported values: {RUNTIME_SUPPORTED_VALUES}"
+            )
+        }
     }
 }
 
@@ -33,6 +47,7 @@ mod tests {
     fn factory_native() {
         let cfg = RuntimeConfig {
             kind: "native".into(),
+            enable_docker_runtime: false,
         };
         let rt = create_runtime(&cfg).unwrap();
         assert_eq!(rt.name(), "native");
@@ -40,23 +55,42 @@ mod tests {
     }
 
     #[test]
-    fn factory_docker_errors() {
+    fn factory_docker_disabled_without_gate() {
         let cfg = RuntimeConfig {
             kind: "docker".into(),
+            enable_docker_runtime: false,
         };
+
         match create_runtime(&cfg) {
-            Err(err) => assert!(err.to_string().contains("not implemented")),
-            Ok(_) => panic!("docker runtime should error"),
+            Err(err) => {
+                let message = err.to_string();
+                assert!(message.contains("disabled by rollout gate"));
+                assert!(message.contains("runtime.enable_docker_runtime=true"));
+            }
+            Ok(_) => panic!("docker runtime should be gated by default"),
         }
+    }
+
+    #[test]
+    fn factory_docker_enabled_with_gate() {
+        let cfg = RuntimeConfig {
+            kind: "docker".into(),
+            enable_docker_runtime: true,
+        };
+
+        let rt = create_runtime(&cfg).unwrap();
+        assert_eq!(rt.name(), "docker");
+        assert!(rt.has_shell_access());
     }
 
     #[test]
     fn factory_cloudflare_errors() {
         let cfg = RuntimeConfig {
             kind: "cloudflare".into(),
+            enable_docker_runtime: false,
         };
         match create_runtime(&cfg) {
-            Err(err) => assert!(err.to_string().contains("not implemented")),
+            Err(err) => assert_eq!(err.to_string(), CLOUDFLARE_UNSUPPORTED_MESSAGE),
             Ok(_) => panic!("cloudflare runtime should error"),
         }
     }
@@ -65,9 +99,13 @@ mod tests {
     fn factory_unknown_errors() {
         let cfg = RuntimeConfig {
             kind: "wasm-edge-unknown".into(),
+            enable_docker_runtime: false,
         };
         match create_runtime(&cfg) {
-            Err(err) => assert!(err.to_string().contains("Unknown runtime kind")),
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "Unknown runtime kind 'wasm-edge-unknown'. Supported values: native, docker"
+            ),
             Ok(_) => panic!("unknown runtime should error"),
         }
     }
@@ -76,9 +114,13 @@ mod tests {
     fn factory_empty_errors() {
         let cfg = RuntimeConfig {
             kind: String::new(),
+            enable_docker_runtime: false,
         };
         match create_runtime(&cfg) {
-            Err(err) => assert!(err.to_string().contains("cannot be empty")),
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "runtime.kind cannot be empty. Supported values: native, docker"
+            ),
             Ok(_) => panic!("empty runtime should error"),
         }
     }

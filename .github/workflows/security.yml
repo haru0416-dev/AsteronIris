@@ -11,10 +11,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +33,7 @@ jobs:
   deny:
     name: License & Supply Chain
     runs-on: ubuntu-latest
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
 

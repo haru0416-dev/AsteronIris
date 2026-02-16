@@ -24,18 +24,13 @@ pub struct ProjectContext {
 // ── Banner ───────────────────────────────────────────────────────
 
 const BANNER: &str = r"
-    ⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡
+    ===============================================
 
-    ███████╗███████╗██████╗  ██████╗  ██████╗██╗      █████╗ ██╗    ██╗
-    ╚══███╔╝██╔════╝██╔══██╗██╔═══██╗██╔════╝██║     ██╔══██╗██║    ██║
-      ███╔╝ █████╗  ██████╔╝██║   ██║██║     ██║     ███████║██║ █╗ ██║
-     ███╔╝  ██╔══╝  ██╔══██╗██║   ██║██║     ██║     ██╔══██║██║███╗██║
-    ███████╗███████╗██║  ██║╚██████╔╝╚██████╗███████╗██║  ██║╚███╔███╔╝
-    ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝
+      A S T E R O N I R I S
 
-    Zero overhead. Zero compromise. 100% Rust. 100% Agnostic.
+      Secure by default. Extensible by design. Built in Rust.
 
-    ⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡
+    ===============================================
 ";
 
 // ── Main wizard entry point ──────────────────────────────────────
@@ -45,7 +40,7 @@ pub fn run_wizard() -> Result<Config> {
 
     println!(
         "  {}",
-        style("Welcome to AsteronIris — the fastest, smallest AI assistant.")
+        style("Welcome to AsteronIris — a secure, extensible AI assistant.")
             .white()
             .bold()
     );

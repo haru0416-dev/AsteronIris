@@ -39,12 +39,12 @@ mod util;
 
 use config::Config;
 
-/// `AsteronIris` - Zero overhead. Zero compromise. 100% Rust.
+/// `AsteronIris` - Secure, extensible AI assistant built in Rust.
 #[derive(Parser, Debug)]
 #[command(name = "asteroniris")]
 #[command(author = "theonlyhennygod")]
 #[command(version = "0.1.0")]
-#[command(about = "The fastest, smallest AI assistant.", long_about = None)]
+#[command(about = "A secure, extensible AI assistant.", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

@@ -12,10 +12,10 @@ use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
 };
 
-const CONCURRENCY: usize = 8;
-const N_STORE: usize = 1_000;
-const N_RECALL: usize = 1_000;
-const RECALL_LIMIT: usize = 10;
+const DEFAULT_CONCURRENCY: usize = 8;
+const DEFAULT_N_STORE: usize = 1_000;
+const DEFAULT_N_RECALL: usize = 1_000;
+const DEFAULT_RECALL_LIMIT: usize = 10;
 
 const EMBEDDING_DIMS: usize = 16;
 const EMBEDDING_SEED: u64 = 0x5EED_BA5E;
@@ -112,6 +112,14 @@ fn recall_query(i: usize) -> String {
     format!("topic_{topic} word_{word}")
 }
 
+fn env_or_default_usize(key: &str, default: usize) -> usize {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
 fn ops_per_sec(ops: usize, dur: std::time::Duration) -> f64 {
     let secs = dur.as_secs_f64();
     if secs <= 0.0 {
@@ -129,6 +137,10 @@ async fn memory_throughput_ops_per_sec() {
     ));
 
     let backend = selected_backend();
+    let concurrency = env_or_default_usize("THROUGHPUT_CONCURRENCY", DEFAULT_CONCURRENCY);
+    let n_store = env_or_default_usize("THROUGHPUT_N_STORE", DEFAULT_N_STORE);
+    let n_recall = env_or_default_usize("THROUGHPUT_N_RECALL", DEFAULT_N_RECALL);
+    let recall_limit = env_or_default_usize("THROUGHPUT_RECALL_LIMIT", DEFAULT_RECALL_LIMIT);
     println!("BACKEND={backend}");
 
     let mem: Arc<dyn Memory> = if backend == "lancedb" {
@@ -140,11 +152,11 @@ async fn memory_throughput_ops_per_sec() {
         )
     };
 
-    let store_sem = Arc::new(Semaphore::new(CONCURRENCY));
+    let store_sem = Arc::new(Semaphore::new(concurrency));
     let store_start = Instant::now();
     let mut store_set = tokio::task::JoinSet::new();
 
-    for i in 0..N_STORE {
+    for i in 0..n_store {
         let permit = store_sem.clone().acquire_owned().await.unwrap();
         let mem = Arc::clone(&mem);
         store_set.spawn(async move {
@@ -171,14 +183,14 @@ async fn memory_throughput_ops_per_sec() {
         res.unwrap().unwrap();
     }
     let store_dur = store_start.elapsed();
-    let store_ops = ops_per_sec(N_STORE, store_dur);
-    assert_eq!(mem.count_events(None).await.unwrap(), N_STORE);
+    let store_ops = ops_per_sec(n_store, store_dur);
+    assert_eq!(mem.count_events(None).await.unwrap(), n_store);
     assert!(store_ops.is_finite() && store_ops > 0.0);
-    let recall_sem = Arc::new(Semaphore::new(CONCURRENCY));
+    let recall_sem = Arc::new(Semaphore::new(concurrency));
     let recall_start = Instant::now();
     let mut recall_set = tokio::task::JoinSet::new();
 
-    for i in 0..N_RECALL {
+    for i in 0..n_recall {
         let permit = recall_sem.clone().acquire_owned().await.unwrap();
         let mem = Arc::clone(&mem);
         let q = recall_query(i);
@@ -188,10 +200,10 @@ async fn memory_throughput_ops_per_sec() {
                 .recall_scoped(RecallQuery {
                     entity_id: "default".to_string(),
                     query: q,
-                    limit: RECALL_LIMIT,
+                    limit: recall_limit,
                 })
                 .await?;
-            anyhow::ensure!(results.len() <= RECALL_LIMIT);
+            anyhow::ensure!(results.len() <= recall_limit);
             Ok::<(), anyhow::Error>(())
         });
     }
@@ -199,14 +211,14 @@ async fn memory_throughput_ops_per_sec() {
         res.unwrap().unwrap();
     }
     let recall_dur = recall_start.elapsed();
-    let recall_ops = ops_per_sec(N_RECALL, recall_dur);
+    let recall_ops = ops_per_sec(n_recall, recall_dur);
     assert!(recall_ops.is_finite() && recall_ops > 0.0);
     println!("STORE_OPS_PER_SEC={store_ops:.2}");
     println!("RECALL_OPS_PER_SEC={recall_ops:.2}");
-    println!("N_STORE={N_STORE}");
-    println!("N_RECALL={N_RECALL}");
-    println!("CONCURRENCY={CONCURRENCY}");
-    println!("RECALL_LIMIT={RECALL_LIMIT}");
+    println!("N_STORE={n_store}");
+    println!("N_RECALL={n_recall}");
+    println!("CONCURRENCY={concurrency}");
+    println!("RECALL_LIMIT={recall_limit}");
     println!("EMBEDDING_DIMS={EMBEDDING_DIMS}");
     println!("PAYLOAD_BYTES={PAYLOAD_BYTES}");
 }

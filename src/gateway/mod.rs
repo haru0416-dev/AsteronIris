@@ -8,7 +8,7 @@
 //! - Header sanitization (handled by axum/hyper)
 
 use crate::channels::{Channel, WhatsAppChannel};
-use crate::config::Config;
+use crate::config::{Config, GatewayDefenseMode};
 use crate::memory::{self, Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
 use crate::providers::{self, Provider};
 use crate::security::pairing::{constant_time_eq, is_public_bind, PairingGuard};
@@ -46,6 +46,8 @@ pub struct AppState {
     pub whatsapp: Option<Arc<WhatsAppChannel>>,
     /// `WhatsApp` app secret for webhook signature verification (`X-Hub-Signature-256`)
     pub whatsapp_app_secret: Option<Arc<str>>,
+    pub defense_mode: GatewayDefenseMode,
+    pub defense_kill_switch: bool,
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -185,6 +187,8 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         pairing,
         whatsapp: whatsapp_channel,
         whatsapp_app_secret,
+        defense_mode: config.gateway.defense_mode,
+        defense_kill_switch: config.gateway.defense_kill_switch,
     };
 
     // Build router with middleware
@@ -262,6 +266,85 @@ pub struct WebhookBody {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PolicyViolation {
+    MissingOrInvalidBearer,
+    MissingOrInvalidWebhookSecret,
+}
+
+impl PolicyViolation {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::MissingOrInvalidBearer => "missing_or_invalid_bearer",
+            Self::MissingOrInvalidWebhookSecret => "missing_or_invalid_webhook_secret",
+        }
+    }
+
+    fn enforce_response(self) -> (StatusCode, Json<serde_json::Value>) {
+        match self {
+            Self::MissingOrInvalidBearer => {
+                let err = serde_json::json!({
+                    "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
+                });
+                (StatusCode::UNAUTHORIZED, Json(err))
+            }
+            Self::MissingOrInvalidWebhookSecret => {
+                let err = serde_json::json!({"error": "Unauthorized — invalid or missing X-Webhook-Secret header"});
+                (StatusCode::UNAUTHORIZED, Json(err))
+            }
+        }
+    }
+}
+
+fn effective_defense_mode(state: &AppState) -> GatewayDefenseMode {
+    if state.defense_kill_switch {
+        GatewayDefenseMode::Audit
+    } else {
+        state.defense_mode
+    }
+}
+
+fn policy_violation_response(
+    state: &AppState,
+    violation: PolicyViolation,
+) -> Option<(StatusCode, Json<serde_json::Value>)> {
+    let mode = effective_defense_mode(state);
+    let reason = violation.reason();
+    match mode {
+        GatewayDefenseMode::Audit => {
+            tracing::warn!(
+                mode = "audit",
+                violation = reason,
+                "Webhook policy violation recorded"
+            );
+            None
+        }
+        GatewayDefenseMode::Warn => {
+            tracing::warn!(
+                mode = "warn",
+                violation = reason,
+                "Webhook policy violation warning"
+            );
+            Some((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "mode": "warn",
+                    "warning": reason,
+                    "blocked": false
+                })),
+            ))
+        }
+        GatewayDefenseMode::Enforce => {
+            tracing::warn!(
+                mode = "enforce",
+                violation = reason,
+                "Webhook policy violation blocked"
+            );
+            Some(violation.enforce_response())
+        }
+    }
+}
+
 /// POST /webhook — main webhook endpoint
 async fn handle_webhook(
     State(state): State<AppState>,
@@ -276,11 +359,11 @@ async fn handle_webhook(
             .unwrap_or("");
         let token = auth.strip_prefix("Bearer ").unwrap_or("");
         if !state.pairing.is_authenticated(token) {
-            tracing::warn!("Webhook: rejected — not paired / invalid bearer token");
-            let err = serde_json::json!({
-                "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
-            });
-            return (StatusCode::UNAUTHORIZED, Json(err));
+            if let Some(response) =
+                policy_violation_response(&state, PolicyViolation::MissingOrInvalidBearer)
+            {
+                return response;
+            }
         }
     }
 
@@ -292,9 +375,12 @@ async fn handle_webhook(
         match header_val {
             Some(val) if constant_time_eq(val, secret.as_ref()) => {}
             _ => {
-                tracing::warn!("Webhook: rejected request — invalid or missing X-Webhook-Secret");
-                let err = serde_json::json!({"error": "Unauthorized — invalid or missing X-Webhook-Secret header"});
-                return (StatusCode::UNAUTHORIZED, Json(err));
+                if let Some(response) = policy_violation_response(
+                    &state,
+                    PolicyViolation::MissingOrInvalidWebhookSecret,
+                ) {
+                    return response;
+                }
             }
         }
     }

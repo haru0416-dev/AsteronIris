@@ -16,7 +16,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    continue-on-error: true  # Don't block PRs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -27,13 +26,16 @@ jobs:
       - name: Verify protoc
         run: protoc --version
       - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt -- --check
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
       - name: Run tests
         run: cargo test --verbose
 
   build:
     name: Build
     runs-on: ${{ matrix.os }}
-    continue-on-error: true  # Don't block PRs on build failures
     strategy:
       matrix:
         include:
@@ -62,7 +64,7 @@ jobs:
   memory-throughput:
     name: Memory throughput (sqlite)
     runs-on: ubuntu-latest
-    continue-on-error: true  # Don't block PRs
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -74,10 +76,15 @@ jobs:
         run: protoc --version
       - uses: Swatinem/rust-cache@v2
       - name: Run memory throughput test
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: |
           set -euo pipefail
-          BACKEND=sqlite cargo test --release --test memory_throughput -- --nocapture 2>&1 | tee memory_throughput.txt
+          BACKEND=sqlite \
+          THROUGHPUT_N_STORE=400 \
+          THROUGHPUT_N_RECALL=400 \
+          THROUGHPUT_CONCURRENCY=6 \
+          THROUGHPUT_RECALL_LIMIT=10 \
+          cargo test --release --test memory_throughput -- --nocapture 2>&1 | tee memory_throughput.txt
       - name: Upload throughput output
         uses: actions/upload-artifact@v4
         with:

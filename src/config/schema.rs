@@ -94,6 +94,15 @@ impl Default for IdentityConfig {
 
 // ── Gateway security ─────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GatewayDefenseMode {
+    Audit,
+    Warn,
+    #[default]
+    Enforce,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
     /// Gateway port (default: 8080)
@@ -111,6 +120,10 @@ pub struct GatewayConfig {
     /// Paired bearer tokens (managed automatically, not user-edited)
     #[serde(default)]
     pub paired_tokens: Vec<String>,
+    #[serde(default)]
+    pub defense_mode: GatewayDefenseMode,
+    #[serde(default)]
+    pub defense_kill_switch: bool,
 }
 
 fn default_gateway_port() -> u16 {
@@ -133,6 +146,8 @@ impl Default for GatewayConfig {
             require_pairing: true,
             allow_public_bind: false,
             paired_tokens: Vec::new(),
+            defense_mode: GatewayDefenseMode::default(),
+            defense_kill_switch: false,
         }
     }
 }
@@ -433,16 +448,19 @@ impl Default for AutonomyConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
-    /// Runtime kind (currently supported: "native").
+    /// Runtime kind (currently supported: "native", "docker").
     ///
-    /// Reserved values (not implemented yet): "docker", "cloudflare".
+    /// Reserved value (not implemented yet): "cloudflare".
     pub kind: String,
+    #[serde(default)]
+    pub enable_docker_runtime: bool,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             kind: "native".into(),
+            enable_docker_runtime: false,
         }
     }
 }
@@ -965,6 +983,7 @@ mod tests {
             },
             runtime: RuntimeConfig {
                 kind: "docker".into(),
+                enable_docker_runtime: true,
             },
             reliability: ReliabilityConfig::default(),
             heartbeat: HeartbeatConfig {
@@ -1007,6 +1026,7 @@ mod tests {
         assert_eq!(parsed.autonomy.level, AutonomyLevel::Full);
         assert!(!parsed.autonomy.workspace_only);
         assert_eq!(parsed.runtime.kind, "docker");
+        assert!(parsed.runtime.enable_docker_runtime);
         assert!(parsed.heartbeat.enabled);
         assert_eq!(parsed.heartbeat.interval_minutes, 15);
         assert!(parsed.channels_config.telegram.is_some());
@@ -1405,6 +1425,13 @@ channel_id = "C123"
     }
 
     #[test]
+    fn checklist_gateway_default_defense_mode_is_enforce() {
+        let g = GatewayConfig::default();
+        assert_eq!(g.defense_mode, GatewayDefenseMode::Enforce);
+        assert!(!g.defense_kill_switch);
+    }
+
+    #[test]
     fn checklist_gateway_cli_default_host_is_localhost() {
         // The CLI default for --host is 127.0.0.1 (checked in main.rs)
         // Here we verify the config default matches
@@ -1427,12 +1454,16 @@ channel_id = "C123"
             require_pairing: true,
             allow_public_bind: false,
             paired_tokens: vec!["zc_test_token".into()],
+            defense_mode: GatewayDefenseMode::Warn,
+            defense_kill_switch: true,
         };
         let toml_str = toml::to_string(&g).unwrap();
         let parsed: GatewayConfig = toml::from_str(&toml_str).unwrap();
         assert!(parsed.require_pairing);
         assert!(!parsed.allow_public_bind);
         assert_eq!(parsed.paired_tokens, vec!["zc_test_token"]);
+        assert_eq!(parsed.defense_mode, GatewayDefenseMode::Warn);
+        assert!(parsed.defense_kill_switch);
     }
 
     #[test]
@@ -1452,6 +1483,8 @@ default_temperature = 0.7
             !parsed.gateway.allow_public_bind,
             "Missing [gateway] must default to allow_public_bind=false"
         );
+        assert_eq!(parsed.gateway.defense_mode, GatewayDefenseMode::Enforce);
+        assert!(!parsed.gateway.defense_kill_switch);
     }
 
     #[test]
@@ -1852,5 +1885,7 @@ default_temperature = 0.7
         assert!(g.require_pairing);
         assert!(!g.allow_public_bind);
         assert!(g.paired_tokens.is_empty());
+        assert_eq!(g.defense_mode, GatewayDefenseMode::Enforce);
+        assert!(!g.defense_kill_switch);
     }
 }
