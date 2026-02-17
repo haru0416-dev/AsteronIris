@@ -1,3 +1,4 @@
+use crate::auth::AuthBroker;
 use crate::config::Config;
 use crate::memory::{
     self, Memory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource,
@@ -677,12 +678,14 @@ pub async fn run(
         &config.autonomy,
         &config.workspace_dir,
     ));
+    let auth_broker = AuthBroker::load_or_init(&config)?;
 
     // ── Memory (the brain) ────────────────────────────────────────
+    let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
     let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
         &config.memory,
         &config.workspace_dir,
-        config.api_key.as_deref(),
+        memory_api_key.as_deref(),
     )?);
     tracing::info!(backend = mem.name(), "Memory initialized");
 
@@ -705,13 +708,14 @@ pub async fn run(
         .or(config.default_model.as_deref())
         .unwrap_or("anthropic/claude-sonnet-4-20250514");
 
-    let answer_provider: Box<dyn Provider> = providers::create_resilient_provider(
+    let answer_provider: Box<dyn Provider> = providers::create_resilient_provider_with_resolver(
         provider_name,
-        config.api_key.as_deref(),
         &config.reliability,
+        |name| auth_broker.resolve_provider_api_key(name),
     )?;
+    let reflect_api_key = auth_broker.resolve_provider_api_key(provider_name);
     let reflect_provider: Box<dyn Provider> =
-        providers::create_provider(provider_name, config.api_key.as_deref())?;
+        providers::create_provider(provider_name, reflect_api_key.as_deref())?;
 
     observer.record_event(&ObserverEvent::AgentStart {
         provider: provider_name.to_string(),

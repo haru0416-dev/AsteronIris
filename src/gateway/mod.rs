@@ -7,6 +7,7 @@
 //! - Request timeouts (30s) to prevent slow-loris attacks
 //! - Header sanitization (handled by axum/hyper)
 
+use crate::auth::AuthBroker;
 use crate::channels::{Channel, WhatsAppChannel};
 use crate::config::{Config, GatewayDefenseMode};
 use crate::memory::{self, Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
@@ -88,20 +89,24 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     let actual_port = listener.local_addr()?.port();
     let display_addr = format!("{host}:{actual_port}");
 
-    let provider: Arc<dyn Provider> = Arc::from(providers::create_resilient_provider(
-        config.default_provider.as_deref().unwrap_or("openrouter"),
-        config.api_key.as_deref(),
-        &config.reliability,
-    )?);
+    let auth_broker = AuthBroker::load_or_init(&config)?;
+
+    let provider: Arc<dyn Provider> =
+        Arc::from(providers::create_resilient_provider_with_resolver(
+            config.default_provider.as_deref().unwrap_or("openrouter"),
+            &config.reliability,
+            |name| auth_broker.resolve_provider_api_key(name),
+        )?);
     let model = config
         .default_model
         .clone()
         .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
     let temperature = config.default_temperature;
+    let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
     let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
         &config.memory,
         &config.workspace_dir,
-        config.api_key.as_deref(),
+        memory_api_key.as_deref(),
     )?);
     let security = Arc::new(SecurityPolicy::from_config(
         &config.autonomy,

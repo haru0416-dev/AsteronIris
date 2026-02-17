@@ -14,6 +14,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod agent;
+mod auth;
 mod channels;
 mod config;
 mod cron;

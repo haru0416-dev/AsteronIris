@@ -99,8 +99,8 @@ pub async fn api_error(provider: &str, response: reqwest::Response) -> anyhow::E
 ///
 /// For Anthropic, the provider-specific env var is `ANTHROPIC_OAUTH_TOKEN` (for setup-tokens)
 /// followed by `ANTHROPIC_API_KEY` (for regular API keys).
-fn resolve_api_key(name: &str, api_key: Option<&str>) -> Option<String> {
-    if let Some(key) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
+fn resolve_api_key(name: &str, explicit_api_key: Option<&str>) -> Option<String> {
+    if let Some(key) = explicit_api_key.map(str::trim).filter(|k| !k.is_empty()) {
         return Some(key.to_string());
     }
 
@@ -273,16 +273,22 @@ pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<
 }
 
 /// Create provider chain with retry and fallback behavior.
-pub fn create_resilient_provider(
+///
+/// Credentials are resolved per-provider via `resolve_api_key_for_provider`.
+pub fn create_resilient_provider_with_resolver<F>(
     primary_name: &str,
-    api_key: Option<&str>,
     reliability: &crate::config::ReliabilityConfig,
-) -> anyhow::Result<Box<dyn Provider>> {
+    mut resolve_api_key_for_provider: F,
+) -> anyhow::Result<Box<dyn Provider>>
+where
+    F: FnMut(&str) -> Option<String>,
+{
     let mut providers: Vec<(String, Box<dyn Provider>)> = Vec::new();
 
+    let primary_key = resolve_api_key_for_provider(primary_name);
     providers.push((
         primary_name.to_string(),
-        create_provider(primary_name, api_key)?,
+        create_provider(primary_name, primary_key.as_deref())?,
     ));
 
     for fallback in &reliability.fallback_providers {
@@ -290,16 +296,9 @@ pub fn create_resilient_provider(
             continue;
         }
 
-        if api_key.is_some() && fallback != "ollama" {
-            tracing::warn!(
-                fallback_provider = fallback,
-                primary_provider = primary_name,
-                "Fallback provider will use the primary provider's API key — \
-                 this will fail if the providers require different keys"
-            );
-        }
+        let fallback_key = resolve_api_key_for_provider(fallback);
 
-        match create_provider(fallback, api_key) {
+        match create_provider(fallback, fallback_key.as_deref()) {
             Ok(provider) => providers.push((fallback.clone(), provider)),
             Err(e) => {
                 tracing::warn!(
@@ -315,6 +314,18 @@ pub fn create_resilient_provider(
         reliability.provider_retries,
         reliability.provider_backoff_ms,
     )))
+}
+
+/// Backward-compatible helper: use one explicit key for all providers,
+/// with provider-specific environment fallback behavior.
+pub fn create_resilient_provider(
+    primary_name: &str,
+    api_key: Option<&str>,
+    reliability: &crate::config::ReliabilityConfig,
+) -> anyhow::Result<Box<dyn Provider>> {
+    create_resilient_provider_with_resolver(primary_name, reliability, |provider_name| {
+        resolve_api_key(provider_name, api_key)
+    })
 }
 
 #[cfg(test)]
@@ -576,6 +587,25 @@ mod tests {
         let reliability = crate::config::ReliabilityConfig::default();
         let provider = create_resilient_provider("totally-invalid", Some("sk-test"), &reliability);
         assert!(provider.is_err());
+    }
+
+    #[test]
+    fn resilient_provider_with_resolver_uses_per_provider_credentials() {
+        let reliability = crate::config::ReliabilityConfig {
+            fallback_providers: vec!["openai".into()],
+            ..crate::config::ReliabilityConfig::default()
+        };
+
+        let provider = create_resilient_provider_with_resolver(
+            "openrouter",
+            &reliability,
+            |name| match name {
+                "openrouter" => Some("sk-openrouter-key".to_string()),
+                "openai" => Some("sk-openai-key".to_string()),
+                _ => None,
+            },
+        );
+        assert!(provider.is_ok());
     }
 
     #[test]

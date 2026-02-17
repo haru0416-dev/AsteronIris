@@ -20,6 +20,7 @@ pub use telegram::TelegramChannel;
 pub use traits::Channel;
 pub use whatsapp::WhatsAppChannel;
 
+use crate::auth::AuthBroker;
 use crate::config::Config;
 use crate::memory::{self, Memory};
 use crate::providers::{self, Provider};
@@ -479,11 +480,14 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
 /// Start all configured channels and route messages to the agent
 #[allow(clippy::too_many_lines)]
 pub async fn start_channels(config: Config) -> Result<()> {
-    let provider: Arc<dyn Provider> = Arc::from(providers::create_resilient_provider(
-        config.default_provider.as_deref().unwrap_or("openrouter"),
-        config.api_key.as_deref(),
-        &config.reliability,
-    )?);
+    let auth_broker = AuthBroker::load_or_init(&config)?;
+
+    let provider: Arc<dyn Provider> =
+        Arc::from(providers::create_resilient_provider_with_resolver(
+            config.default_provider.as_deref().unwrap_or("openrouter"),
+            &config.reliability,
+            |name| auth_broker.resolve_provider_api_key(name),
+        )?);
 
     // Warm up the provider connection pool (TLS handshake, DNS, HTTP/2 setup)
     // so the first real message doesn't hit a cold-start timeout.
@@ -496,10 +500,11 @@ pub async fn start_channels(config: Config) -> Result<()> {
         .clone()
         .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
     let temperature = config.default_temperature;
+    let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
     let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
         &config.memory,
         &config.workspace_dir,
-        config.api_key.as_deref(),
+        memory_api_key.as_deref(),
     )?);
 
     // Build system prompt from workspace identity files + skills
