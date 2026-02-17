@@ -138,6 +138,26 @@ pub enum AuthCommands {
         /// Do not set this profile as provider default
         no_default: bool,
     },
+    /// Login using OAuth via provider CLI and store imported token profile
+    OAuthLogin {
+        /// OAuth source/provider (codex/openai or claude/anthropic)
+        provider: String,
+        /// Profile id (defaults to <provider>-oauth-default)
+        profile: Option<String>,
+        /// Human label for the profile
+        label: Option<String>,
+        /// Do not set this profile as provider default
+        no_default: bool,
+        /// Skip launching provider login CLI and import from local credentials only
+        skip_cli_login: bool,
+        /// Claude setup token (sk-ant-oat01-...), if already obtained
+        setup_token: Option<String>,
+    },
+    /// Show OAuth source health (codex/claude)
+    OAuthStatus {
+        /// OAuth source/provider to inspect (codex or claude)
+        provider: Option<String>,
+    },
 }
 
 /// Integration subcommands

@@ -1,6 +1,7 @@
 pub mod anthropic;
 pub mod compatible;
 pub mod gemini;
+pub mod oauth_recovery;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
@@ -10,7 +11,9 @@ pub mod traits;
 pub use traits::Provider;
 
 use compatible::{AuthStyle, OpenAiCompatibleProvider};
+use oauth_recovery::OAuthRecoveryProvider;
 use reliable::ReliableProvider;
+use std::sync::Arc;
 
 const MAX_API_ERROR_CHARS: usize = 200;
 
@@ -311,6 +314,50 @@ pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<
     }
 }
 
+fn create_provider_with_runtime_recovery(
+    config: &crate::config::Config,
+    name: &str,
+    api_key: Option<&str>,
+) -> anyhow::Result<Box<dyn Provider>> {
+    let provider_name = name.to_string();
+    let initial_provider: Arc<dyn Provider> = Arc::from(create_provider(name, api_key)?);
+    let config = Arc::new(config.clone());
+
+    let recover = {
+        let config = Arc::clone(&config);
+        Arc::new(move |provider: &str| {
+            crate::auth::recover_oauth_profile_for_provider(&config, provider)
+        })
+    };
+
+    let rebuild = {
+        let config = Arc::clone(&config);
+        Arc::new(move |provider: &str| {
+            let broker = crate::auth::AuthBroker::load_or_init(&config)?;
+            let refreshed_key = broker.resolve_provider_api_key(provider);
+            Ok(
+                Arc::from(create_provider(provider, refreshed_key.as_deref())?)
+                    as Arc<dyn Provider>,
+            )
+        })
+    };
+
+    Ok(Box::new(OAuthRecoveryProvider::new(
+        &provider_name,
+        initial_provider,
+        recover,
+        rebuild,
+    )))
+}
+
+pub fn create_provider_with_oauth_recovery(
+    config: &crate::config::Config,
+    name: &str,
+    api_key: Option<&str>,
+) -> anyhow::Result<Box<dyn Provider>> {
+    create_provider_with_runtime_recovery(config, name, api_key)
+}
+
 /// Create provider chain with retry and fallback behavior.
 ///
 /// Credentials are resolved per-provider via `resolve_api_key_for_provider`.
@@ -338,6 +385,48 @@ where
         let fallback_key = resolve_api_key_for_provider(fallback);
 
         match create_provider(fallback, fallback_key.as_deref()) {
+            Ok(provider) => providers.push((fallback.clone(), provider)),
+            Err(e) => {
+                tracing::warn!(
+                    fallback_provider = fallback,
+                    "Ignoring invalid fallback provider: {e}"
+                );
+            }
+        }
+    }
+
+    Ok(Box::new(ReliableProvider::new(
+        providers,
+        reliability.provider_retries,
+        reliability.provider_backoff_ms,
+    )))
+}
+
+pub fn create_resilient_provider_with_oauth_recovery<F>(
+    config: &crate::config::Config,
+    primary_name: &str,
+    reliability: &crate::config::ReliabilityConfig,
+    mut resolve_api_key_for_provider: F,
+) -> anyhow::Result<Box<dyn Provider>>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let mut providers: Vec<(String, Box<dyn Provider>)> = Vec::new();
+
+    let primary_key = resolve_api_key_for_provider(primary_name);
+    providers.push((
+        primary_name.to_string(),
+        create_provider_with_runtime_recovery(config, primary_name, primary_key.as_deref())?,
+    ));
+
+    for fallback in &reliability.fallback_providers {
+        if fallback == primary_name || providers.iter().any(|(name, _)| name == fallback) {
+            continue;
+        }
+
+        let fallback_key = resolve_api_key_for_provider(fallback);
+
+        match create_provider_with_runtime_recovery(config, fallback, fallback_key.as_deref()) {
             Ok(provider) => providers.push((fallback.clone(), provider)),
             Err(e) => {
                 tracing::warn!(
@@ -705,7 +794,8 @@ mod tests {
 
     #[test]
     fn sanitize_scrubs_additional_token_prefixes() {
-        let input = "tokens ghp_abc123 github_pat_foo glpat-xyz hf_secret xoxs-999 ya29.token AIzaSySecret";
+        let input =
+            "tokens ghp_abc123 github_pat_foo glpat-xyz hf_secret xoxs-999 ya29.token AIzaSySecret";
         let out = sanitize_api_error(input);
         assert!(!out.contains("ghp_abc123"));
         assert!(!out.contains("github_pat_foo"));

@@ -483,7 +483,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
     let auth_broker = AuthBroker::load_or_init(&config)?;
 
     let provider: Arc<dyn Provider> =
-        Arc::from(providers::create_resilient_provider_with_resolver(
+        Arc::from(providers::create_resilient_provider_with_oauth_recovery(
+            &config,
             config.default_provider.as_deref().unwrap_or("openrouter"),
             &config.reliability,
             |name| auth_broker.resolve_provider_api_key(name),

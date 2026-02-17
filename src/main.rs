@@ -267,6 +267,35 @@ enum AuthCommands {
         #[arg(long)]
         no_default: bool,
     },
+    /// Login using OAuth via provider CLI and store imported token profile
+    #[command(name = "oauth-login")]
+    OAuthLogin {
+        /// OAuth source/provider (codex/openai or claude/anthropic)
+        #[arg(short, long)]
+        provider: String,
+        /// Profile id (defaults to <provider>-oauth-default)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Human label for the profile
+        #[arg(long)]
+        label: Option<String>,
+        /// Do not set this profile as provider default
+        #[arg(long)]
+        no_default: bool,
+        /// Skip launching provider login CLI and import from local credentials only
+        #[arg(long)]
+        skip_cli_login: bool,
+        /// Claude setup token (sk-ant-oat01-...), if already obtained
+        #[arg(long)]
+        setup_token: Option<String>,
+    },
+    /// Show OAuth source health (codex/claude)
+    #[command(name = "oauth-status")]
+    OAuthStatus {
+        /// OAuth source/provider to inspect (codex or claude)
+        #[arg(short, long)]
+        provider: Option<String>,
+    },
 }
 
 #[tokio::main]

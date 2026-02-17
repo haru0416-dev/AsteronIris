@@ -708,14 +708,19 @@ pub async fn run(
         .or(config.default_model.as_deref())
         .unwrap_or("anthropic/claude-sonnet-4-20250514");
 
-    let answer_provider: Box<dyn Provider> = providers::create_resilient_provider_with_resolver(
-        provider_name,
-        &config.reliability,
-        |name| auth_broker.resolve_provider_api_key(name),
-    )?;
+    let answer_provider: Box<dyn Provider> =
+        providers::create_resilient_provider_with_oauth_recovery(
+            &config,
+            provider_name,
+            &config.reliability,
+            |name| auth_broker.resolve_provider_api_key(name),
+        )?;
     let reflect_api_key = auth_broker.resolve_provider_api_key(provider_name);
-    let reflect_provider: Box<dyn Provider> =
-        providers::create_provider(provider_name, reflect_api_key.as_deref())?;
+    let reflect_provider: Box<dyn Provider> = providers::create_provider_with_oauth_recovery(
+        &config,
+        provider_name,
+        reflect_api_key.as_deref(),
+    )?;
 
     observer.record_event(&ObserverEvent::AgentStart {
         provider: provider_name.to_string(),

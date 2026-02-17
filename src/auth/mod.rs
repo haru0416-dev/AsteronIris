@@ -2,11 +2,13 @@ use crate::config::{Config, MemoryConfig};
 use crate::security::SecretStore;
 use anyhow::{bail, Context, Result};
 use dialoguer::Password;
+use directories::UserDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 const AUTH_PROFILES_FILENAME: &str = "auth-profiles.json";
 const AUTH_PROFILES_VERSION: u32 = 1;
@@ -19,6 +21,12 @@ pub struct AuthProfile {
     pub label: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub auth_scheme: Option<String>,
+    #[serde(default)]
+    pub oauth_source: Option<String>,
     #[serde(default)]
     pub disabled: bool,
 }
@@ -67,6 +75,25 @@ impl AuthProfileStore {
             .find(|p| !p.disabled && canonical_provider_name(&p.provider) == canonical)
     }
 
+    fn active_profile_index_for_provider(&self, provider: &str) -> Option<usize> {
+        let canonical = canonical_provider_name(provider);
+
+        if let Some(default_id) = self.defaults.get(&canonical) {
+            let index = self.profiles.iter().position(|p| {
+                !p.disabled
+                    && p.id == *default_id
+                    && canonical_provider_name(&p.provider) == canonical
+            });
+            if index.is_some() {
+                return index;
+            }
+        }
+
+        self.profiles
+            .iter()
+            .position(|p| !p.disabled && canonical_provider_name(&p.provider) == canonical)
+    }
+
     fn active_api_key_for_provider(&self, provider: &str) -> Option<String> {
         self.active_profile_for_provider(provider)
             .and_then(|profile| profile.api_key.as_deref())
@@ -96,6 +123,9 @@ impl AuthProfileStore {
             provider: canonical.clone(),
             label: Some("Migrated from config.api_key".into()),
             api_key: Some(legacy_api_key.to_string()),
+            refresh_token: None,
+            auth_scheme: Some("api_key".into()),
+            oauth_source: None,
             disabled: false,
         });
         self.defaults.insert(canonical, profile_id);
@@ -121,6 +151,8 @@ impl AuthProfileStore {
 
         for profile in &mut loaded.profiles {
             needs_persist |= decrypt_secret_option(&mut profile.api_key, store, encrypt_enabled)?;
+            needs_persist |=
+                decrypt_secret_option(&mut profile.refresh_token, store, encrypt_enabled)?;
         }
 
         Ok((loaded, needs_persist))
@@ -132,6 +164,7 @@ impl AuthProfileStore {
         if encrypt_enabled {
             for profile in &mut persisted.profiles {
                 encrypt_secret_option(&mut profile.api_key, store)?;
+                encrypt_secret_option(&mut profile.refresh_token, store)?;
             }
         }
 
@@ -202,6 +235,18 @@ impl AuthProfileStore {
             let trimmed = key.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         });
+        let normalized_refresh_token = profile.refresh_token.and_then(|key| {
+            let trimmed = key.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        let normalized_auth_scheme = profile.auth_scheme.and_then(|kind| {
+            let trimmed = kind.trim().to_ascii_lowercase();
+            (!trimmed.is_empty()).then_some(trimmed)
+        });
+        let normalized_oauth_source = profile.oauth_source.and_then(|source| {
+            let trimmed = source.trim().to_ascii_lowercase();
+            (!trimmed.is_empty()).then_some(trimmed)
+        });
 
         if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == profile_id) {
             if canonical_provider_name(&existing.provider) != canonical_provider {
@@ -214,6 +259,9 @@ impl AuthProfileStore {
             existing.provider.clone_from(&canonical_provider);
             existing.label = normalized_label;
             existing.api_key = normalized_api_key;
+            existing.refresh_token = normalized_refresh_token;
+            existing.auth_scheme = normalized_auth_scheme;
+            existing.oauth_source = normalized_oauth_source;
             existing.disabled = false;
 
             if set_default {
@@ -228,6 +276,9 @@ impl AuthProfileStore {
             provider: canonical_provider.clone(),
             label: normalized_label,
             api_key: normalized_api_key,
+            refresh_token: normalized_refresh_token,
+            auth_scheme: normalized_auth_scheme,
+            oauth_source: normalized_oauth_source,
             disabled: false,
         });
 
@@ -277,6 +328,73 @@ impl AuthBroker {
     }
 }
 
+pub fn recover_oauth_profile_for_provider(config: &Config, provider: &str) -> Result<bool> {
+    let canonical = canonical_provider_name(provider);
+    if canonical.is_empty() {
+        return Ok(false);
+    }
+
+    let mut store = AuthProfileStore::load_or_init_for_config(config)?;
+    let Some(index) = store.active_profile_index_for_provider(&canonical) else {
+        return Ok(false);
+    };
+
+    let profile = &store.profiles[index];
+    if profile.disabled || profile.auth_scheme.as_deref() != Some("oauth") {
+        return Ok(false);
+    }
+
+    let oauth_source = profile
+        .oauth_source
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+
+    let imported = match oauth_source.as_str() {
+        "codex" => import_codex_oauth(true)?,
+        "claude" => import_claude_oauth(true, None)?,
+        _ => return Ok(false),
+    };
+
+    if canonical_provider_name(imported.target_provider) != canonical {
+        return Ok(false);
+    }
+
+    let mut changed = false;
+    {
+        let profile = &mut store.profiles[index];
+
+        if profile.api_key.as_deref() != Some(imported.access_token.as_str()) {
+            profile.api_key = Some(imported.access_token.clone());
+            changed = true;
+        }
+
+        if let Some(refresh_token) = imported.refresh_token {
+            if profile.refresh_token.as_deref() != Some(refresh_token.as_str()) {
+                profile.refresh_token = Some(refresh_token);
+                changed = true;
+            }
+        }
+
+        if profile.auth_scheme.as_deref() != Some("oauth") {
+            profile.auth_scheme = Some("oauth".into());
+            changed = true;
+        }
+
+        if profile.oauth_source.as_deref() != Some(imported.source_name) {
+            profile.oauth_source = Some(imported.source_name.into());
+            changed = true;
+        }
+    }
+
+    if changed {
+        store.save_for_config(config)?;
+    }
+
+    Ok(changed)
+}
+
 #[allow(clippy::needless_pass_by_value)]
 pub fn handle_command(command: crate::AuthCommands, config: &Config) -> Result<()> {
     match command {
@@ -296,6 +414,25 @@ pub fn handle_command(command: crate::AuthCommands, config: &Config) -> Result<(
             api_key,
             no_default,
         ),
+        crate::AuthCommands::OAuthLogin {
+            provider,
+            profile,
+            label,
+            no_default,
+            skip_cli_login,
+            setup_token,
+        } => handle_oauth_login(
+            config,
+            provider.as_str(),
+            profile.as_deref(),
+            label,
+            no_default,
+            skip_cli_login,
+            setup_token,
+        ),
+        crate::AuthCommands::OAuthStatus { provider } => {
+            handle_oauth_status(config, provider.as_deref())
+        }
     }
 }
 
@@ -355,9 +492,11 @@ fn handle_list(config: &Config) -> Result<()> {
             .filter(|l| !l.trim().is_empty())
             .unwrap_or("-");
 
+        let auth_scheme = profile.auth_scheme.as_deref().unwrap_or("api_key");
+
         println!(
-            "{default_marker} {} | provider={} | status={} | key={} | label={}",
-            profile.id, provider, status, key_state, label
+            "{default_marker} {} | provider={} | auth={} | status={} | key={} | label={}",
+            profile.id, provider, auth_scheme, status, key_state, label
         );
     }
 
@@ -424,6 +563,14 @@ fn handle_status(config: &Config, provider: Option<&str>) -> Result<()> {
             println!(
                 "Profile disabled: {}",
                 if profile.disabled { "yes" } else { "no" }
+            );
+            println!(
+                "Auth scheme: {}",
+                profile.auth_scheme.as_deref().unwrap_or("api_key")
+            );
+            println!(
+                "OAuth source: {}",
+                profile.oauth_source.as_deref().unwrap_or("-")
             );
         }
         None if uses_legacy => {
@@ -506,6 +653,9 @@ fn handle_login(
             provider: canonical_provider.clone(),
             label,
             api_key: Some(api_key_value),
+            refresh_token: None,
+            auth_scheme: Some("api_key".into()),
+            oauth_source: None,
             disabled: false,
         },
         !no_default,
@@ -538,6 +688,407 @@ fn handle_login(
     );
 
     Ok(())
+}
+
+fn handle_oauth_login(
+    config: &Config,
+    provider: &str,
+    profile: Option<&str>,
+    label: Option<String>,
+    no_default: bool,
+    skip_cli_login: bool,
+    setup_token: Option<String>,
+) -> Result<()> {
+    let oauth_provider = OAuthProvider::parse(provider)?;
+    let mut store = AuthProfileStore::load_or_init_for_config(config)?;
+
+    let imported = match oauth_provider {
+        OAuthProvider::Codex => import_codex_oauth(skip_cli_login)?,
+        OAuthProvider::Claude => import_claude_oauth(skip_cli_login, setup_token)?,
+    };
+
+    let profile_id = profile
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map_or_else(
+            || imported.default_profile_id.to_string(),
+            ToOwned::to_owned,
+        );
+
+    let final_label = label.or_else(|| Some(imported.default_label.to_string()));
+
+    let created = store.upsert_profile(
+        AuthProfile {
+            id: profile_id.clone(),
+            provider: imported.target_provider.to_string(),
+            label: final_label,
+            api_key: Some(imported.access_token),
+            refresh_token: imported.refresh_token,
+            auth_scheme: Some("oauth".into()),
+            oauth_source: Some(imported.source_name.to_string()),
+            disabled: false,
+        },
+        !no_default,
+    )?;
+
+    store.save_for_config(config)?;
+
+    println!(
+        "✅ {} OAuth profile '{}' for provider '{}'",
+        if created { "Created" } else { "Updated" },
+        profile_id,
+        imported.target_provider
+    );
+    println!("OAuth source: {}", imported.source_name);
+    println!(
+        "Default mapping: {}",
+        if no_default {
+            "unchanged"
+        } else {
+            "set to this profile"
+        }
+    );
+    println!(
+        "Storage: {} ({})",
+        auth_profiles_path(config).display(),
+        if config.secrets.encrypt {
+            "encrypted"
+        } else {
+            "plaintext"
+        }
+    );
+
+    Ok(())
+}
+
+fn handle_oauth_status(config: &Config, provider: Option<&str>) -> Result<()> {
+    let filter = provider.map(OAuthProvider::parse).transpose()?;
+    let store = AuthProfileStore::load_or_init_for_config(config)?;
+
+    println!("🔐 OAuth source status");
+
+    if filter.is_none() || filter == Some(OAuthProvider::Codex) {
+        println!();
+        println!("[codex/openai]");
+
+        match codex_login_status() {
+            Ok(status) => println!("CLI status: {status}"),
+            Err(err) => println!("CLI status: unavailable ({err})"),
+        }
+
+        match load_codex_auth_file() {
+            Ok(parsed) => {
+                let has_access = parsed
+                    .tokens
+                    .as_ref()
+                    .and_then(|t| t.access_token.as_deref())
+                    .is_some_and(|t| !t.trim().is_empty());
+                let has_refresh = parsed
+                    .tokens
+                    .as_ref()
+                    .and_then(|t| t.refresh_token.as_deref())
+                    .is_some_and(|t| !t.trim().is_empty());
+                println!(
+                    "Local token cache: {}",
+                    if has_access { "present" } else { "missing" }
+                );
+                println!(
+                    "Refresh token cache: {}",
+                    if has_refresh { "present" } else { "missing" }
+                );
+            }
+            Err(err) => println!("Local token cache: unavailable ({err})"),
+        }
+
+        let has_profile = store.profiles.iter().any(|p| {
+            canonical_provider_name(&p.provider) == "openai"
+                && p.auth_scheme.as_deref() == Some("oauth")
+                && !p.disabled
+                && has_secret(p.api_key.as_deref())
+        });
+        println!(
+            "Stored OAuth profile (openai): {}",
+            if has_profile { "yes" } else { "no" }
+        );
+    }
+
+    if filter.is_none() || filter == Some(OAuthProvider::Claude) {
+        println!();
+        println!("[claude/anthropic]");
+
+        match claude_auth_status() {
+            Ok(status) => {
+                println!(
+                    "CLI logged in: {}",
+                    if status.logged_in { "yes" } else { "no" }
+                );
+                println!(
+                    "CLI auth method: {}",
+                    status.auth_method.as_deref().unwrap_or("unknown")
+                );
+            }
+            Err(err) => println!("CLI status: unavailable ({err})"),
+        }
+
+        let has_profile = store.profiles.iter().any(|p| {
+            canonical_provider_name(&p.provider) == "anthropic"
+                && p.auth_scheme.as_deref() == Some("oauth")
+                && !p.disabled
+                && has_secret(p.api_key.as_deref())
+        });
+
+        println!(
+            "Stored OAuth profile (anthropic): {}",
+            if has_profile { "yes" } else { "no" }
+        );
+        println!(
+            "Note: anthropic OAuth requires setup token (sk-ant-oat01-...). Use `asteroniris auth oauth-login --provider claude` to import it."
+        );
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OAuthProvider {
+    Codex,
+    Claude,
+}
+
+impl OAuthProvider {
+    fn parse(input: &str) -> Result<Self> {
+        let normalized = input.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "codex" | "openai" | "openai-codex" => Ok(Self::Codex),
+            "claude" | "anthropic" => Ok(Self::Claude),
+            _ => bail!(
+                "Unsupported OAuth provider '{input}'. Use one of: codex, openai, claude, anthropic"
+            ),
+        }
+    }
+}
+
+struct ImportedOAuthCredential {
+    target_provider: &'static str,
+    default_profile_id: &'static str,
+    default_label: &'static str,
+    source_name: &'static str,
+    access_token: String,
+    refresh_token: Option<String>,
+}
+
+fn import_codex_oauth(skip_cli_login: bool) -> Result<ImportedOAuthCredential> {
+    if !skip_cli_login {
+        run_interactive_command("codex", &["login", "--device-auth"])?;
+    }
+
+    let auth_file = load_codex_auth_file()?;
+    let tokens = auth_file
+        .tokens
+        .ok_or_else(|| anyhow::anyhow!("Codex auth.json missing tokens block"))?;
+
+    let access_token = tokens
+        .access_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("Codex login succeeded but access token was not found"))?;
+
+    let refresh_token = tokens
+        .refresh_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(ToOwned::to_owned);
+
+    Ok(ImportedOAuthCredential {
+        target_provider: "openai",
+        default_profile_id: "openai-codex-oauth-default",
+        default_label: "OAuth (codex login)",
+        source_name: "codex",
+        access_token,
+        refresh_token,
+    })
+}
+
+fn import_claude_oauth(
+    skip_cli_login: bool,
+    setup_token: Option<String>,
+) -> Result<ImportedOAuthCredential> {
+    if !skip_cli_login {
+        run_interactive_command("claude", &["auth", "login"])?;
+    }
+
+    let access_token = if let Some(token) = setup_token {
+        normalize_claude_setup_token(&token)?
+    } else if let Some(token) = try_capture_claude_setup_token()? {
+        token
+    } else {
+        if !std::io::stdin().is_terminal() {
+            bail!(
+                "Could not capture Claude setup token automatically in non-interactive mode. \
+                 Re-run with --setup-token sk-ant-oat01-..."
+            );
+        }
+
+        println!(
+            "Could not auto-capture setup token. Please run `claude setup-token` in another terminal and paste it below."
+        );
+        let token = Password::new()
+            .with_prompt("Claude setup token (input hidden)")
+            .allow_empty_password(false)
+            .interact()
+            .context("Failed to read Claude setup token from terminal")?;
+        normalize_claude_setup_token(&token)?
+    };
+
+    Ok(ImportedOAuthCredential {
+        target_provider: "anthropic",
+        default_profile_id: "anthropic-claude-oauth-default",
+        default_label: "OAuth (claude login)",
+        source_name: "claude",
+        access_token,
+        refresh_token: None,
+    })
+}
+
+fn normalize_claude_setup_token(token: &str) -> Result<String> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        bail!("Claude setup token cannot be empty");
+    }
+    if !trimmed.starts_with("sk-ant-oat01-") {
+        bail!("Claude setup token must start with 'sk-ant-oat01-'. Run `claude setup-token` first");
+    }
+    Ok(trimmed.to_string())
+}
+
+fn try_capture_claude_setup_token() -> Result<Option<String>> {
+    let output = Command::new("claude")
+        .arg("setup-token")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Failed to run `claude setup-token`")?;
+
+    let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.trim().is_empty() {
+        combined.push('\n');
+        combined.push_str(&stderr);
+    }
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    Ok(extract_prefixed_token(&combined, "sk-ant-oat01-"))
+}
+
+fn run_interactive_command(bin: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new(bin)
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .with_context(|| format!("Failed to run `{bin}`"))?;
+
+    if !status.success() {
+        bail!(
+            "Command `{bin} {}` failed with status {status}",
+            args.join(" ")
+        );
+    }
+
+    Ok(())
+}
+
+fn is_oauth_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | '+' | '/' | '=')
+}
+
+fn oauth_token_end(input: &str, from: usize) -> usize {
+    let mut end = from;
+    for (i, c) in input[from..].char_indices() {
+        if is_oauth_token_char(c) {
+            end = from + i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+fn extract_prefixed_token(text: &str, prefix: &str) -> Option<String> {
+    let start = text.find(prefix)?;
+    let content_start = start + prefix.len();
+    let end = oauth_token_end(text, content_start);
+    (end > content_start).then(|| text[start..end].to_string())
+}
+
+fn codex_login_status() -> Result<String> {
+    let output = Command::new("codex")
+        .args(["login", "status"])
+        .output()
+        .context("Failed to run `codex login status`")?;
+
+    if !output.status.success() {
+        bail!("`codex login status` returned non-zero status");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.trim().to_string())
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeAuthStatus {
+    #[serde(rename = "loggedIn")]
+    logged_in: bool,
+    #[serde(rename = "authMethod")]
+    auth_method: Option<String>,
+}
+
+fn claude_auth_status() -> Result<ClaudeAuthStatus> {
+    let output = Command::new("claude")
+        .args(["auth", "status", "--json"])
+        .output()
+        .context("Failed to run `claude auth status --json`")?;
+
+    if !output.status.success() {
+        bail!("`claude auth status --json` returned non-zero status");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(&stdout).context("Failed to parse claude auth status JSON")
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexAuthFile {
+    #[serde(default)]
+    tokens: Option<CodexAuthTokens>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexAuthTokens {
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+}
+
+fn load_codex_auth_file() -> Result<CodexAuthFile> {
+    let home = UserDirs::new()
+        .map(|u| u.home_dir().to_path_buf())
+        .context("Could not resolve home directory")?;
+    let path = home.join(".codex").join("auth.json");
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read Codex auth file: {}", path.display()))?;
+    serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse Codex auth file: {}", path.display()))
 }
 
 fn auth_secret_store(config: &Config) -> SecretStore {
@@ -756,6 +1307,9 @@ mod tests {
                     provider: "OpenAI".into(),
                     label: Some("  Primary Key  ".into()),
                     api_key: Some("  sk-openai-main  ".into()),
+                    refresh_token: Some("  refresh-main  ".into()),
+                    auth_scheme: Some("  OAuth  ".into()),
+                    oauth_source: Some("  codex  ".into()),
                     disabled: true,
                 },
                 true,
@@ -767,6 +1321,12 @@ mod tests {
         assert_eq!(store.profiles[0].provider, "openai");
         assert_eq!(store.profiles[0].label.as_deref(), Some("Primary Key"));
         assert_eq!(store.profiles[0].api_key.as_deref(), Some("sk-openai-main"));
+        assert_eq!(
+            store.profiles[0].refresh_token.as_deref(),
+            Some("refresh-main")
+        );
+        assert_eq!(store.profiles[0].auth_scheme.as_deref(), Some("oauth"));
+        assert_eq!(store.profiles[0].oauth_source.as_deref(), Some("codex"));
         assert!(!store.profiles[0].disabled);
         assert_eq!(
             store.defaults.get("openai"),
@@ -783,6 +1343,9 @@ mod tests {
                 provider: "openrouter".into(),
                 label: None,
                 api_key: Some("sk-test".into()),
+                refresh_token: None,
+                auth_scheme: Some("api_key".into()),
+                oauth_source: None,
                 disabled: false,
             },
             true,
@@ -807,5 +1370,121 @@ mod tests {
 
         let persisted = fs::read_to_string(auth_profiles_path(&config)).unwrap();
         assert!(persisted.contains("enc2:"));
+    }
+
+    #[test]
+    fn extract_prefixed_token_finds_claude_setup_token() {
+        let text = "token: sk-ant-oat01-abc123_DEF more";
+        let token = extract_prefixed_token(text, "sk-ant-oat01-").unwrap();
+        assert_eq!(token, "sk-ant-oat01-abc123_DEF");
+    }
+
+    #[test]
+    fn normalize_claude_setup_token_rejects_non_setup_token() {
+        let err = normalize_claude_setup_token("sk-ant-api-key").unwrap_err();
+        assert!(err.to_string().contains("sk-ant-oat01"));
+    }
+
+    #[test]
+    fn codex_auth_json_parses_access_and_refresh_tokens() {
+        let parsed: CodexAuthFile = serde_json::from_str(
+            r#"{
+  "auth_mode": "chatgpt",
+  "tokens": {
+    "access_token": "acc-123",
+    "refresh_token": "ref-456"
+  }
+}"#,
+        )
+        .unwrap();
+
+        let tokens = parsed.tokens.unwrap();
+        assert_eq!(tokens.access_token.as_deref(), Some("acc-123"));
+        assert_eq!(tokens.refresh_token.as_deref(), Some("ref-456"));
+    }
+
+    #[test]
+    fn save_encrypts_refresh_token_in_store() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = test_config(&tmp);
+        config.secrets.encrypt = true;
+
+        let mut store = AuthProfileStore::default();
+        store
+            .upsert_profile(
+                AuthProfile {
+                    id: "openai-oauth".into(),
+                    provider: "openai".into(),
+                    label: Some("OAuth import".into()),
+                    api_key: Some("access-token-plaintext".into()),
+                    refresh_token: Some("refresh-token-plaintext".into()),
+                    auth_scheme: Some("oauth".into()),
+                    oauth_source: Some("codex".into()),
+                    disabled: false,
+                },
+                true,
+            )
+            .unwrap();
+
+        store.save_for_config(&config).unwrap();
+        let persisted = fs::read_to_string(auth_profiles_path(&config)).unwrap();
+
+        assert!(persisted.contains("enc2:"));
+        assert!(!persisted.contains("access-token-plaintext"));
+        assert!(!persisted.contains("refresh-token-plaintext"));
+    }
+
+    #[test]
+    fn recover_oauth_profile_returns_false_for_non_oauth_profile() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = test_config(&tmp);
+
+        let mut store = AuthProfileStore::default();
+        store
+            .upsert_profile(
+                AuthProfile {
+                    id: "openai-main".into(),
+                    provider: "openai".into(),
+                    label: None,
+                    api_key: Some("sk-main".into()),
+                    refresh_token: None,
+                    auth_scheme: Some("api_key".into()),
+                    oauth_source: None,
+                    disabled: false,
+                },
+                true,
+            )
+            .unwrap();
+        store.save_for_config(&config).unwrap();
+
+        let recovered = recover_oauth_profile_for_provider(&config, "openai").unwrap();
+        assert!(!recovered);
+    }
+
+    #[test]
+    fn recover_oauth_profile_returns_false_for_unknown_oauth_source() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = test_config(&tmp);
+
+        let mut store = AuthProfileStore::default();
+        store
+            .upsert_profile(
+                AuthProfile {
+                    id: "openai-oauth".into(),
+                    provider: "openai".into(),
+                    label: None,
+                    api_key: Some("access-old".into()),
+                    refresh_token: Some("refresh-old".into()),
+                    auth_scheme: Some("oauth".into()),
+                    oauth_source: Some("custom-source".into()),
+                    disabled: false,
+                },
+                true,
+            )
+            .unwrap();
+        store.save_for_config(&config).unwrap();
+
+        let recovered = recover_oauth_profile_for_provider(&config, "openai").unwrap();
+        assert!(!recovered);
     }
 }

@@ -2,9 +2,9 @@
 //! Most LLM APIs follow the same `/v1/chat/completions` format.
 //! This module provides a single implementation that works for all of them.
 
+use super::sanitize_api_error;
 use crate::providers::traits::Provider;
 use anyhow::Context;
-use super::sanitize_api_error;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
