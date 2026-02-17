@@ -249,6 +249,8 @@ impl MarkdownMemory {
     }
 
     async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
+        query.enforce_policy()?;
+
         let scoped = format!("{} {}", query.entity_id, query.query);
         let rows = self.search_projection(&scoped, query.limit).await?;
         Ok(rows

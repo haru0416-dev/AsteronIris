@@ -3,6 +3,88 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
+const ACTION_LIMIT_EXCEEDED_ERROR: &str = "blocked by security policy: action limit exceeded";
+const COST_LIMIT_EXCEEDED_ERROR: &str = "blocked by security policy: daily cost limit exceeded";
+pub const TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR: &str =
+    "blocked by security policy: tenant recall scope mismatch";
+pub const TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR: &str =
+    "blocked by security policy: tenant mode forbids default recall scope";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExternalActionExecution {
+    #[default]
+    Disabled,
+    Enabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionPolicyVerdict {
+    pub allowed: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenantPolicyContext {
+    pub tenant_mode_enabled: bool,
+    pub tenant_id: Option<String>,
+}
+
+impl TenantPolicyContext {
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+
+    pub fn enabled(tenant_id: impl Into<String>) -> Self {
+        Self {
+            tenant_mode_enabled: true,
+            tenant_id: Some(tenant_id.into()),
+        }
+    }
+
+    pub fn enforce_recall_scope(&self, entity_id: &str) -> Result<(), &'static str> {
+        if !self.tenant_mode_enabled {
+            return Ok(());
+        }
+
+        let requested = entity_id.trim();
+        if requested.is_empty() || requested == "default" {
+            return Err(TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR);
+        }
+
+        let Some(tenant_id) = self.tenant_id.as_deref() else {
+            return Err(TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR);
+        };
+
+        let in_scope = requested == tenant_id
+            || requested
+                .strip_prefix(tenant_id)
+                .is_some_and(|suffix| suffix.starts_with(':') || suffix.starts_with('/'));
+
+        if in_scope {
+            Ok(())
+        } else {
+            Err(TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR)
+        }
+    }
+}
+
+impl ActionPolicyVerdict {
+    pub fn allow(reason: impl Into<String>) -> Self {
+        Self {
+            allowed: true,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self {
+            allowed: false,
+            reason: reason.into(),
+        }
+    }
+}
+
 /// How much autonomy the agent has
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -70,10 +152,86 @@ impl Clone for ActionTracker {
     }
 }
 
+#[derive(Debug)]
+pub struct CostTracker {
+    state: Mutex<DailyCostState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DailyCostState {
+    day_epoch: u64,
+    spent_cents: u32,
+}
+
+impl CostTracker {
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(DailyCostState {
+                day_epoch: current_day_epoch(),
+                spent_cents: 0,
+            }),
+        }
+    }
+
+    pub fn record(&self, additional_cents: u32, max_cents_per_day: u32) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        rollover_day_if_needed(&mut state);
+        if additional_cents == 0 {
+            return state.spent_cents <= max_cents_per_day;
+        }
+        if state.spent_cents.saturating_add(additional_cents) > max_cents_per_day {
+            return false;
+        }
+        state.spent_cents = state.spent_cents.saturating_add(additional_cents);
+        true
+    }
+
+    pub fn spent_today(&self) -> u32 {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        rollover_day_if_needed(&mut state);
+        state.spent_cents
+    }
+}
+
+impl Clone for CostTracker {
+    fn clone(&self) -> Self {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self {
+            state: Mutex::new(*state),
+        }
+    }
+}
+
+fn current_day_epoch() -> u64 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+        .as_secs();
+    secs / 86_400
+}
+
+fn rollover_day_if_needed(state: &mut DailyCostState) {
+    let today = current_day_epoch();
+    if state.day_epoch != today {
+        state.day_epoch = today;
+        state.spent_cents = 0;
+    }
+}
+
 /// Security policy enforced on all tool executions
 #[derive(Debug, Clone)]
 pub struct SecurityPolicy {
     pub autonomy: AutonomyLevel,
+    pub external_action_execution: ExternalActionExecution,
     pub workspace_dir: PathBuf,
     pub workspace_only: bool,
     pub allowed_commands: Vec<String>,
@@ -81,12 +239,14 @@ pub struct SecurityPolicy {
     pub max_actions_per_hour: u32,
     pub max_cost_per_day_cents: u32,
     pub tracker: ActionTracker,
+    pub cost_tracker: CostTracker,
 }
 
 impl Default for SecurityPolicy {
     fn default() -> Self {
         Self {
             autonomy: AutonomyLevel::Supervised,
+            external_action_execution: ExternalActionExecution::Disabled,
             workspace_dir: PathBuf::from("."),
             workspace_only: true,
             allowed_commands: vec![
@@ -128,6 +288,7 @@ impl Default for SecurityPolicy {
             max_actions_per_hour: 20,
             max_cost_per_day_cents: 500,
             tracker: ActionTracker::new(),
+            cost_tracker: CostTracker::new(),
         }
     }
 }
@@ -316,6 +477,21 @@ impl SecurityPolicy {
         self.tracker.count() >= self.max_actions_per_hour as usize
     }
 
+    pub fn consume_action_and_cost(&self, estimated_cost_cents: u32) -> Result<(), &'static str> {
+        if !self.record_action() {
+            return Err(ACTION_LIMIT_EXCEEDED_ERROR);
+        }
+
+        if !self
+            .cost_tracker
+            .record(estimated_cost_cents, self.max_cost_per_day_cents)
+        {
+            return Err(COST_LIMIT_EXCEEDED_ERROR);
+        }
+
+        Ok(())
+    }
+
     /// Build from config sections
     pub fn from_config(
         autonomy_config: &crate::config::AutonomyConfig,
@@ -323,6 +499,7 @@ impl SecurityPolicy {
     ) -> Self {
         Self {
             autonomy: autonomy_config.level,
+            external_action_execution: autonomy_config.external_action_execution,
             workspace_dir: workspace_dir.to_path_buf(),
             workspace_only: autonomy_config.workspace_only,
             allowed_commands: autonomy_config.allowed_commands.clone(),
@@ -330,6 +507,7 @@ impl SecurityPolicy {
             max_actions_per_hour: autonomy_config.max_actions_per_hour,
             max_cost_per_day_cents: autonomy_config.max_cost_per_day_cents,
             tracker: ActionTracker::new(),
+            cost_tracker: CostTracker::new(),
         }
     }
 }
@@ -541,16 +719,22 @@ mod tests {
     fn from_config_maps_all_fields() {
         let autonomy_config = crate::config::AutonomyConfig {
             level: AutonomyLevel::Full,
+            external_action_execution: ExternalActionExecution::Enabled,
             workspace_only: false,
             allowed_commands: vec!["docker".into()],
             forbidden_paths: vec!["/secret".into()],
             max_actions_per_hour: 100,
             max_cost_per_day_cents: 1000,
+            ..crate::config::AutonomyConfig::default()
         };
         let workspace = PathBuf::from("/tmp/test-workspace");
         let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
 
         assert_eq!(policy.autonomy, AutonomyLevel::Full);
+        assert_eq!(
+            policy.external_action_execution,
+            ExternalActionExecution::Enabled
+        );
         assert!(!policy.workspace_only);
         assert_eq!(policy.allowed_commands, vec!["docker"]);
         assert_eq!(policy.forbidden_paths, vec!["/secret"]);
@@ -565,6 +749,10 @@ mod tests {
     fn default_policy_has_sane_values() {
         let p = SecurityPolicy::default();
         assert_eq!(p.autonomy, AutonomyLevel::Supervised);
+        assert_eq!(
+            p.external_action_execution,
+            ExternalActionExecution::Disabled
+        );
         assert!(p.workspace_only);
         assert!(!p.allowed_commands.is_empty());
         assert!(!p.forbidden_paths.is_empty());
@@ -848,16 +1036,68 @@ mod tests {
     fn from_config_creates_fresh_tracker() {
         let autonomy_config = crate::config::AutonomyConfig {
             level: AutonomyLevel::Full,
+            external_action_execution: ExternalActionExecution::Disabled,
             workspace_only: false,
             allowed_commands: vec![],
             forbidden_paths: vec![],
             max_actions_per_hour: 10,
             max_cost_per_day_cents: 100,
+            ..crate::config::AutonomyConfig::default()
         };
         let workspace = PathBuf::from("/tmp/test");
         let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
         assert_eq!(policy.tracker.count(), 0);
         assert!(!policy.is_rate_limited());
+        assert_eq!(policy.cost_tracker.spent_today(), 0);
+    }
+
+    #[test]
+    fn consume_action_and_cost_denies_over_action_limit() {
+        let p = SecurityPolicy {
+            max_actions_per_hour: 0,
+            ..SecurityPolicy::default()
+        };
+
+        let err = p.consume_action_and_cost(0).unwrap_err();
+        assert_eq!(err, ACTION_LIMIT_EXCEEDED_ERROR);
+    }
+
+    #[test]
+    fn consume_action_and_cost_denies_over_daily_cost_limit() {
+        let p = SecurityPolicy {
+            max_actions_per_hour: 10,
+            max_cost_per_day_cents: 5,
+            ..SecurityPolicy::default()
+        };
+
+        assert!(p.consume_action_and_cost(5).is_ok());
+        let err = p.consume_action_and_cost(1).unwrap_err();
+        assert_eq!(err, COST_LIMIT_EXCEEDED_ERROR);
+    }
+
+    #[test]
+    fn tenant_policy_context_allows_same_tenant_recall_scope() {
+        let context = TenantPolicyContext::enabled("tenant-alpha");
+        assert!(context
+            .enforce_recall_scope("tenant-alpha:user-123")
+            .is_ok());
+        assert!(context.enforce_recall_scope("tenant-alpha/session").is_ok());
+    }
+
+    #[test]
+    fn tenant_policy_context_denies_cross_tenant_recall_scope() {
+        let context = TenantPolicyContext::enabled("tenant-alpha");
+        let err = context
+            .enforce_recall_scope("tenant-beta:user-123")
+            .unwrap_err();
+        assert_eq!(err, TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR);
+    }
+
+    #[test]
+    fn tenant_policy_context_denies_default_scope_fallback_when_enabled() {
+        let context = TenantPolicyContext::enabled("tenant-alpha");
+        let err = context.enforce_recall_scope("default").unwrap_err();
+        assert_eq!(err, TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR);
     }
 
     // ══════════════════════════════════════════════════════════

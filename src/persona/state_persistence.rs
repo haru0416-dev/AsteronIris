@@ -1,7 +1,8 @@
 use crate::config::PersonaConfig;
 use crate::memory::{Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
-use crate::persona::state_header::StateHeaderV1;
+use crate::persona::state_header::{StateHeaderV1, STATE_HEADER_SCHEMA_VERSION};
 use anyhow::{Context, Result};
+use chrono::Utc;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -45,8 +46,13 @@ impl BackendCanonicalStateHeaderPersistence {
     }
 
     pub async fn reconcile_mirror_from_backend_on_startup(&self) -> Result<Option<StateHeaderV1>> {
-        let Some(canonical) = self.load_backend_canonical().await? else {
-            return Ok(None);
+        let canonical = if let Some(existing) = self.load_backend_canonical().await? {
+            existing
+        } else {
+            let seeded = Self::seed_minimal_backend_canonical();
+            self.persist_backend_canonical_and_sync_mirror(&seeded)
+                .await?;
+            seeded
         };
 
         self.sync_mirror_from_backend_canonical(&canonical)?;
@@ -100,6 +106,23 @@ impl BackendCanonicalStateHeaderPersistence {
         let mirror_path = self.state_mirror_path();
         let content = render_state_header_mirror_markdown(state)?;
         write_atomic(&mirror_path, &content)
+    }
+
+    fn seed_minimal_backend_canonical() -> StateHeaderV1 {
+        StateHeaderV1 {
+            schema_version: STATE_HEADER_SCHEMA_VERSION,
+            identity_principles_hash: "bootstrap-minimal-v1".to_string(),
+            safety_posture: "strict".to_string(),
+            current_objective: "Initialize persona state continuity from backend canonical."
+                .to_string(),
+            open_loops: Vec::new(),
+            next_actions: Vec::new(),
+            commitments: Vec::new(),
+            recent_context_summary:
+                "Seeded minimal valid state because canonical backend entry was missing at startup."
+                    .to_string(),
+            last_updated_at: Utc::now().to_rfc3339(),
+        }
     }
 }
 
@@ -181,6 +204,29 @@ mod tests {
         };
 
         BackendCanonicalStateHeaderPersistence::new(memory, tmp.path().to_path_buf(), persona)
+    }
+
+    #[tokio::test]
+    async fn persona_bootstrap_seeds_minimal_state() {
+        let tmp = TempDir::new().unwrap();
+        let service = service_with_sqlite(&tmp, "STATE.md");
+
+        let seeded = service
+            .reconcile_mirror_from_backend_on_startup()
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(seeded.schema_version, 1);
+        assert!(!seeded.identity_principles_hash.trim().is_empty());
+        assert!(!seeded.safety_posture.trim().is_empty());
+        assert!(!seeded.current_objective.trim().is_empty());
+        assert!(!seeded.recent_context_summary.trim().is_empty());
+
+        let backend = service.load_backend_canonical().await.unwrap().unwrap();
+        let mirror = service.read_mirror_state().unwrap().unwrap();
+        assert_eq!(backend, seeded);
+        assert_eq!(mirror, seeded);
     }
 
     #[tokio::test]

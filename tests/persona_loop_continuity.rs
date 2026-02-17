@@ -32,6 +32,30 @@ fn persistence_for_workspace(workspace_dir: &Path) -> BackendCanonicalStateHeade
 }
 
 #[tokio::test]
+async fn persona_bootstrap_seeds_minimal_state() {
+    let workspace = TempDir::new().unwrap();
+    let persistence = persistence_for_workspace(workspace.path());
+
+    let seeded = persistence
+        .reconcile_mirror_from_backend_on_startup()
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(seeded.schema_version, 1);
+    assert!(!seeded.identity_principles_hash.trim().is_empty());
+    assert!(!seeded.safety_posture.trim().is_empty());
+    assert!(!seeded.current_objective.trim().is_empty());
+    assert!(!seeded.recent_context_summary.trim().is_empty());
+
+    let backend = persistence.load_backend_canonical().await.unwrap().unwrap();
+    assert_eq!(backend, seeded);
+
+    let mirror = persistence.read_mirror_state().unwrap().unwrap();
+    assert_eq!(mirror, seeded);
+}
+
+#[tokio::test]
 async fn continuity_across_restart_preserves_latest_backend_state_and_repairs_mirror() {
     let workspace = TempDir::new().unwrap();
 

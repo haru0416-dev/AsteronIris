@@ -1,3 +1,4 @@
+use crate::security::policy::TenantPolicyContext;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -160,10 +161,199 @@ pub struct MemoryEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MemoryInferenceEvent {
+    InferredClaim {
+        entity_id: String,
+        slot_key: String,
+        value: String,
+        confidence: f64,
+        importance: f64,
+        privacy_level: PrivacyLevel,
+        occurred_at: String,
+    },
+    ContradictionEvent {
+        entity_id: String,
+        slot_key: String,
+        value: String,
+        confidence: f64,
+        importance: f64,
+        privacy_level: PrivacyLevel,
+        occurred_at: String,
+    },
+}
+
+impl MemoryInferenceEvent {
+    pub fn inferred_claim(
+        entity_id: impl Into<String>,
+        slot_key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self::InferredClaim {
+            entity_id: entity_id.into(),
+            slot_key: slot_key.into(),
+            value: value.into(),
+            confidence: 0.7,
+            importance: 0.5,
+            privacy_level: PrivacyLevel::Private,
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn contradiction_marked(
+        entity_id: impl Into<String>,
+        slot_key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self::ContradictionEvent {
+            entity_id: entity_id.into(),
+            slot_key: slot_key.into(),
+            value: value.into(),
+            confidence: 0.85,
+            importance: 0.8,
+            privacy_level: PrivacyLevel::Private,
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn with_confidence(mut self, confidence: f64) -> Self {
+        match &mut self {
+            Self::InferredClaim {
+                confidence: current,
+                ..
+            }
+            | Self::ContradictionEvent {
+                confidence: current,
+                ..
+            } => {
+                *current = confidence.clamp(0.0, 1.0);
+            }
+        }
+        self
+    }
+
+    pub fn with_importance(mut self, importance: f64) -> Self {
+        match &mut self {
+            Self::InferredClaim {
+                importance: current,
+                ..
+            }
+            | Self::ContradictionEvent {
+                importance: current,
+                ..
+            } => {
+                *current = importance.clamp(0.0, 1.0);
+            }
+        }
+        self
+    }
+
+    pub fn with_privacy_level(mut self, privacy_level: PrivacyLevel) -> Self {
+        match &mut self {
+            Self::InferredClaim {
+                privacy_level: current,
+                ..
+            }
+            | Self::ContradictionEvent {
+                privacy_level: current,
+                ..
+            } => {
+                *current = privacy_level;
+            }
+        }
+        self
+    }
+
+    pub fn with_occurred_at(mut self, occurred_at: impl Into<String>) -> Self {
+        let occurred_at = occurred_at.into();
+        match &mut self {
+            Self::InferredClaim {
+                occurred_at: current,
+                ..
+            }
+            | Self::ContradictionEvent {
+                occurred_at: current,
+                ..
+            } => {
+                *current = occurred_at;
+            }
+        }
+        self
+    }
+
+    pub fn into_memory_event_input(self) -> MemoryEventInput {
+        match self {
+            Self::InferredClaim {
+                entity_id,
+                slot_key,
+                value,
+                confidence,
+                importance,
+                privacy_level,
+                occurred_at,
+            } => MemoryEventInput {
+                entity_id,
+                slot_key,
+                event_type: MemoryEventType::InferredClaim,
+                value,
+                source: MemorySource::Inferred,
+                confidence,
+                importance,
+                privacy_level,
+                occurred_at,
+            },
+            Self::ContradictionEvent {
+                entity_id,
+                slot_key,
+                value,
+                confidence,
+                importance,
+                privacy_level,
+                occurred_at,
+            } => MemoryEventInput {
+                entity_id,
+                slot_key,
+                event_type: MemoryEventType::ContradictionMarked,
+                value,
+                source: MemorySource::System,
+                confidence,
+                importance,
+                privacy_level,
+                occurred_at,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecallQuery {
     pub entity_id: String,
     pub query: String,
     pub limit: usize,
+    #[serde(default)]
+    pub policy_context: TenantPolicyContext,
+}
+
+impl RecallQuery {
+    pub fn new(entity_id: impl Into<String>, query: impl Into<String>, limit: usize) -> Self {
+        Self {
+            entity_id: entity_id.into(),
+            query: query.into(),
+            limit,
+            policy_context: TenantPolicyContext::default(),
+        }
+    }
+
+    pub fn with_policy_context(mut self, policy_context: TenantPolicyContext) -> Self {
+        self.policy_context = policy_context;
+        self
+    }
+
+    pub fn enforce_policy(&self) -> anyhow::Result<()> {
+        self.policy_context
+            .enforce_recall_scope(&self.entity_id)
+            .map_err(anyhow::Error::msg)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +419,22 @@ pub trait Memory: Send + Sync {
     fn name(&self) -> &str;
     async fn health_check(&self) -> bool;
     async fn append_event(&self, input: MemoryEventInput) -> anyhow::Result<MemoryEvent>;
+    async fn append_inference_event(
+        &self,
+        event: MemoryInferenceEvent,
+    ) -> anyhow::Result<MemoryEvent> {
+        self.append_event(event.into_memory_event_input()).await
+    }
+    async fn append_inference_events(
+        &self,
+        events: Vec<MemoryInferenceEvent>,
+    ) -> anyhow::Result<Vec<MemoryEvent>> {
+        let mut persisted = Vec::with_capacity(events.len());
+        for event in events {
+            persisted.push(self.append_inference_event(event).await?);
+        }
+        Ok(persisted)
+    }
     async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>>;
     async fn resolve_slot(
         &self,

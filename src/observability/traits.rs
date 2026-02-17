@@ -34,6 +34,20 @@ pub enum ObserverMetric {
     TokensUsed(u64),
     ActiveSessions(u64),
     QueueDepth(u64),
+    AutonomyLifecycle(AutonomyLifecycleSignal),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutonomyLifecycleSignal {
+    Ingested,
+    Deduplicated,
+    Promoted,
+    ContradictionDetected,
+    IntentCreated,
+    IntentPolicyAllowed,
+    IntentPolicyDenied,
+    IntentDispatched,
+    IntentExecutionBlocked,
 }
 
 /// Core observability trait — implement for any backend
@@ -43,6 +57,10 @@ pub trait Observer: Send + Sync {
 
     /// Record a numeric metric
     fn record_metric(&self, metric: &ObserverMetric);
+
+    fn record_autonomy_lifecycle(&self, signal: AutonomyLifecycleSignal) {
+        self.record_metric(&ObserverMetric::AutonomyLifecycle(signal));
+    }
 
     /// Flush any buffered data (no-op for most backends)
     fn flush(&self) {}

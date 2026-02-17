@@ -16,7 +16,82 @@ pub struct CronJob {
     pub next_run: DateTime<Utc>,
     pub last_run: Option<DateTime<Utc>>,
     pub last_status: Option<String>,
+    pub job_kind: CronJobKind,
+    pub origin: CronJobOrigin,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub max_attempts: u32,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CronJobKind {
+    User,
+    Agent,
+}
+
+impl CronJobKind {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Agent => "agent",
+        }
+    }
+
+    fn from_db(value: &str) -> Self {
+        if value.eq_ignore_ascii_case("agent") {
+            Self::Agent
+        } else {
+            Self::User
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CronJobOrigin {
+    User,
+    Agent,
+}
+
+impl CronJobOrigin {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Agent => "agent",
+        }
+    }
+
+    fn from_db(value: &str) -> Self {
+        if value.eq_ignore_ascii_case("agent") {
+            Self::Agent
+        } else {
+            Self::User
+        }
+    }
+
+    fn is_agent(self) -> bool {
+        self == Self::Agent
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CronJobMetadata {
+    pub job_kind: CronJobKind,
+    pub origin: CronJobOrigin,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub max_attempts: u32,
+}
+
+impl Default for CronJobMetadata {
+    fn default() -> Self {
+        Self {
+            job_kind: CronJobKind::User,
+            origin: CronJobOrigin::User,
+            expires_at: None,
+            max_attempts: 1,
+        }
+    }
+}
+
+pub const AGENT_PENDING_CAP: usize = 5;
 
 #[allow(clippy::needless_pass_by_value)]
 pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<()> {
@@ -64,20 +139,43 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
 }
 
 pub fn add_job(config: &Config, expression: &str, command: &str) -> Result<CronJob> {
+    add_job_with_metadata(config, expression, command, &CronJobMetadata::default())
+}
+
+pub fn add_job_with_metadata(
+    config: &Config,
+    expression: &str,
+    command: &str,
+    metadata: &CronJobMetadata,
+) -> Result<CronJob> {
     let now = Utc::now();
     let next_run = next_run_for(expression, now)?;
     let id = Uuid::new_v4().to_string();
+    let max_attempts = metadata.max_attempts.max(1);
 
     with_connection(config, |conn| {
+        if metadata.origin.is_agent() {
+            cleanup_expired_jobs(conn, now)?;
+            let pending = pending_agent_jobs(conn, now)?;
+            if pending >= AGENT_PENDING_CAP {
+                anyhow::bail!("agent-origin queue cap reached ({AGENT_PENDING_CAP} pending jobs)");
+            }
+        }
+
         conn.execute(
-            "INSERT INTO cron_jobs (id, expression, command, created_at, next_run)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO cron_jobs (
+                id, expression, command, created_at, next_run, job_kind, origin, expires_at, max_attempts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 id,
                 expression,
                 command,
                 now.to_rfc3339(),
-                next_run.to_rfc3339()
+                next_run.to_rfc3339(),
+                metadata.job_kind.as_db(),
+                metadata.origin.as_db(),
+                metadata.expires_at.as_ref().map(DateTime::to_rfc3339),
+                max_attempts
             ],
         )
         .context("Failed to insert cron job")?;
@@ -91,13 +189,18 @@ pub fn add_job(config: &Config, expression: &str, command: &str) -> Result<CronJ
         next_run,
         last_run: None,
         last_status: None,
+        job_kind: metadata.job_kind,
+        origin: metadata.origin,
+        expires_at: metadata.expires_at,
+        max_attempts,
     })
 }
 
 pub fn list_jobs(config: &Config) -> Result<Vec<CronJob>> {
     with_connection(config, |conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, expression, command, next_run, last_run, last_status
+            "SELECT id, expression, command, next_run, last_run, last_status,
+                    job_kind, origin, expires_at, max_attempts
              FROM cron_jobs ORDER BY next_run ASC",
         )?;
 
@@ -111,12 +214,27 @@ pub fn list_jobs(config: &Config) -> Result<Vec<CronJob>> {
                 next_run_raw,
                 last_run_raw,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, i64>(9)?,
             ))
         })?;
 
         let mut jobs = Vec::new();
         for row in rows {
-            let (id, expression, command, next_run_raw, last_run_raw, last_status) = row?;
+            let (
+                id,
+                expression,
+                command,
+                next_run_raw,
+                last_run_raw,
+                last_status,
+                job_kind_raw,
+                origin_raw,
+                expires_at_raw,
+                max_attempts_raw,
+            ) = row?;
             jobs.push(CronJob {
                 id,
                 expression,
@@ -127,6 +245,13 @@ pub fn list_jobs(config: &Config) -> Result<Vec<CronJob>> {
                     None => None,
                 },
                 last_status,
+                job_kind: CronJobKind::from_db(&job_kind_raw),
+                origin: CronJobOrigin::from_db(&origin_raw),
+                expires_at: match expires_at_raw {
+                    Some(raw) => Some(parse_rfc3339(&raw)?),
+                    None => None,
+                },
+                max_attempts: parse_max_attempts(max_attempts_raw),
             });
         }
         Ok(jobs)
@@ -149,9 +274,15 @@ pub fn remove_job(config: &Config, id: &str) -> Result<()> {
 
 pub fn due_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJob>> {
     with_connection(config, |conn| {
+        cleanup_expired_jobs(conn, now)?;
+
         let mut stmt = conn.prepare(
-            "SELECT id, expression, command, next_run, last_run, last_status
-             FROM cron_jobs WHERE next_run <= ?1 ORDER BY next_run ASC",
+            "SELECT id, expression, command, next_run, last_run, last_status,
+                    job_kind, origin, expires_at, max_attempts
+             FROM cron_jobs
+             WHERE next_run <= ?1
+               AND (expires_at IS NULL OR expires_at > ?1)
+             ORDER BY next_run ASC",
         )?;
 
         let rows = stmt.query_map(params![now.to_rfc3339()], |row| {
@@ -164,12 +295,27 @@ pub fn due_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJob>> {
                 next_run_raw,
                 last_run_raw,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, i64>(9)?,
             ))
         })?;
 
         let mut jobs = Vec::new();
         for row in rows {
-            let (id, expression, command, next_run_raw, last_run_raw, last_status) = row?;
+            let (
+                id,
+                expression,
+                command,
+                next_run_raw,
+                last_run_raw,
+                last_status,
+                job_kind_raw,
+                origin_raw,
+                expires_at_raw,
+                max_attempts_raw,
+            ) = row?;
             jobs.push(CronJob {
                 id,
                 expression,
@@ -180,6 +326,13 @@ pub fn due_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJob>> {
                     None => None,
                 },
                 last_status,
+                job_kind: CronJobKind::from_db(&job_kind_raw),
+                origin: CronJobOrigin::from_db(&origin_raw),
+                expires_at: match expires_at_raw {
+                    Some(raw) => Some(parse_rfc3339(&raw)?),
+                    None => None,
+                },
+                max_attempts: parse_max_attempts(max_attempts_raw),
             });
         }
         Ok(jobs)
@@ -245,6 +398,47 @@ fn parse_rfc3339(raw: &str) -> Result<DateTime<Utc>> {
     Ok(parsed.with_timezone(&Utc))
 }
 
+fn parse_max_attempts(raw: i64) -> u32 {
+    u32::try_from(raw)
+        .ok()
+        .filter(|value| *value > 0)
+        .unwrap_or(1)
+}
+
+fn cleanup_expired_jobs(conn: &Connection, now: DateTime<Utc>) -> Result<()> {
+    conn.execute(
+        "DELETE FROM cron_jobs WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+        params![now.to_rfc3339()],
+    )
+    .context("Failed to cleanup expired cron jobs")?;
+    Ok(())
+}
+
+fn pending_agent_jobs(conn: &Connection, now: DateTime<Utc>) -> Result<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM cron_jobs
+         WHERE origin = 'agent'
+           AND (expires_at IS NULL OR expires_at > ?1)",
+        params![now.to_rfc3339()],
+        |row| row.get(0),
+    )?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
+}
+
+fn add_column_if_missing(conn: &Connection, sql: &str) -> Result<()> {
+    match conn.execute(sql, []) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            if error.to_string().contains("duplicate column name") {
+                Ok(())
+            } else {
+                Err(error.into())
+            }
+        }
+    }
+}
+
 fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     let db_path = config.workspace_dir.join("cron").join("jobs.db");
     if let Some(parent) = db_path.parent() {
@@ -264,11 +458,29 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
             next_run    TEXT NOT NULL,
             last_run    TEXT,
             last_status TEXT,
-            last_output TEXT
+            last_output TEXT,
+            job_kind    TEXT NOT NULL DEFAULT 'user',
+            origin      TEXT NOT NULL DEFAULT 'user',
+            expires_at  TEXT,
+            max_attempts INTEGER NOT NULL DEFAULT 1
         );
         CREATE INDEX IF NOT EXISTS idx_cron_jobs_next_run ON cron_jobs(next_run);",
     )
     .context("Failed to initialize cron schema")?;
+
+    add_column_if_missing(
+        &conn,
+        "ALTER TABLE cron_jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'user'",
+    )?;
+    add_column_if_missing(
+        &conn,
+        "ALTER TABLE cron_jobs ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'",
+    )?;
+    add_column_if_missing(&conn, "ALTER TABLE cron_jobs ADD COLUMN expires_at TEXT")?;
+    add_column_if_missing(
+        &conn,
+        "ALTER TABLE cron_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1",
+    )?;
 
     f(&conn)
 }
@@ -299,6 +511,10 @@ mod tests {
 
         assert_eq!(job.expression, "*/5 * * * *");
         assert_eq!(job.command, "echo ok");
+        assert_eq!(job.job_kind, CronJobKind::User);
+        assert_eq!(job.origin, CronJobOrigin::User);
+        assert_eq!(job.expires_at, None);
+        assert_eq!(job.max_attempts, 1);
     }
 
     #[test]

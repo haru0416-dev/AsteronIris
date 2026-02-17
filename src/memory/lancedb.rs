@@ -572,6 +572,8 @@ impl LanceDbMemory {
     }
 
     async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
+        query.enforce_policy()?;
+
         let scoped_query = format!("{} {}", query.entity_id, query.query);
         let entries = self.search_projection(&scoped_query, query.limit).await?;
         Ok(entries

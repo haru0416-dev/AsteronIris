@@ -20,7 +20,7 @@ pub use memory_store::MemoryStoreTool;
 pub use shell::ShellTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
-pub use traits::{ToolResult, ToolSpec};
+pub use traits::{ActionIntent, ActionOperator, ActionResult, NoopOperator, ToolResult, ToolSpec};
 
 use crate::memory::Memory;
 use crate::security::SecurityPolicy;
@@ -33,6 +33,10 @@ pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
         Box::new(FileReadTool::new(security.clone())),
         Box::new(FileWriteTool::new(security)),
     ]
+}
+
+pub fn default_action_operator(security: Arc<SecurityPolicy>) -> Arc<dyn ActionOperator> {
+    Arc::new(NoopOperator::new(security))
 }
 
 /// Create full tool registry including memory tools and optional Composio

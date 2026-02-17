@@ -1,4 +1,4 @@
-use super::traits::{Observer, ObserverEvent, ObserverMetric};
+use super::traits::{AutonomyLifecycleSignal, Observer, ObserverEvent, ObserverMetric};
 use tracing::info;
 
 /// Log-based observer — uses tracing, zero external deps
@@ -58,11 +58,28 @@ impl Observer for LogObserver {
             ObserverMetric::QueueDepth(d) => {
                 info!(depth = d, "metric.queue_depth");
             }
+            ObserverMetric::AutonomyLifecycle(signal) => {
+                info!(signal = %autonomy_signal_name(*signal), "metric.autonomy_lifecycle");
+            }
         }
     }
 
     fn name(&self) -> &str {
         "log"
+    }
+}
+
+fn autonomy_signal_name(signal: AutonomyLifecycleSignal) -> &'static str {
+    match signal {
+        AutonomyLifecycleSignal::Ingested => "ingested",
+        AutonomyLifecycleSignal::Deduplicated => "deduplicated",
+        AutonomyLifecycleSignal::Promoted => "promoted",
+        AutonomyLifecycleSignal::ContradictionDetected => "contradiction_detected",
+        AutonomyLifecycleSignal::IntentCreated => "intent_created",
+        AutonomyLifecycleSignal::IntentPolicyAllowed => "intent_policy_allowed",
+        AutonomyLifecycleSignal::IntentPolicyDenied => "intent_policy_denied",
+        AutonomyLifecycleSignal::IntentDispatched => "intent_dispatched",
+        AutonomyLifecycleSignal::IntentExecutionBlocked => "intent_execution_blocked",
     }
 }
 
@@ -115,5 +132,8 @@ mod tests {
         obs.record_metric(&ObserverMetric::TokensUsed(u64::MAX));
         obs.record_metric(&ObserverMetric::ActiveSessions(1));
         obs.record_metric(&ObserverMetric::QueueDepth(999));
+        obs.record_metric(&ObserverMetric::AutonomyLifecycle(
+            AutonomyLifecycleSignal::IntentCreated,
+        ));
     }
 }

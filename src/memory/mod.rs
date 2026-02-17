@@ -14,7 +14,8 @@ pub use traits::Memory;
 #[allow(unused_imports)]
 pub use traits::{
     BeliefSlot, ForgetMode, ForgetOutcome, MemoryCategory, MemoryEntry, MemoryEvent,
-    MemoryEventInput, MemoryEventType, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
+    MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemoryRecallItem, MemorySource,
+    PrivacyLevel, RecallQuery,
 };
 
 use crate::config::MemoryConfig;
@@ -76,6 +77,13 @@ pub fn create_memory(
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
         }
     }
+}
+
+pub async fn persist_inference_events(
+    memory: &dyn Memory,
+    events: Vec<MemoryInferenceEvent>,
+) -> anyhow::Result<Vec<MemoryEvent>> {
+    memory.append_inference_events(events).await
 }
 
 #[cfg(test)]

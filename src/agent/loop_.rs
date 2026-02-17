@@ -1,20 +1,26 @@
 use crate::config::Config;
 use crate::memory::{
-    self, Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
+    self, Memory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource,
+    PrivacyLevel, RecallQuery,
 };
 use crate::observability::{self, Observer, ObserverEvent};
 use crate::persona::state_header::StateHeaderV1;
 use crate::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use crate::providers::{self, Provider};
 use crate::runtime;
+use crate::security::external_content::{
+    decide_external_action, detect_injection_signals, sanitize_marker_collision,
+    wrap_external_content, ExternalAction,
+};
 use crate::security::writeback_guard::{
-    validate_writeback_payload, ImmutableStateHeader, WritebackGuardVerdict,
+    validate_writeback_payload, ImmutableStateHeader, SelfTaskWriteback, WritebackGuardVerdict,
 };
 use crate::security::SecurityPolicy;
 use crate::tools;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
-use serde_json::Value;
+use chrono::{DateTime, Utc};
+use serde_json::{json, Value};
 use std::fmt::Write;
 use std::sync::Arc;
 use std::time::Instant;
@@ -73,6 +79,145 @@ struct TurnExecutionOutcome {
     accounting: TurnCallAccounting,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VerifyRepairCaps {
+    max_attempts: u32,
+    max_repair_depth: u32,
+}
+
+impl VerifyRepairCaps {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            max_attempts: config.autonomy.verify_repair_max_attempts,
+            max_repair_depth: config.autonomy.verify_repair_max_repair_depth,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyRepairEscalationReason {
+    MaxAttemptsReached,
+    MaxRepairDepthReached,
+    NonRetryableFailure,
+}
+
+impl VerifyRepairEscalationReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MaxAttemptsReached => "max_attempts_reached",
+            Self::MaxRepairDepthReached => "max_repair_depth_reached",
+            Self::NonRetryableFailure => "non_retryable_failure",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VerifyFailureAnalysis {
+    failure_class: &'static str,
+    retryable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VerifyRepairEscalation {
+    reason: VerifyRepairEscalationReason,
+    attempts: u32,
+    repair_depth: u32,
+    max_attempts: u32,
+    max_repair_depth: u32,
+    failure_class: &'static str,
+    last_error: String,
+}
+
+impl VerifyRepairEscalation {
+    fn contract_message(&self) -> String {
+        format!(
+            "verify/repair escalated: reason={} attempts={} repair_depth={} max_attempts={} max_repair_depth={} failure_class={} last_error={}",
+            self.reason.as_str(),
+            self.attempts,
+            self.repair_depth,
+            self.max_attempts,
+            self.max_repair_depth,
+            self.failure_class,
+            self.last_error
+        )
+    }
+
+    fn event_payload(&self) -> Value {
+        json!({
+            "reason": self.reason.as_str(),
+            "attempts": self.attempts,
+            "repair_depth": self.repair_depth,
+            "max_attempts": self.max_attempts,
+            "max_repair_depth": self.max_repair_depth,
+            "failure_class": self.failure_class,
+            "last_error": self.last_error,
+        })
+    }
+}
+
+const VERIFY_REPAIR_ESCALATION_SLOT_KEY: &str = "autonomy.verify_repair.escalation";
+
+fn analyze_verify_failure(error: &anyhow::Error) -> VerifyFailureAnalysis {
+    let message = error.to_string();
+    if message.contains("action limit exceeded") || message.contains("daily cost limit exceeded") {
+        return VerifyFailureAnalysis {
+            failure_class: "policy_limit",
+            retryable: false,
+        };
+    }
+
+    VerifyFailureAnalysis {
+        failure_class: "transient_failure",
+        retryable: true,
+    }
+}
+
+fn decide_verify_repair_escalation(
+    caps: VerifyRepairCaps,
+    attempts: u32,
+    repair_depth: u32,
+    analysis: VerifyFailureAnalysis,
+    last_error: &anyhow::Error,
+) -> Option<VerifyRepairEscalation> {
+    let reason = if attempts >= caps.max_attempts {
+        Some(VerifyRepairEscalationReason::MaxAttemptsReached)
+    } else if repair_depth >= caps.max_repair_depth {
+        Some(VerifyRepairEscalationReason::MaxRepairDepthReached)
+    } else if !analysis.retryable {
+        Some(VerifyRepairEscalationReason::NonRetryableFailure)
+    } else {
+        None
+    }?;
+
+    Some(VerifyRepairEscalation {
+        reason,
+        attempts,
+        repair_depth,
+        max_attempts: caps.max_attempts,
+        max_repair_depth: caps.max_repair_depth,
+        failure_class: analysis.failure_class,
+        last_error: last_error.to_string(),
+    })
+}
+
+async fn emit_verify_repair_escalation_event(
+    mem: &dyn Memory,
+    escalation: &VerifyRepairEscalation,
+) -> Result<()> {
+    let event = MemoryEventInput::new(
+        "default",
+        VERIFY_REPAIR_ESCALATION_SLOT_KEY,
+        MemoryEventType::SummaryCompacted,
+        escalation.event_payload().to_string(),
+        MemorySource::System,
+        PrivacyLevel::Private,
+    )
+    .with_confidence(1.0)
+    .with_importance(0.9);
+    mem.append_event(event).await?;
+    Ok(())
+}
+
 struct MainSessionTurnParams<'a> {
     answer_provider: &'a dyn Provider,
     reflect_provider: &'a dyn Provider,
@@ -82,20 +227,40 @@ struct MainSessionTurnParams<'a> {
 }
 
 /// Build context preamble by searching memory for relevant entries
+fn sanitize_external_fragment_for_context(slot_key: &str, value: &str) -> String {
+    if !value.contains("digest_sha256=") {
+        return "[external payload omitted by replay-ban policy]".to_string();
+    }
+
+    let signals = detect_injection_signals(value);
+    let action = decide_external_action(&signals);
+    match action {
+        ExternalAction::Allow => wrap_external_content(slot_key, value),
+        ExternalAction::Sanitize => {
+            let sanitized = sanitize_marker_collision(value);
+            wrap_external_content(slot_key, &sanitized)
+        }
+        ExternalAction::Block => {
+            "[external summary blocked by policy during context replay]".to_string()
+        }
+    }
+}
+
 async fn build_context(mem: &dyn Memory, user_msg: &str) -> String {
     let mut context = String::new();
 
     // Pull relevant memories for this message
-    let query = RecallQuery {
-        entity_id: "default".to_string(),
-        query: user_msg.to_string(),
-        limit: 5,
-    };
+    let query = RecallQuery::new("default", user_msg, 5);
     if let Ok(entries) = mem.recall_scoped(query).await {
         if !entries.is_empty() {
             context.push_str("[Memory context]\n");
             for entry in &entries {
-                let _ = writeln!(context, "- {}: {}", entry.slot_key, entry.value);
+                let value = if entry.slot_key.starts_with("external.") {
+                    sanitize_external_fragment_for_context(&entry.slot_key, &entry.value)
+                } else {
+                    entry.value.clone()
+                };
+                let _ = writeln!(context, "- {}: {}", entry.slot_key, value);
             }
             context.push('\n');
         }
@@ -228,22 +393,126 @@ async fn run_persona_reflect_writeback(
         mem.append_event(input).await?;
     }
 
+    enqueue_reflect_self_tasks(config, &accepted.self_tasks);
+
     Ok(())
+}
+
+fn enqueue_reflect_self_tasks(config: &Config, self_tasks: &[SelfTaskWriteback]) {
+    for task in self_tasks {
+        let parsed_expires_at = match DateTime::parse_from_rfc3339(&task.expires_at) {
+            Ok(value) => value.with_timezone(&Utc),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    expires_at = %task.expires_at,
+                    "skipping self task enqueue due to invalid expires_at"
+                );
+                continue;
+            }
+        };
+
+        let metadata = crate::cron::CronJobMetadata {
+            job_kind: crate::cron::CronJobKind::Agent,
+            origin: crate::cron::CronJobOrigin::Agent,
+            expires_at: Some(parsed_expires_at),
+            max_attempts: config.autonomy.verify_repair_max_attempts.max(1),
+        };
+
+        if let Err(error) = crate::cron::add_job_with_metadata(
+            config,
+            "* * * * *",
+            "echo agent-self-task",
+            &metadata,
+        ) {
+            tracing::warn!(
+                error = %error,
+                title = %task.title,
+                "failed to enqueue reflect self task"
+            );
+        }
+    }
 }
 
 async fn execute_main_session_turn(
     config: &Config,
+    security: &SecurityPolicy,
     mem: Arc<dyn Memory>,
     params: &MainSessionTurnParams<'_>,
     user_message: &str,
 ) -> Result<String> {
-    let outcome =
-        execute_main_session_turn_with_accounting(config, mem, params, user_message).await?;
-    Ok(outcome.response)
+    let caps = VerifyRepairCaps::from_config(config);
+    let mut attempts = 0_u32;
+    let mut repair_depth = 0_u32;
+
+    loop {
+        attempts = attempts.saturating_add(1);
+        match execute_main_session_turn_with_accounting(
+            config,
+            security,
+            mem.clone(),
+            params,
+            user_message,
+        )
+        .await
+        {
+            Ok(outcome) => return Ok(outcome.response),
+            Err(error) => {
+                let analysis = analyze_verify_failure(&error);
+                if let Some(escalation) =
+                    decide_verify_repair_escalation(caps, attempts, repair_depth, analysis, &error)
+                {
+                    if let Err(event_error) =
+                        emit_verify_repair_escalation_event(mem.as_ref(), &escalation).await
+                    {
+                        tracing::warn!(
+                            error = %event_error,
+                            "verify/repair escalation event write failed"
+                        );
+                    }
+                    anyhow::bail!(escalation.contract_message());
+                }
+
+                repair_depth = repair_depth.saturating_add(1);
+                tracing::warn!(
+                    attempt = attempts,
+                    repair_depth,
+                    failure_class = analysis.failure_class,
+                    retryable = analysis.retryable,
+                    error = %error,
+                    "verify/repair retrying turn"
+                );
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_main_session_turn_for_integration(
+    config: &Config,
+    security: &SecurityPolicy,
+    mem: Arc<dyn Memory>,
+    answer_provider: &dyn Provider,
+    reflect_provider: &dyn Provider,
+    system_prompt: &str,
+    model_name: &str,
+    temperature: f64,
+    user_message: &str,
+) -> Result<String> {
+    let params = MainSessionTurnParams {
+        answer_provider,
+        reflect_provider,
+        system_prompt,
+        model_name,
+        temperature,
+    };
+
+    execute_main_session_turn(config, security, mem, &params, user_message).await
 }
 
 async fn execute_main_session_turn_with_accounting(
     config: &Config,
+    security: &SecurityPolicy,
     mem: Arc<dyn Memory>,
     params: &MainSessionTurnParams<'_>,
     user_message: &str,
@@ -274,18 +543,37 @@ async fn execute_main_session_turn_with_accounting(
         format!("{context}{user_message}")
     };
 
+    security
+        .consume_action_and_cost(0)
+        .map_err(anyhow::Error::msg)?;
     accounting.consume_answer_call()?;
+    let requested_temperature = params.temperature;
+    let clamped_temperature = config.autonomy.clamp_temperature(requested_temperature);
+    if (requested_temperature - clamped_temperature).abs() > f64::EPSILON {
+        let band = config.autonomy.selected_temperature_band();
+        tracing::info!(
+            autonomy_level = ?config.autonomy.level,
+            requested_temperature,
+            clamped_temperature,
+            band_min = band.min,
+            band_max = band.max,
+            "temperature clamped to autonomy band"
+        );
+    }
     let response = params
         .answer_provider
         .chat_with_system(
             Some(params.system_prompt),
             &enriched,
             params.model_name,
-            params.temperature,
+            clamped_temperature,
         )
         .await?;
 
     if config.persona.enabled_main_session {
+        security
+            .consume_action_and_cost(0)
+            .map_err(anyhow::Error::msg)?;
         accounting.consume_reflect_call()?;
         if let Err(error) = run_persona_reflect_writeback(
             config,
@@ -317,12 +605,60 @@ async fn execute_main_session_turn_with_accounting(
                 .with_importance(0.4),
             )
             .await;
+
+        if let Err(error) = run_post_turn_inference_pass(mem.as_ref(), &response).await {
+            tracing::warn!(error = %error, "post-turn memory inference pass failed");
+        }
     }
 
     Ok(TurnExecutionOutcome {
         response,
         accounting,
     })
+}
+
+fn parse_inference_payload(line: &str) -> Option<(&str, &str)> {
+    let (slot_key, value) = line.split_once("=>")?;
+    let slot_key = slot_key.trim();
+    let value = value.trim();
+    if slot_key.is_empty() || value.is_empty() {
+        return None;
+    }
+    Some((slot_key, value))
+}
+
+fn build_post_turn_inference_events(assistant_response: &str) -> Vec<MemoryInferenceEvent> {
+    const INFERRED_PREFIX: &str = "INFERRED_CLAIM ";
+    const CONTRADICTION_PREFIX: &str = "CONTRADICTION_EVENT ";
+
+    assistant_response
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if let Some(payload) = line.strip_prefix(INFERRED_PREFIX) {
+                let (slot_key, value) = parse_inference_payload(payload)?;
+                return Some(MemoryInferenceEvent::inferred_claim(
+                    "default", slot_key, value,
+                ));
+            }
+            if let Some(payload) = line.strip_prefix(CONTRADICTION_PREFIX) {
+                let (slot_key, value) = parse_inference_payload(payload)?;
+                return Some(MemoryInferenceEvent::contradiction_marked(
+                    "default", slot_key, value,
+                ));
+            }
+            None
+        })
+        .collect()
+}
+
+async fn run_post_turn_inference_pass(mem: &dyn Memory, assistant_response: &str) -> Result<()> {
+    let events = build_post_turn_inference_events(assistant_response);
+    if events.is_empty() {
+        return Ok(());
+    }
+    memory::persist_inference_events(mem, events).await?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -448,7 +784,9 @@ pub async fn run(
     let start = Instant::now();
 
     if let Some(msg) = message {
-        let response = execute_main_session_turn(&config, mem.clone(), &turn_params, &msg).await?;
+        let response =
+            execute_main_session_turn(&config, security.as_ref(), mem.clone(), &turn_params, &msg)
+                .await?;
         println!("{response}");
     } else {
         println!("🦀 AsteronIris Interactive Mode");
@@ -463,8 +801,14 @@ pub async fn run(
         });
 
         while let Some(msg) = rx.recv().await {
-            let response =
-                execute_main_session_turn(&config, mem.clone(), &turn_params, &msg.content).await?;
+            let response = execute_main_session_turn(
+                &config,
+                security.as_ref(),
+                mem.clone(),
+                &turn_params,
+                &msg.content,
+            )
+            .await?;
             println!("\n{response}\n");
         }
 
@@ -486,10 +830,12 @@ mod tests {
     use crate::config::PersonaConfig;
     use crate::memory::SqliteMemory;
     use crate::providers::reliable::ReliableProvider;
+    use crate::security::SecurityPolicy;
     use async_trait::async_trait;
     use chrono::Utc;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
     use tempfile::TempDir;
 
     struct MockProvider {
@@ -590,9 +936,11 @@ mod tests {
             ],
             fail_on_call: None,
         };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
         let response = execute_main_session_turn(
             &config,
+            &security,
             mem.clone(),
             &MainSessionTurnParams {
                 answer_provider: &provider,
@@ -639,9 +987,11 @@ mod tests {
             responses: vec!["answer-survives-call2-failure".to_string()],
             fail_on_call: Some(2),
         };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
         let response = execute_main_session_turn(
             &config,
+            &security,
             mem.clone(),
             &MainSessionTurnParams {
                 answer_provider: &provider,
@@ -677,6 +1027,47 @@ mod tests {
         ) -> anyhow::Result<String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             anyhow::bail!("transient reflect failure")
+        }
+    }
+
+    struct TemperatureCaptureProvider {
+        temperatures: Arc<Mutex<Vec<f64>>>,
+        response: String,
+    }
+
+    struct MessageFailProvider {
+        calls: Arc<AtomicUsize>,
+        message: &'static str,
+    }
+
+    #[async_trait]
+    impl Provider for TemperatureCaptureProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            temperature: f64,
+        ) -> anyhow::Result<String> {
+            self.temperatures
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(temperature);
+            Ok(self.response.clone())
+        }
+    }
+
+    #[async_trait]
+    impl Provider for MessageFailProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!(self.message)
         }
     }
 
@@ -718,9 +1109,11 @@ mod tests {
         let reflect_provider = AlwaysFailProvider {
             calls: reflect_calls.clone(),
         };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
         let response = execute_main_session_turn(
             &config,
+            &security,
             mem.clone(),
             &MainSessionTurnParams {
                 answer_provider: &answer_provider,
@@ -787,10 +1180,12 @@ mod tests {
             3,
             1,
         );
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
         for turn in 0..3 {
             let outcome = execute_main_session_turn_with_accounting(
                 &config,
+                &security,
                 mem.clone(),
                 &MainSessionTurnParams {
                     answer_provider: &answer_provider,
@@ -815,5 +1210,320 @@ mod tests {
 
         assert_eq!(answer_calls.load(Ordering::SeqCst), 3);
         assert_eq!(reflect_calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn persona_loop_policy_blocks_when_action_limit_is_exhausted() {
+        let temp = TempDir::new().unwrap();
+        let mut config = test_config(temp.path());
+        config.autonomy.max_actions_per_hour = 0;
+
+        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = MockProvider {
+            calls: calls.clone(),
+            responses: vec!["should-not-run".to_string()],
+            fail_on_call: None,
+        };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let err = execute_main_session_turn(
+            &config,
+            &security,
+            mem,
+            &MainSessionTurnParams {
+                answer_provider: &provider,
+                reflect_provider: &provider,
+                system_prompt: "system",
+                model_name: "test-model",
+                temperature: 0.1,
+            },
+            "blocked by policy",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("action limit exceeded"));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn autonomy_temperature_clamped() {
+        let temp = TempDir::new().unwrap();
+        let mut config = test_config(temp.path());
+        config.persona.enabled_main_session = false;
+        config.autonomy.level = crate::security::AutonomyLevel::Full;
+
+        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+        let temperatures = Arc::new(Mutex::new(Vec::new()));
+        let provider = TemperatureCaptureProvider {
+            temperatures: temperatures.clone(),
+            response: "clamped-temp-response".to_string(),
+        };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let response = execute_main_session_turn(
+            &config,
+            &security,
+            mem,
+            &MainSessionTurnParams {
+                answer_provider: &provider,
+                reflect_provider: &provider,
+                system_prompt: "system",
+                model_name: "test-model",
+                temperature: 1.9,
+            },
+            "clamp this temperature",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response, "clamped-temp-response");
+        let seen = temperatures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(seen, vec![1.2]);
+    }
+
+    #[tokio::test]
+    async fn verify_repair_recovers_within_attempt_cap() {
+        let temp = TempDir::new().unwrap();
+        let mut config = test_config(temp.path());
+        config.persona.enabled_main_session = false;
+        config.autonomy.verify_repair_max_attempts = 3;
+        config.autonomy.verify_repair_max_repair_depth = 2;
+
+        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = MockProvider {
+            calls: calls.clone(),
+            responses: vec![
+                "unused-first-attempt".to_string(),
+                "recovered-on-second-attempt".to_string(),
+            ],
+            fail_on_call: Some(1),
+        };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let response = execute_main_session_turn(
+            &config,
+            &security,
+            mem,
+            &MainSessionTurnParams {
+                answer_provider: &provider,
+                reflect_provider: &provider,
+                system_prompt: "system",
+                model_name: "test-model",
+                temperature: 0.2,
+            },
+            "recover after one failure",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response, "recovered-on-second-attempt");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn verify_repair_stops_at_max_attempts() {
+        let temp = TempDir::new().unwrap();
+        let mut config = test_config(temp.path());
+        config.persona.enabled_main_session = false;
+        config.autonomy.verify_repair_max_attempts = 3;
+        config.autonomy.verify_repair_max_repair_depth = 2;
+
+        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = MessageFailProvider {
+            calls: calls.clone(),
+            message: "deterministic transient failure",
+        };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let err = execute_main_session_turn(
+            &config,
+            &security,
+            mem,
+            &MainSessionTurnParams {
+                answer_provider: &provider,
+                reflect_provider: &provider,
+                system_prompt: "system",
+                model_name: "test-model",
+                temperature: 0.2,
+            },
+            "always fail",
+        )
+        .await
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("reason=max_attempts_reached"));
+        assert!(message.contains("attempts=3"));
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn verify_repair_emits_escalation_event() {
+        let temp = TempDir::new().unwrap();
+        let mut config = test_config(temp.path());
+        config.persona.enabled_main_session = false;
+        config.autonomy.verify_repair_max_attempts = 2;
+        config.autonomy.verify_repair_max_repair_depth = 1;
+
+        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = MessageFailProvider {
+            calls: calls.clone(),
+            message: "deterministic retry failure",
+        };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let err = execute_main_session_turn(
+            &config,
+            &security,
+            mem.clone(),
+            &MainSessionTurnParams {
+                answer_provider: &provider,
+                reflect_provider: &provider,
+                system_prompt: "system",
+                model_name: "test-model",
+                temperature: 0.2,
+            },
+            "escalate and emit event",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("reason=max_attempts_reached"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let escalation = mem
+            .resolve_slot("default", VERIFY_REPAIR_ESCALATION_SLOT_KEY)
+            .await
+            .unwrap()
+            .expect("escalation event should be written");
+
+        assert!(escalation
+            .value
+            .contains("\"reason\":\"max_attempts_reached\""));
+        assert!(escalation.value.contains("\"attempts\":2"));
+        assert!(escalation
+            .value
+            .contains("\"failure_class\":\"transient_failure\""));
+    }
+
+    #[tokio::test]
+    async fn verify_repair_retries_still_enforce_policy_limits() {
+        let temp = TempDir::new().unwrap();
+        let mut config = test_config(temp.path());
+        config.persona.enabled_main_session = false;
+        config.autonomy.max_actions_per_hour = 2;
+        config.autonomy.verify_repair_max_attempts = 5;
+        config.autonomy.verify_repair_max_repair_depth = 4;
+
+        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = MessageFailProvider {
+            calls: calls.clone(),
+            message: "retry until policy blocks",
+        };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let err = execute_main_session_turn(
+            &config,
+            &security,
+            mem,
+            &MainSessionTurnParams {
+                answer_provider: &provider,
+                reflect_provider: &provider,
+                system_prompt: "system",
+                model_name: "test-model",
+                temperature: 0.2,
+            },
+            "policy must gate every retry",
+        )
+        .await
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("reason=non_retryable_failure"));
+        assert!(message.contains("failure_class=policy_limit"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn build_context_replay_ban_hides_raw_external_payload() {
+        let temp = TempDir::new().unwrap();
+        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+
+        mem.append_event(
+            MemoryEventInput::new(
+                "default",
+                "external.gateway.webhook",
+                MemoryEventType::FactAdded,
+                "ATTACK_PAYLOAD_ALPHA",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_confidence(0.95)
+            .with_importance(0.7),
+        )
+        .await
+        .unwrap();
+
+        let context = build_context(mem.as_ref(), "ATTACK_PAYLOAD_ALPHA").await;
+        assert!(context.contains("external.gateway.webhook"));
+        assert!(!context.contains("ATTACK_PAYLOAD_ALPHA"));
+    }
+
+    #[tokio::test]
+    async fn post_turn_inference_hook_appends_tagged_events() {
+        let temp = TempDir::new().unwrap();
+        let mut config = test_config(temp.path());
+        config.memory.auto_save = true;
+        config.persona.enabled_main_session = false;
+
+        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+        let provider = MockProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            responses: vec![
+                "INFERRED_CLAIM inference.preference.language => User prefers Rust\nCONTRADICTION_EVENT contradiction.preference.language => Earlier note said Python".to_string(),
+            ],
+            fail_on_call: None,
+        };
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let response = execute_main_session_turn(
+            &config,
+            &security,
+            mem.clone(),
+            &MainSessionTurnParams {
+                answer_provider: &provider,
+                reflect_provider: &provider,
+                system_prompt: "system",
+                model_name: "test-model",
+                temperature: 0.3,
+            },
+            "derive inferences",
+        )
+        .await
+        .unwrap();
+        assert!(response.contains("INFERRED_CLAIM"));
+
+        let inferred = mem
+            .resolve_slot("default", "inference.preference.language")
+            .await
+            .unwrap()
+            .expect("inferred claim should persist");
+        assert_eq!(inferred.source, MemorySource::Inferred);
+
+        let contradiction = mem
+            .resolve_slot("default", "contradiction.preference.language")
+            .await
+            .unwrap()
+            .expect("contradiction event should be represented as event");
+        assert_eq!(contradiction.source, MemorySource::System);
     }
 }

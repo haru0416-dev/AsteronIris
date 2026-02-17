@@ -197,11 +197,7 @@ async fn memory_throughput_ops_per_sec() {
         recall_set.spawn(async move {
             let _permit = permit;
             let results = mem
-                .recall_scoped(RecallQuery {
-                    entity_id: "default".to_string(),
-                    query: q,
-                    limit: recall_limit,
-                })
+                .recall_scoped(RecallQuery::new("default", q, recall_limit))
                 .await?;
             anyhow::ensure!(results.len() <= recall_limit);
             Ok::<(), anyhow::Error>(())

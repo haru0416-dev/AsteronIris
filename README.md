@@ -112,6 +112,24 @@ Useful environment overrides:
 - `ASTERONIRIS_GATEWAY_PORT`
 - `ASTERONIRIS_TEMPERATURE`
 
+### Autonomy Rollout Gates
+
+Autonomy extensions ship safe by default. New rollout controls live under
+`[autonomy.rollout]` in `config.toml`:
+
+- `stage = "off" | "audit-only" | "sanitize"` (default: `off`)
+- `verify_repair_enabled = false` (default)
+- `contradiction_weighting_enabled = false` (default)
+- `intent_audit_anomaly_detection_enabled = false` (default)
+
+`asteroniris status` and `asteroniris doctor` both report these values using:
+
+- `Rollout stage: off|audit-only|sanitize`
+- `Rollout gates: verify_repair=on|off, contradiction_weighting=on|off, intent_audit_anomaly_detection=on|off`
+
+For operator rollout, SLO thresholds, alert triggers, and rollback steps, see
+`docs/operations/autonomy-rollout-runbook.md`.
+
 ## Security Notes
 
 - Gateway defaults to localhost bind and pairing enabled

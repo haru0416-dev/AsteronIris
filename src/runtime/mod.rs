@@ -12,7 +12,16 @@ pub const RUNTIME_SUPPORTED_VALUES: &str = "native, docker";
 pub const DOCKER_ROLLOUT_GATE_MESSAGE: &str =
     "runtime.kind='docker' is disabled by rollout gate. Set runtime.enable_docker_runtime=true to enable experimental docker runtime.";
 pub const CLOUDFLARE_UNSUPPORTED_MESSAGE: &str =
-    "runtime.kind='cloudflare' is explicitly unsupported in this cycle. Use runtime.kind='native' for now.";
+    "runtime.kind='cloudflare' is reserved and explicitly unsupported in this cycle; no runtime fallback will be used. Use runtime.kind='native' for now.";
+pub const CLOUDFLARE_RESERVED_STATUS_MESSAGE: &str =
+    "reserved/unsupported in this cycle (no fallback execution path)";
+
+pub fn runtime_kind_contract_note(kind: &str) -> Option<&'static str> {
+    match kind {
+        "cloudflare" => Some(CLOUDFLARE_RESERVED_STATUS_MESSAGE),
+        _ => None,
+    }
+}
 
 /// Factory: create the right runtime from config
 pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeAdapter>> {
@@ -90,9 +99,24 @@ mod tests {
             enable_docker_runtime: false,
         };
         match create_runtime(&cfg) {
-            Err(err) => assert_eq!(err.to_string(), CLOUDFLARE_UNSUPPORTED_MESSAGE),
+            Err(err) => {
+                let message = err.to_string();
+                assert_eq!(message, CLOUDFLARE_UNSUPPORTED_MESSAGE);
+                assert!(message.contains("reserved and explicitly unsupported"));
+                assert!(message.contains("no runtime fallback"));
+            }
             Ok(_) => panic!("cloudflare runtime should error"),
         }
+    }
+
+    #[test]
+    fn runtime_contract_note_cloudflare_is_explicit() {
+        assert_eq!(
+            runtime_kind_contract_note("cloudflare"),
+            Some(CLOUDFLARE_RESERVED_STATUS_MESSAGE)
+        );
+        assert_eq!(runtime_kind_contract_note("native"), None);
+        assert_eq!(runtime_kind_contract_note("docker"), None);
     }
 
     #[test]

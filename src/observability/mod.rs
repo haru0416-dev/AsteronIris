@@ -33,7 +33,7 @@ pub fn create_observer(config: &ObservabilityConfig) -> Box<dyn Observer> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::observability::traits::ObserverMetric;
+    use crate::observability::traits::{AutonomyLifecycleSignal, ObserverMetric};
     use std::time::Duration;
 
     #[test]
@@ -110,5 +110,20 @@ mod tests {
             backend: String::new(),
         };
         assert_eq!(create_observer(&cfg).name(), "noop");
+    }
+
+    #[test]
+    fn observability_records_intent_metrics() {
+        let observer = PrometheusObserver::new();
+
+        observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentCreated);
+        observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentPolicyAllowed);
+        observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::ContradictionDetected);
+
+        let autonomy_counts = observer.snapshot_autonomy_counts();
+        assert_eq!(autonomy_counts.intent_created, 1);
+        assert_eq!(autonomy_counts.intent_policy_allowed, 1);
+        assert_eq!(autonomy_counts.contradiction_detected, 1);
+        assert_eq!(autonomy_counts.total, 3);
     }
 }

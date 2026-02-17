@@ -18,6 +18,7 @@ impl Observer for NoopObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observability::traits::AutonomyLifecycleSignal;
     use std::time::Duration;
 
     #[test]
@@ -63,6 +64,9 @@ mod tests {
         obs.record_metric(&ObserverMetric::TokensUsed(1000));
         obs.record_metric(&ObserverMetric::ActiveSessions(5));
         obs.record_metric(&ObserverMetric::QueueDepth(0));
+        obs.record_metric(&ObserverMetric::AutonomyLifecycle(
+            AutonomyLifecycleSignal::IntentExecutionBlocked,
+        ));
     }
 
     #[test]

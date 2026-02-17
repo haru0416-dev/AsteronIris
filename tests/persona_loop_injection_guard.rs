@@ -80,11 +80,7 @@ async fn prompt_injection_payload_is_rejected_and_writeback_is_not_persisted() {
     assert_eq!(canonical, initial);
 
     let writeback_entries = memory
-        .recall_scoped(RecallQuery {
-            entity_id: "default".to_string(),
-            query: "persona.writeback.".to_string(),
-            limit: 16,
-        })
+        .recall_scoped(RecallQuery::new("default", "persona.writeback.", 16))
         .await
         .unwrap();
     assert!(

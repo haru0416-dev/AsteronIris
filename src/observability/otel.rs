@@ -1,4 +1,4 @@
-use super::traits::{Observer, ObserverEvent, ObserverMetric};
+use super::traits::{AutonomyLifecycleSignal, Observer, ObserverEvent, ObserverMetric};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct OtelObserver {
@@ -32,6 +32,7 @@ impl OtelObserver {
             ObserverMetric::TokensUsed(_) => "tokens_used",
             ObserverMetric::ActiveSessions(_) => "active_sessions",
             ObserverMetric::QueueDepth(_) => "queue_depth",
+            ObserverMetric::AutonomyLifecycle(signal) => autonomy_signal_name(*signal),
         }
     }
 
@@ -41,6 +42,20 @@ impl OtelObserver {
             self.event_count.load(Ordering::Relaxed),
             self.metric_count.load(Ordering::Relaxed),
         )
+    }
+}
+
+fn autonomy_signal_name(signal: AutonomyLifecycleSignal) -> &'static str {
+    match signal {
+        AutonomyLifecycleSignal::Ingested => "autonomy_ingested",
+        AutonomyLifecycleSignal::Deduplicated => "autonomy_deduplicated",
+        AutonomyLifecycleSignal::Promoted => "autonomy_promoted",
+        AutonomyLifecycleSignal::ContradictionDetected => "autonomy_contradiction_detected",
+        AutonomyLifecycleSignal::IntentCreated => "autonomy_intent_created",
+        AutonomyLifecycleSignal::IntentPolicyAllowed => "autonomy_intent_policy_allowed",
+        AutonomyLifecycleSignal::IntentPolicyDenied => "autonomy_intent_policy_denied",
+        AutonomyLifecycleSignal::IntentDispatched => "autonomy_intent_dispatched",
+        AutonomyLifecycleSignal::IntentExecutionBlocked => "autonomy_intent_execution_blocked",
     }
 }
 
@@ -89,8 +104,11 @@ mod tests {
         obs.record_event(&ObserverEvent::HeartbeatTick);
         obs.record_metric(&ObserverMetric::RequestLatency(Duration::from_millis(5)));
         obs.record_metric(&ObserverMetric::TokensUsed(10));
+        obs.record_metric(&ObserverMetric::AutonomyLifecycle(
+            AutonomyLifecycleSignal::IntentPolicyDenied,
+        ));
         obs.flush();
 
-        assert_eq!(obs.snapshot_counts(), (2, 2));
+        assert_eq!(obs.snapshot_counts(), (2, 3));
     }
 }

@@ -1,7 +1,7 @@
 use super::embeddings::EmbeddingProvider;
 use super::traits::{
     BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEntry, MemoryEvent,
-    MemoryEventInput, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
+    MemoryEventInput, MemoryEventType, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
 };
 use super::vector;
 use async_trait::async_trait;
@@ -29,6 +29,9 @@ pub struct SqliteMemory {
 }
 
 impl SqliteMemory {
+    const TREND_TTL_DAYS: f64 = 30.0;
+    const TREND_DECAY_WINDOW_DAYS: f64 = 45.0;
+
     pub fn new(workspace_dir: &Path) -> anyhow::Result<Self> {
         Self::with_embedder(
             workspace_dir,
@@ -235,6 +238,12 @@ impl SqliteMemory {
             MemorySource::System => 2,
             MemorySource::Inferred => 1,
         }
+    }
+
+    fn contradiction_penalty(confidence: f64, importance: f64) -> f64 {
+        let confidence = confidence.clamp(0.0, 1.0);
+        let importance = importance.clamp(0.0, 1.0);
+        (0.12 + 0.10 * confidence + 0.08 * importance).clamp(0.0, 1.0)
     }
 
     /// Deterministic content hash for embedding cache.
@@ -715,6 +724,12 @@ impl SqliteMemory {
         let source = Self::source_to_str(&input.source);
         let privacy = Self::privacy_to_str(&input.privacy_level);
         let event_type = input.event_type.to_string();
+        let contradiction_penalty =
+            if matches!(input.event_type, MemoryEventType::ContradictionMarked) {
+                Self::contradiction_penalty(input.confidence, input.importance)
+            } else {
+                0.0
+            };
 
         conn.execute(
             "INSERT INTO memory_events (
@@ -735,6 +750,16 @@ impl SqliteMemory {
                 ingested_at,
             ],
         )?;
+
+        if contradiction_penalty > 0.0 {
+            let doc_id = format!("{}:{}", input.entity_id, input.slot_key);
+            conn.execute(
+                "UPDATE retrieval_docs
+                 SET contradiction_penalty = MIN(1.0, contradiction_penalty + ?2)
+                 WHERE doc_id = ?1",
+                params![doc_id, contradiction_penalty],
+            )?;
+        }
 
         let shadow_id = Uuid::new_v4().to_string();
         let shadow_category = if input.slot_key.starts_with("persona/") {
@@ -815,7 +840,7 @@ impl SqliteMemory {
                 "INSERT INTO retrieval_docs (
                     doc_id, entity_id, slot_key, text_body, recency_score,
                     importance, reliability, contradiction_penalty, visibility, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, 1.0, ?5, ?6, 0.0, ?7, ?8)
+                ) VALUES (?1, ?2, ?3, ?4, 1.0, ?5, ?6, ?7, ?8, ?9)
                 ON CONFLICT(doc_id) DO UPDATE SET
                     text_body = excluded.text_body,
                     recency_score = excluded.recency_score,
@@ -831,6 +856,7 @@ impl SqliteMemory {
                     input.value,
                     input.importance,
                     input.confidence,
+                    contradiction_penalty,
                     privacy,
                     input.occurred_at,
                 ],
@@ -853,6 +879,8 @@ impl SqliteMemory {
     }
 
     async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
+        query.enforce_policy()?;
+
         if query.query.trim().is_empty() || query.limit == 0 {
             return Ok(Vec::new());
         }
@@ -868,29 +896,57 @@ impl SqliteMemory {
         let mut stmt = conn.prepare(
             "SELECT entity_id, slot_key, text_body, reliability, importance, visibility, updated_at,
                     (0.35 * 1.0 + 0.25 * CASE WHEN text_body LIKE ?2 THEN 1.0 ELSE 0.0 END +
-                     0.20 * recency_score + 0.10 * importance + 0.10 * reliability - contradiction_penalty) AS final_score
+                     0.20 * (
+                        CASE
+                            WHEN slot_key LIKE 'trend.%'
+                              OR slot_key LIKE 'trend/%'
+                              OR slot_key LIKE '%.trend.%'
+                              OR slot_key LIKE '%/trend/%'
+                            THEN
+                                CASE
+                                    WHEN COALESCE(julianday('now') - julianday(updated_at), 0.0) <= ?3
+                                    THEN recency_score
+                                    ELSE MAX(
+                                        0.0,
+                                        recency_score - (
+                                            (COALESCE(julianday('now') - julianday(updated_at), 0.0) - ?3) / ?4
+                                        )
+                                    )
+                                END
+                            ELSE recency_score
+                        END
+                     ) + 0.10 * importance + 0.10 * reliability - contradiction_penalty) AS final_score
              FROM retrieval_docs
              WHERE entity_id = ?1
                AND visibility != 'secret'
                AND text_body LIKE ?2
-             ORDER BY final_score DESC, updated_at DESC
-             LIMIT ?3",
+             ORDER BY final_score DESC, updated_at DESC, doc_id ASC
+             LIMIT ?5",
         )?;
 
-        let rows = stmt.query_map(params![query.entity_id, like_query, limit_i64], |row| {
-            let visibility: String = row.get(5)?;
-            Ok(MemoryRecallItem {
-                entity_id: row.get(0)?,
-                slot_key: row.get(1)?,
-                value: row.get(2)?,
-                source: MemorySource::System,
-                confidence: row.get(3)?,
-                importance: row.get(4)?,
-                privacy_level: Self::str_to_privacy(&visibility),
-                score: row.get(7)?,
-                occurred_at: row.get(6)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            params![
+                query.entity_id,
+                like_query,
+                Self::TREND_TTL_DAYS,
+                Self::TREND_DECAY_WINDOW_DAYS,
+                limit_i64
+            ],
+            |row| {
+                let visibility: String = row.get(5)?;
+                Ok(MemoryRecallItem {
+                    entity_id: row.get(0)?,
+                    slot_key: row.get(1)?,
+                    value: row.get(2)?,
+                    source: MemorySource::System,
+                    confidence: row.get(3)?,
+                    importance: row.get(4)?,
+                    privacy_level: Self::str_to_privacy(&visibility),
+                    score: row.get(7)?,
+                    occurred_at: row.get(6)?,
+                })
+            },
+        )?;
 
         let mut out = Vec::new();
         for row in rows {
@@ -1087,6 +1143,8 @@ impl Memory for SqliteMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::{MemoryEventType, MemoryInferenceEvent};
+    use chrono::{Duration, Utc};
     use tempfile::TempDir;
 
     fn temp_sqlite() -> (TempDir, SqliteMemory) {
@@ -1902,5 +1960,209 @@ mod tests {
         let (_tmp, mem) = temp_sqlite();
         let all = mem.list_projection_entries(None).await.unwrap();
         assert!(all.is_empty());
+    }
+
+    #[tokio::test]
+    async fn memory_inferred_claim_persists() {
+        let (_tmp, mem) = temp_sqlite();
+
+        let events = mem
+            .append_inference_events(vec![MemoryInferenceEvent::inferred_claim(
+                "default",
+                "persona.preference.language",
+                "User prefers Rust",
+            )])
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type.to_string(), "inferred_claim");
+
+        let slot = mem
+            .resolve_slot("default", "persona.preference.language")
+            .await
+            .unwrap()
+            .expect("inferred slot should be available");
+        assert_eq!(slot.value, "User prefers Rust");
+        assert_eq!(slot.source, MemorySource::Inferred);
+    }
+
+    #[tokio::test]
+    async fn memory_contradiction_event_recorded() {
+        let (_tmp, mem) = temp_sqlite();
+
+        mem.append_event(
+            MemoryEventInput::new(
+                "default",
+                "profile.timezone",
+                MemoryEventType::FactAdded,
+                "UTC+9",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_confidence(0.95)
+            .with_importance(0.8),
+        )
+        .await
+        .unwrap();
+
+        let events = mem
+            .append_inference_events(vec![MemoryInferenceEvent::contradiction_marked(
+                "default",
+                "profile.timezone",
+                "Conflict detected: prior=UTC+9 incoming=UTC",
+            )])
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type.to_string(), "contradiction_marked");
+
+        let slot = mem
+            .resolve_slot("default", "profile.timezone")
+            .await
+            .unwrap()
+            .expect("existing explicit slot must remain");
+        assert_eq!(slot.value, "UTC+9");
+        assert_eq!(slot.source, MemorySource::ExplicitUser);
+
+        let conn = mem.conn.lock().unwrap();
+        let contradiction_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_events WHERE event_type = 'contradiction_marked'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(contradiction_count, 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_contradiction_penalty_affects_order() {
+        let (_tmp, mem) = temp_sqlite();
+        let newer = Utc::now();
+        let older = newer - Duration::days(2);
+
+        mem.append_event(
+            MemoryEventInput::new(
+                "default",
+                "profile.timezone",
+                MemoryEventType::FactAdded,
+                "Preferred timezone is UTC for meetings",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_confidence(0.9)
+            .with_importance(0.7)
+            .with_occurred_at(newer.to_rfc3339()),
+        )
+        .await
+        .unwrap();
+
+        mem.append_event(
+            MemoryEventInput::new(
+                "default",
+                "profile.alt_timezone",
+                MemoryEventType::FactAdded,
+                "Secondary timezone is UTC for travel",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_confidence(0.9)
+            .with_importance(0.7)
+            .with_occurred_at(older.to_rfc3339()),
+        )
+        .await
+        .unwrap();
+
+        mem.append_inference_event(
+            MemoryInferenceEvent::contradiction_marked(
+                "default",
+                "profile.timezone",
+                "Conflict detected: timezone is not stable",
+            )
+            .with_confidence(1.0)
+            .with_importance(1.0)
+            .with_occurred_at((newer + Duration::minutes(1)).to_rfc3339()),
+        )
+        .await
+        .unwrap();
+
+        let recalled = mem
+            .recall_scoped(RecallQuery::new("default", "timezone", 10))
+            .await
+            .unwrap();
+
+        let contradicted_index = recalled
+            .iter()
+            .position(|item| item.slot_key == "profile.timezone")
+            .expect("contradicted slot must be returned");
+        let clean_index = recalled
+            .iter()
+            .position(|item| item.slot_key == "profile.alt_timezone")
+            .expect("non-contradicted slot must be returned");
+
+        assert!(
+            clean_index < contradicted_index,
+            "contradicted slot should rank lower than clean slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_trend_ttl_decay_applied() {
+        let (_tmp, mem) = temp_sqlite();
+        let stale = Utc::now() - Duration::days(120);
+        let fresh = Utc::now();
+
+        mem.append_event(
+            MemoryEventInput::new(
+                "default",
+                "trend.productivity.focus",
+                MemoryEventType::FactAdded,
+                "Focus trend indicates latency spikes during afternoons",
+                MemorySource::System,
+                PrivacyLevel::Private,
+            )
+            .with_confidence(0.9)
+            .with_importance(0.7)
+            .with_occurred_at(stale.to_rfc3339()),
+        )
+        .await
+        .unwrap();
+
+        mem.append_event(
+            MemoryEventInput::new(
+                "default",
+                "profile.performance_note",
+                MemoryEventType::FactAdded,
+                "Current note reports latency spikes during afternoons",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_confidence(0.9)
+            .with_importance(0.7)
+            .with_occurred_at(fresh.to_rfc3339()),
+        )
+        .await
+        .unwrap();
+
+        let recalled = mem
+            .recall_scoped(RecallQuery::new("default", "latency", 10))
+            .await
+            .unwrap();
+
+        let stale_trend = recalled
+            .iter()
+            .find(|item| item.slot_key == "trend.productivity.focus")
+            .expect("stale trend slot must be returned");
+        let fresh_note = recalled
+            .iter()
+            .find(|item| item.slot_key == "profile.performance_note")
+            .expect("fresh note slot must be returned");
+
+        assert!(
+            stale_trend.score < fresh_note.score,
+            "stale trend score should be demoted below fresh note"
+        );
     }
 }

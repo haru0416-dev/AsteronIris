@@ -4,7 +4,7 @@ use asteroniris::runtime::{
 };
 
 #[test]
-fn cloudflare_runtime_contract_is_explicitly_unsupported_for_this_cycle() {
+fn runtime_cloudflare_explicitly_unsupported() {
     let error_message = match create_runtime(&RuntimeConfig {
         kind: "cloudflare".to_string(),
         enable_docker_runtime: false,
@@ -16,6 +16,7 @@ fn cloudflare_runtime_contract_is_explicitly_unsupported_for_this_cycle() {
     assert_eq!(error_message, CLOUDFLARE_UNSUPPORTED_MESSAGE);
     assert!(error_message.contains("explicitly unsupported"));
     assert!(error_message.contains("runtime.kind='native'"));
+    assert!(error_message.contains("no runtime fallback"));
 }
 
 #[test]
@@ -69,4 +70,25 @@ fn cloudflare_error_contract_stays_distinct_from_docker_gate_unknown_and_empty_k
     assert_ne!(docker_error, unknown_error);
     assert_ne!(docker_error, empty_error);
     assert_ne!(unknown_error, empty_error);
+}
+
+#[test]
+fn cloudflare_runtime_never_falls_back_to_native_or_docker_paths() {
+    for enable_docker_runtime in [false, true] {
+        let cloudflare_result = create_runtime(&RuntimeConfig {
+            kind: "cloudflare".to_string(),
+            enable_docker_runtime,
+        });
+
+        let error_message = match cloudflare_result {
+            Ok(runtime) => panic!(
+                "cloudflare runtime must not fallback to {} when enable_docker_runtime={enable_docker_runtime}",
+                runtime.name()
+            ),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(error_message, CLOUDFLARE_UNSUPPORTED_MESSAGE);
+        assert!(error_message.contains("no runtime fallback"));
+    }
 }

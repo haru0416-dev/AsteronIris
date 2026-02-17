@@ -1,4 +1,4 @@
-use crate::security::AutonomyLevel;
+use crate::security::{AutonomyLevel, ExternalActionExecution};
 use anyhow::{Context, Result};
 use directories::UserDirs;
 use serde::{Deserialize, Serialize};
@@ -392,17 +392,127 @@ impl Default for ObservabilityConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomyConfig {
     pub level: AutonomyLevel,
+    #[serde(default)]
+    pub external_action_execution: ExternalActionExecution,
+    #[serde(default)]
+    pub rollout: AutonomyRolloutConfig,
     pub workspace_only: bool,
     pub allowed_commands: Vec<String>,
     pub forbidden_paths: Vec<String>,
     pub max_actions_per_hour: u32,
     pub max_cost_per_day_cents: u32,
+
+    #[serde(default = "default_verify_repair_max_attempts")]
+    pub verify_repair_max_attempts: u32,
+    #[serde(default = "default_verify_repair_max_repair_depth")]
+    pub verify_repair_max_repair_depth: u32,
+
+    #[serde(default)]
+    pub temperature_bands: TemperatureBandsConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum AutonomyRolloutStage {
+    #[default]
+    Off,
+    AuditOnly,
+    Sanitize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomyRolloutConfig {
+    #[serde(default)]
+    pub stage: AutonomyRolloutStage,
+    #[serde(default)]
+    pub verify_repair_enabled: bool,
+    #[serde(default)]
+    pub contradiction_weighting_enabled: bool,
+    #[serde(default)]
+    pub intent_audit_anomaly_detection_enabled: bool,
+}
+
+impl Default for AutonomyRolloutConfig {
+    fn default() -> Self {
+        Self {
+            stage: AutonomyRolloutStage::Off,
+            verify_repair_enabled: false,
+            contradiction_weighting_enabled: false,
+            intent_audit_anomaly_detection_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemperatureBandsConfig {
+    #[serde(default = "default_temperature_band_read_only")]
+    pub read_only: TemperatureBand,
+    #[serde(default = "default_temperature_band_supervised")]
+    pub supervised: TemperatureBand,
+    #[serde(default = "default_temperature_band_full")]
+    pub full: TemperatureBand,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TemperatureBand {
+    pub min: f64,
+    pub max: f64,
+}
+
+fn default_temperature_band_read_only() -> TemperatureBand {
+    TemperatureBand { min: 0.0, max: 0.6 }
+}
+
+fn default_temperature_band_supervised() -> TemperatureBand {
+    TemperatureBand { min: 0.2, max: 1.0 }
+}
+
+fn default_temperature_band_full() -> TemperatureBand {
+    TemperatureBand { min: 0.2, max: 1.2 }
+}
+
+fn default_verify_repair_max_attempts() -> u32 {
+    3
+}
+
+fn default_verify_repair_max_repair_depth() -> u32 {
+    2
+}
+
+impl Default for TemperatureBandsConfig {
+    fn default() -> Self {
+        Self {
+            read_only: default_temperature_band_read_only(),
+            supervised: default_temperature_band_supervised(),
+            full: default_temperature_band_full(),
+        }
+    }
+}
+
+impl TemperatureBand {
+    fn validate(self, label: &str) -> Result<()> {
+        if self.min.is_nan() || self.max.is_nan() {
+            anyhow::bail!("autonomy.temperature_bands.{label} min/max must not be NaN");
+        }
+        if !(0.0..=2.0).contains(&self.min) {
+            anyhow::bail!("autonomy.temperature_bands.{label} min must be in [0.0, 2.0]");
+        }
+        if !(0.0..=2.0).contains(&self.max) {
+            anyhow::bail!("autonomy.temperature_bands.{label} max must be in [0.0, 2.0]");
+        }
+        if self.min > self.max {
+            anyhow::bail!("autonomy.temperature_bands.{label} min must be <= max");
+        }
+        Ok(())
+    }
 }
 
 impl Default for AutonomyConfig {
     fn default() -> Self {
         Self {
             level: AutonomyLevel::Supervised,
+            external_action_execution: ExternalActionExecution::Disabled,
+            rollout: AutonomyRolloutConfig::default(),
             workspace_only: true,
             allowed_commands: vec![
                 "git".into(),
@@ -440,7 +550,44 @@ impl Default for AutonomyConfig {
             ],
             max_actions_per_hour: 20,
             max_cost_per_day_cents: 500,
+            verify_repair_max_attempts: default_verify_repair_max_attempts(),
+            verify_repair_max_repair_depth: default_verify_repair_max_repair_depth(),
+            temperature_bands: TemperatureBandsConfig::default(),
         }
+    }
+}
+
+impl AutonomyConfig {
+    pub fn selected_temperature_band(&self) -> TemperatureBand {
+        match self.level {
+            AutonomyLevel::ReadOnly => self.temperature_bands.read_only,
+            AutonomyLevel::Supervised => self.temperature_bands.supervised,
+            AutonomyLevel::Full => self.temperature_bands.full,
+        }
+    }
+
+    pub fn clamp_temperature(&self, temperature: f64) -> f64 {
+        let band = self.selected_temperature_band();
+        temperature.clamp(band.min, band.max)
+    }
+
+    pub fn validate_temperature_bands(&self) -> Result<()> {
+        self.temperature_bands.read_only.validate("read_only")?;
+        self.temperature_bands.supervised.validate("supervised")?;
+        self.temperature_bands.full.validate("full")?;
+        Ok(())
+    }
+
+    pub fn validate_verify_repair_caps(&self) -> Result<()> {
+        if self.verify_repair_max_attempts == 0 {
+            anyhow::bail!("autonomy.verify_repair_max_attempts must be >= 1");
+        }
+        if self.verify_repair_max_repair_depth >= self.verify_repair_max_attempts {
+            anyhow::bail!(
+                "autonomy.verify_repair_max_repair_depth must be < autonomy.verify_repair_max_attempts"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -450,7 +597,7 @@ impl Default for AutonomyConfig {
 pub struct RuntimeConfig {
     /// Runtime kind (currently supported: "native", "docker").
     ///
-    /// Reserved value (not implemented yet): "cloudflare".
+    /// Reserved value for this phase (unsupported): "cloudflare".
     pub kind: String,
     #[serde(default)]
     pub enable_docker_runtime: bool,
@@ -769,6 +916,16 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn validate_temperature_bands(&self) -> Result<()> {
+        self.autonomy.validate_temperature_bands()
+    }
+
+    pub fn validate_autonomy_controls(&self) -> Result<()> {
+        self.validate_temperature_bands()?;
+        self.autonomy.validate_verify_repair_caps()?;
+        Ok(())
+    }
+
     pub fn load_or_init() -> Result<Self> {
         let home = UserDirs::new()
             .map(|u| u.home_dir().to_path_buf())
@@ -791,6 +948,7 @@ impl Config {
             // Set computed paths that are skipped during serialization
             config.config_path.clone_from(&config_path);
             config.workspace_dir = asteroniris_dir.join("workspace");
+            config.validate_autonomy_controls()?;
             Ok(config)
         } else {
             let config = Self {
@@ -798,6 +956,7 @@ impl Config {
                 workspace_dir: asteroniris_dir.join("workspace"),
                 ..Self::default()
             };
+            config.validate_autonomy_controls()?;
             config.save()?;
             Ok(config)
         }
@@ -906,12 +1065,18 @@ mod tests {
     fn autonomy_config_default() {
         let a = AutonomyConfig::default();
         assert_eq!(a.level, AutonomyLevel::Supervised);
+        assert_eq!(a.rollout.stage, AutonomyRolloutStage::Off);
+        assert!(!a.rollout.verify_repair_enabled);
+        assert!(!a.rollout.contradiction_weighting_enabled);
+        assert!(!a.rollout.intent_audit_anomaly_detection_enabled);
         assert!(a.workspace_only);
         assert!(a.allowed_commands.contains(&"git".to_string()));
         assert!(a.allowed_commands.contains(&"cargo".to_string()));
         assert!(a.forbidden_paths.contains(&"/etc".to_string()));
         assert_eq!(a.max_actions_per_hour, 20);
         assert_eq!(a.max_cost_per_day_cents, 500);
+        assert_eq!(a.verify_repair_max_attempts, 3);
+        assert_eq!(a.verify_repair_max_repair_depth, 2);
     }
 
     #[test]
@@ -975,11 +1140,21 @@ mod tests {
             },
             autonomy: AutonomyConfig {
                 level: AutonomyLevel::Full,
+                external_action_execution: ExternalActionExecution::Enabled,
+                rollout: AutonomyRolloutConfig {
+                    stage: AutonomyRolloutStage::Sanitize,
+                    verify_repair_enabled: true,
+                    contradiction_weighting_enabled: true,
+                    intent_audit_anomaly_detection_enabled: true,
+                },
                 workspace_only: false,
                 allowed_commands: vec!["docker".into()],
                 forbidden_paths: vec!["/secret".into()],
                 max_actions_per_hour: 50,
                 max_cost_per_day_cents: 1000,
+                verify_repair_max_attempts: 5,
+                verify_repair_max_repair_depth: 3,
+                temperature_bands: TemperatureBandsConfig::default(),
             },
             runtime: RuntimeConfig {
                 kind: "docker".into(),
@@ -1024,6 +1199,22 @@ mod tests {
         assert!((parsed.default_temperature - config.default_temperature).abs() < f64::EPSILON);
         assert_eq!(parsed.observability.backend, "log");
         assert_eq!(parsed.autonomy.level, AutonomyLevel::Full);
+        assert_eq!(
+            parsed.autonomy.external_action_execution,
+            ExternalActionExecution::Enabled
+        );
+        assert_eq!(
+            parsed.autonomy.rollout.stage,
+            AutonomyRolloutStage::Sanitize
+        );
+        assert!(parsed.autonomy.rollout.verify_repair_enabled);
+        assert!(parsed.autonomy.rollout.contradiction_weighting_enabled);
+        assert!(
+            parsed
+                .autonomy
+                .rollout
+                .intent_audit_anomaly_detection_enabled
+        );
         assert!(!parsed.autonomy.workspace_only);
         assert_eq!(parsed.runtime.kind, "docker");
         assert!(parsed.runtime.enable_docker_runtime);
@@ -1048,6 +1239,19 @@ default_temperature = 0.7
         assert!(parsed.default_provider.is_none());
         assert_eq!(parsed.observability.backend, "none");
         assert_eq!(parsed.autonomy.level, AutonomyLevel::Supervised);
+        assert_eq!(
+            parsed.autonomy.external_action_execution,
+            ExternalActionExecution::Disabled
+        );
+        assert_eq!(parsed.autonomy.rollout.stage, AutonomyRolloutStage::Off);
+        assert!(!parsed.autonomy.rollout.verify_repair_enabled);
+        assert!(!parsed.autonomy.rollout.contradiction_weighting_enabled);
+        assert!(
+            !parsed
+                .autonomy
+                .rollout
+                .intent_audit_anomaly_detection_enabled
+        );
         assert_eq!(parsed.runtime.kind, "native");
         assert!(!parsed.heartbeat.enabled);
         assert!(parsed.channels_config.cli);
@@ -1858,6 +2062,86 @@ default_temperature = 0.7
         unsafe {
             std::env::remove_var("ASTERONIRIS_TEMPERATURE");
         }
+    }
+
+    #[test]
+    fn config_temperature_band_validation() {
+        let config = Config::default();
+        assert!(config.validate_temperature_bands().is_ok());
+
+        let mut invalid = Config::default();
+        invalid.autonomy.temperature_bands.full.min = 1.3;
+        invalid.autonomy.temperature_bands.full.max = 1.2;
+
+        let err = invalid.validate_temperature_bands().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("autonomy.temperature_bands.full min must be <= max"));
+    }
+
+    #[test]
+    fn config_verify_repair_caps_validation() {
+        let config = Config::default();
+        assert!(config.autonomy.validate_verify_repair_caps().is_ok());
+
+        let mut invalid_attempts = Config::default();
+        invalid_attempts.autonomy.verify_repair_max_attempts = 0;
+        let err = invalid_attempts
+            .autonomy
+            .validate_verify_repair_caps()
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("autonomy.verify_repair_max_attempts must be >= 1"));
+
+        let mut invalid_depth = Config::default();
+        invalid_depth.autonomy.verify_repair_max_attempts = 2;
+        invalid_depth.autonomy.verify_repair_max_repair_depth = 2;
+        let err = invalid_depth
+            .autonomy
+            .validate_verify_repair_caps()
+            .unwrap_err();
+        assert!(err.to_string().contains(
+            "autonomy.verify_repair_max_repair_depth must be < autonomy.verify_repair_max_attempts"
+        ));
+    }
+
+    #[test]
+    fn autonomy_rollout_stage_toml_deserialization() {
+        let toml = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+
+[autonomy]
+level = "supervised"
+external_action_execution = "disabled"
+workspace_only = true
+allowed_commands = ["cargo"]
+forbidden_paths = ["/etc"]
+max_actions_per_hour = 20
+max_cost_per_day_cents = 500
+
+[autonomy.rollout]
+stage = "audit-only"
+verify_repair_enabled = false
+contradiction_weighting_enabled = false
+intent_audit_anomaly_detection_enabled = true
+"#;
+
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            parsed.autonomy.rollout.stage,
+            AutonomyRolloutStage::AuditOnly
+        );
+        assert!(!parsed.autonomy.rollout.verify_repair_enabled);
+        assert!(!parsed.autonomy.rollout.contradiction_weighting_enabled);
+        assert!(
+            parsed
+                .autonomy
+                .rollout
+                .intent_audit_anomaly_detection_enabled
+        );
     }
 
     #[test]

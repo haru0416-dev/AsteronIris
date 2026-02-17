@@ -60,7 +60,15 @@ impl Tool for ShellTool {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Command not allowed by security policy: {command}")),
+                error: Some("blocked by security policy: command not allowed".to_string()),
+            });
+        }
+
+        if let Err(policy_error) = self.security.consume_action_and_cost(0) {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(policy_error.to_string()),
             });
         }
 
@@ -221,6 +229,15 @@ mod tests {
         })
     }
 
+    fn test_security_with_action_limit(limit: u32) -> Arc<SecurityPolicy> {
+        Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: std::env::temp_dir(),
+            max_actions_per_hour: limit,
+            ..SecurityPolicy::default()
+        })
+    }
+
     /// RAII guard that restores an environment variable to its original state on drop,
     /// ensuring cleanup even if the test panics.
     struct EnvGuard {
@@ -292,5 +309,19 @@ mod tests {
             !result.output.trim().is_empty(),
             "PATH should be available in shell"
         );
+    }
+
+    #[tokio::test]
+    async fn shell_policy_blocks_when_action_limit_is_exhausted() {
+        let tool = ShellTool::new(test_security_with_action_limit(0));
+        let result = tool
+            .execute(json!({"command": "echo should-not-run"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .is_some_and(|msg| msg.contains("action limit")));
     }
 }

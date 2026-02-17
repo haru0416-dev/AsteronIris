@@ -329,7 +329,62 @@ async fn main() -> Result<()> {
             );
             println!("📊 Observability:  {}", config.observability.backend);
             println!("🛡️  Autonomy:      {:?}", config.autonomy.level);
+            println!(
+                "   External actions: {}",
+                match config.autonomy.external_action_execution {
+                    crate::security::ExternalActionExecution::Disabled => "disabled",
+                    crate::security::ExternalActionExecution::Enabled => "enabled",
+                }
+            );
+            let temperature_band = config.autonomy.selected_temperature_band();
+            println!(
+                "   Temperature band: [{:.2}, {:.2}]",
+                temperature_band.min, temperature_band.max
+            );
+            println!(
+                "   Rollout stage: {}",
+                match config.autonomy.rollout.stage {
+                    crate::config::schema::AutonomyRolloutStage::Off => "off",
+                    crate::config::schema::AutonomyRolloutStage::AuditOnly => "audit-only",
+                    crate::config::schema::AutonomyRolloutStage::Sanitize => "sanitize",
+                }
+            );
+            println!(
+                "   Rollout gates: verify_repair={}, contradiction_weighting={}, intent_audit_anomaly_detection={}",
+                if config.autonomy.rollout.verify_repair_enabled {
+                    "on"
+                } else {
+                    "off"
+                },
+                if config.autonomy.rollout.contradiction_weighting_enabled {
+                    "on"
+                } else {
+                    "off"
+                },
+                if config
+                    .autonomy
+                    .rollout
+                    .intent_audit_anomaly_detection_enabled
+                {
+                    "on"
+                } else {
+                    "off"
+                }
+            );
+            println!(
+                "   Autonomy lifecycle metrics: {}",
+                if observability_backend_supports_autonomy_metrics(&config.observability.backend) {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
             println!("⚙️  Runtime:       {}", config.runtime.kind);
+            if let Some(contract_note) =
+                crate::runtime::runtime_kind_contract_note(config.runtime.kind.as_str())
+            {
+                println!("   Runtime contract: {contract_note}");
+            }
             println!(
                 "💓 Heartbeat:      {}",
                 if config.heartbeat.enabled {
@@ -401,6 +456,10 @@ async fn main() -> Result<()> {
             skills::handle_command(skill_command, &config.workspace_dir)
         }
     }
+}
+
+fn observability_backend_supports_autonomy_metrics(backend: &str) -> bool {
+    matches!(backend, "log" | "prometheus" | "otel")
 }
 
 #[cfg(test)]

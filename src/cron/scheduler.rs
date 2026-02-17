@@ -138,6 +138,25 @@ async fn run_job_command(
     security: &SecurityPolicy,
     job: &CronJob,
 ) -> (bool, String) {
+    match job.job_kind {
+        crate::cron::CronJobKind::User => run_user_job_command(config, security, job).await,
+        crate::cron::CronJobKind::Agent => run_agent_job_command(security),
+    }
+}
+
+pub async fn execute_job_once_for_integration(
+    config: &Config,
+    security: &SecurityPolicy,
+    job: &CronJob,
+) -> (bool, String) {
+    run_job_command(config, security, job).await
+}
+
+async fn run_user_job_command(
+    config: &Config,
+    security: &SecurityPolicy,
+    job: &CronJob,
+) -> (bool, String) {
     if !security.is_command_allowed(&job.command) {
         return (
             false,
@@ -153,6 +172,10 @@ async fn run_job_command(
             false,
             format!("blocked by security policy: forbidden path argument: {path}"),
         );
+    }
+
+    if let Err(policy_error) = security.consume_action_and_cost(0) {
+        return (false, policy_error.to_string());
     }
 
     let output = Command::new("sh")
@@ -178,11 +201,27 @@ async fn run_job_command(
     }
 }
 
+fn run_agent_job_command(security: &SecurityPolicy) -> (bool, String) {
+    if let Err(policy_error) = security.consume_action_and_cost(0) {
+        return (false, policy_error.to_string());
+    }
+
+    (
+        false,
+        "blocked by security policy: agent jobs cannot execute direct shell path".to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::cron::{
+        add_job_with_metadata, due_jobs, list_jobs, CronJobKind, CronJobMetadata, CronJobOrigin,
+        AGENT_PENDING_CAP,
+    };
     use crate::security::SecurityPolicy;
+    use chrono::Duration as ChronoDuration;
     use tempfile::TempDir;
 
     fn test_config(tmp: &TempDir) -> Config {
@@ -203,6 +242,19 @@ mod tests {
             next_run: Utc::now(),
             last_run: None,
             last_status: None,
+            job_kind: CronJobKind::User,
+            origin: CronJobOrigin::User,
+            expires_at: None,
+            max_attempts: 1,
+        }
+    }
+
+    fn agent_metadata(expires_at: Option<chrono::DateTime<Utc>>) -> CronJobMetadata {
+        CronJobMetadata {
+            job_kind: CronJobKind::Agent,
+            origin: CronJobOrigin::Agent,
+            expires_at,
+            max_attempts: 3,
         }
     }
 
@@ -295,5 +347,107 @@ mod tests {
         let (success, output) = execute_job_with_retry(&config, &security, &job).await;
         assert!(!success);
         assert!(output.contains("always_missing_for_retry_test"));
+    }
+
+    #[tokio::test]
+    async fn run_job_command_policy_blocks_when_action_limit_is_exhausted() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp);
+        config.autonomy.max_actions_per_hour = 0;
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+        let job = test_job("echo should-not-run");
+
+        let (success, output) = run_job_command(&config, &security, &job).await;
+        assert!(!success);
+        assert!(output.contains("action limit"));
+    }
+
+    #[tokio::test]
+    async fn scheduler_agent_jobs_never_direct_shell() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp);
+        config.autonomy.allowed_commands = vec!["sh".into()];
+        let marker_file = "agent-shell-marker.txt";
+        let marker_path = config.workspace_dir.join(marker_file);
+        let command = format!("sh -c 'touch {marker_file}'");
+        let mut job = test_job(&command);
+        job.job_kind = CronJobKind::Agent;
+        job.origin = CronJobOrigin::Agent;
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let (success, output) = run_job_command(&config, &security, &job).await;
+        assert!(!success);
+        assert_eq!(
+            output,
+            "blocked by security policy: agent jobs cannot execute direct shell path"
+        );
+        assert!(!marker_path.exists());
+    }
+
+    #[tokio::test]
+    async fn scheduler_user_jobs_still_execute_expected_path() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp);
+        config.autonomy.allowed_commands = vec!["sh".into()];
+        let marker_file = "user-shell-marker.txt";
+        let marker_path = config.workspace_dir.join(marker_file);
+        let command = format!("sh -c 'touch {marker_file}'");
+        let job = test_job(&command);
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let (success, output) = run_job_command(&config, &security, &job).await;
+        assert!(success, "{output}");
+        assert!(output.contains("status=exit status: 0"));
+        assert!(marker_path.exists());
+    }
+
+    #[test]
+    fn scheduler_rejects_agent_queue_overflow() {
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp);
+        let expires_at = Some(Utc::now() + ChronoDuration::hours(1));
+
+        for idx in 0..AGENT_PENDING_CAP {
+            let command = format!("echo queue-{idx}");
+            add_job_with_metadata(
+                &config,
+                "*/5 * * * *",
+                &command,
+                &agent_metadata(expires_at),
+            )
+            .unwrap();
+        }
+
+        let err = add_job_with_metadata(
+            &config,
+            "*/5 * * * *",
+            "echo overflow",
+            &agent_metadata(expires_at),
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("agent-origin queue cap reached (5 pending jobs)"));
+    }
+
+    #[test]
+    fn scheduler_expires_agent_jobs() {
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp);
+        let expired_at = Some(Utc::now() - ChronoDuration::minutes(1));
+
+        let _job = add_job_with_metadata(
+            &config,
+            "*/5 * * * *",
+            "echo expired",
+            &agent_metadata(expired_at),
+        )
+        .unwrap();
+
+        let jobs = due_jobs(&config, Utc::now()).unwrap();
+        assert!(jobs.is_empty());
+
+        let remaining = list_jobs(&config).unwrap();
+        assert!(remaining.is_empty());
     }
 }

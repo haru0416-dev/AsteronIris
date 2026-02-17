@@ -60,16 +60,12 @@ async fn get_value(mem: &impl Memory, key: &str) -> Option<String> {
 }
 
 async fn recall(mem: &impl Memory, query: &str, limit: usize) -> Vec<(String, String, f64)> {
-    mem.recall_scoped(RecallQuery {
-        entity_id: "default".to_string(),
-        query: query.to_string(),
-        limit,
-    })
-    .await
-    .unwrap()
-    .into_iter()
-    .map(|item| (item.slot_key, item.value, item.score))
-    .collect()
+    mem.recall_scoped(RecallQuery::new("default", query, limit))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|item| (item.slot_key, item.value, item.score))
+        .collect()
 }
 
 async fn forget(mem: &impl Memory, key: &str) -> bool {

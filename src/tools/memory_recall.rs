@@ -64,11 +64,7 @@ impl Tool for MemoryRecallTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'entity_id' parameter"))?;
 
-        let request = RecallQuery {
-            entity_id: entity_id.to_string(),
-            query: query.to_string(),
-            limit,
-        };
+        let request = RecallQuery::new(entity_id, query, limit);
 
         match self.memory.recall_scoped(request).await {
             Ok(entries) if entries.is_empty() => Ok(ToolResult {
