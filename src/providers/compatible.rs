@@ -4,6 +4,7 @@
 
 use crate::providers::traits::Provider;
 use anyhow::Context;
+use super::sanitize_api_error;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -210,7 +211,8 @@ impl OpenAiCompatibleProvider {
 
         if !response.status().is_success() {
             let error = response.text().await?;
-            anyhow::bail!("{} Responses API error: {error}", self.name);
+            let sanitized = sanitize_api_error(&error);
+            anyhow::bail!("{} Responses API error: {sanitized}", self.name);
         }
 
         let responses: ResponsesResponse = response
@@ -270,6 +272,7 @@ impl Provider for OpenAiCompatibleProvider {
         if !response.status().is_success() {
             let status = response.status();
             let error = response.text().await?;
+            let sanitized_error = sanitize_api_error(&error);
 
             if status == reqwest::StatusCode::NOT_FOUND {
                 return self
@@ -277,13 +280,13 @@ impl Provider for OpenAiCompatibleProvider {
                     .await
                     .map_err(|responses_err| {
                         anyhow::anyhow!(
-                            "{} API error: {error} (chat completions unavailable; responses fallback failed: {responses_err})",
+                            "{} API error: {sanitized_error} (chat completions unavailable; responses fallback failed: {responses_err})",
                             self.name
                         )
                     });
             }
 
-            anyhow::bail!("{} API error: {error}", self.name);
+            anyhow::bail!("{} API error: {sanitized_error}", self.name);
         }
 
         let chat_response: ChatResponse = response
@@ -303,6 +306,8 @@ impl Provider for OpenAiCompatibleProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn make_provider(name: &str, url: &str, key: Option<&str>) -> OpenAiCompatibleProvider {
         OpenAiCompatibleProvider::new(name, url, key, AuthStyle::Bearer)
@@ -420,6 +425,30 @@ mod tests {
                 p.name
             );
         }
+    }
+
+    #[tokio::test]
+    async fn chat_error_messages_redact_sensitive_fields() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(401).set_body_string(
+                "{\"error\":\"invalid credentials api_key=raw-secret-123 access_token=eyJhbGciOiJIUzI1Ni\"}",
+            ))
+            .mount(&server)
+            .await;
+
+        let provider = make_provider("MockProvider", &server.uri(), Some("key"));
+        let err = provider
+            .chat_with_system(None, "hello", "test-model", 0.1)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(!err.contains("raw-secret-123"));
+        assert!(!err.contains("eyJhbGciOiJIUzI1Ni"));
+        assert!(err.contains("[REDACTED]"));
     }
 
     #[test]

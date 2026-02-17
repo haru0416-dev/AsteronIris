@@ -15,7 +15,7 @@ use reliable::ReliableProvider;
 const MAX_API_ERROR_CHARS: usize = 200;
 
 fn is_secret_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | '+' | '/' | '=')
 }
 
 fn token_end(input: &str, from: usize) -> usize {
@@ -30,34 +30,73 @@ fn token_end(input: &str, from: usize) -> usize {
     end
 }
 
-/// Scrub known secret-like token prefixes from provider error strings.
+fn scrub_after_marker(scrubbed: &mut String, marker: &str) {
+    let mut search_from = 0;
+    loop {
+        let Some(rel) = scrubbed[search_from..].find(marker) else {
+            break;
+        };
+
+        let start = search_from + rel;
+        let content_start = start + marker.len();
+        let end = token_end(scrubbed, content_start);
+
+        // Skip bare markers without a token value.
+        if end == content_start {
+            search_from = content_start;
+            continue;
+        }
+
+        scrubbed.replace_range(start..end, "[REDACTED]");
+        search_from = start + "[REDACTED]".len();
+    }
+}
+
+/// Scrub known secret-like token patterns from provider error strings.
 ///
-/// Redacts tokens with prefixes like `sk-`, `xoxb-`, and `xoxp-`.
+/// Redacts provider keys and tokens in common forms:
+/// - Prefix tokens: `sk-`, `xoxb-`, `ghp_`, etc.
+/// - Header/query/json markers: `Authorization: Bearer ...`, `api_key=...`, `"access_token":"..."`
 pub fn scrub_secret_patterns(input: &str) -> String {
-    const PREFIXES: [&str; 3] = ["sk-", "xoxb-", "xoxp-"];
+    const PREFIX_PATTERNS: [&str; 12] = [
+        "sk-",
+        "xoxb-",
+        "xoxp-",
+        "xoxs-",
+        "xoxa-",
+        "xapp-",
+        "ghp_",
+        "github_pat_",
+        "hf_",
+        "glpat-",
+        "ya29.",
+        "AIza",
+    ];
+
+    const MARKER_PATTERNS: [&str; 13] = [
+        "Authorization: Bearer ",
+        "authorization: bearer ",
+        "\"authorization\":\"Bearer ",
+        "\"authorization\":\"bearer ",
+        "api_key=",
+        "access_token=",
+        "refresh_token=",
+        "id_token=",
+        "\"api_key\":\"",
+        "\"access_token\":\"",
+        "\"refresh_token\":\"",
+        "\"id_token\":\"",
+        "\"token\":\"",
+    ];
 
     let mut scrubbed = input.to_string();
 
-    for prefix in PREFIXES {
-        let mut search_from = 0;
-        loop {
-            let Some(rel) = scrubbed[search_from..].find(prefix) else {
-                break;
-            };
+    for pattern in PREFIX_PATTERNS {
+        scrub_after_marker(&mut scrubbed, pattern);
+    }
 
-            let start = search_from + rel;
-            let content_start = start + prefix.len();
-            let end = token_end(&scrubbed, content_start);
-
-            // Bare prefixes like "sk-" should not stop future scans.
-            if end == content_start {
-                search_from = content_start;
-                continue;
-            }
-
-            scrubbed.replace_range(start..end, "[REDACTED]");
-            search_from = start + "[REDACTED]".len();
-        }
+    for marker in MARKER_PATTERNS {
+        scrub_after_marker(&mut scrubbed, marker);
     }
 
     scrubbed
@@ -665,6 +704,20 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_scrubs_additional_token_prefixes() {
+        let input = "tokens ghp_abc123 github_pat_foo glpat-xyz hf_secret xoxs-999 ya29.token AIzaSySecret";
+        let out = sanitize_api_error(input);
+        assert!(!out.contains("ghp_abc123"));
+        assert!(!out.contains("github_pat_foo"));
+        assert!(!out.contains("glpat-xyz"));
+        assert!(!out.contains("hf_secret"));
+        assert!(!out.contains("xoxs-999"));
+        assert!(!out.contains("ya29.token"));
+        assert!(!out.contains("AIzaSySecret"));
+        assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
     fn sanitize_short_prefix_then_real_key() {
         let input = "error with sk- prefix and key sk-1234567890";
         let result = sanitize_api_error(input);
@@ -700,6 +753,31 @@ mod tests {
         let result = sanitize_api_error(input);
         assert!(!result.contains("xoxb-abc123"));
         assert!(result.contains("};"));
+    }
+
+    #[test]
+    fn sanitize_scrubs_bearer_authorization_headers() {
+        let input = "upstream said Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        let result = sanitize_api_error(input);
+        assert!(!result.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
+        assert!(result.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn sanitize_scrubs_query_and_json_token_fields() {
+        let input = "url=/callback?access_token=abc123XYZ&state=ok body={\"api_key\":\"my-secret-key\",\"refresh_token\":\"rrr123\"}";
+        let result = sanitize_api_error(input);
+        assert!(!result.contains("access_token=abc123XYZ"));
+        assert!(!result.contains("\"api_key\":\"my-secret-key\""));
+        assert!(!result.contains("\"refresh_token\":\"rrr123\""));
+        assert!(result.contains("state=ok"));
+    }
+
+    #[test]
+    fn sanitize_keeps_non_secret_key_value_pairs() {
+        let input = "error_code=429 retry_after=30 reason=rate_limit";
+        let result = sanitize_api_error(input);
+        assert_eq!(result, input);
     }
 
     #[test]
