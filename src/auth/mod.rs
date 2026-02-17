@@ -1,9 +1,11 @@
 use crate::config::{Config, MemoryConfig};
 use crate::security::SecretStore;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use dialoguer::Password;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 const AUTH_PROFILES_FILENAME: &str = "auth-profiles.json";
@@ -147,25 +149,13 @@ impl AuthProfileStore {
 
         Ok(())
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct AuthBroker {
-    profile_store: AuthProfileStore,
-    legacy_api_key: Option<String>,
-}
-
-impl AuthBroker {
-    pub fn load_or_init(config: &Config) -> Result<Self> {
+    pub fn load_or_init_for_config(config: &Config) -> Result<Self> {
         let auth_profiles_path = auth_profiles_path(config);
-        let secret_root = config
-            .config_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."));
-        let store = SecretStore::new(secret_root, config.secrets.encrypt);
+        let store = auth_secret_store(config);
 
         let (mut profile_store, mut needs_persist) =
-            AuthProfileStore::load_from_disk(&auth_profiles_path, &store, config.secrets.encrypt)?;
+            Self::load_from_disk(&auth_profiles_path, &store, config.secrets.encrypt)?;
 
         if let (Some(default_provider), Some(legacy_api_key)) = (
             config.default_provider.as_deref(),
@@ -179,6 +169,86 @@ impl AuthBroker {
         if needs_persist {
             profile_store.save_to_disk(&auth_profiles_path, &store, config.secrets.encrypt)?;
         }
+
+        Ok(profile_store)
+    }
+
+    pub fn save_for_config(&self, config: &Config) -> Result<()> {
+        let auth_profiles_path = auth_profiles_path(config);
+        let store = auth_secret_store(config);
+        self.save_to_disk(&auth_profiles_path, &store, config.secrets.encrypt)
+    }
+
+    fn upsert_profile(&mut self, profile: AuthProfile, set_default: bool) -> Result<bool> {
+        let profile_id = profile.id.trim();
+        if profile_id.is_empty() {
+            bail!("Profile id cannot be empty");
+        }
+        if !is_valid_profile_id(profile_id) {
+            bail!("Invalid profile id '{profile_id}'. Use letters, numbers, '-', '_', or '.'");
+        }
+
+        let canonical_provider = canonical_provider_name(&profile.provider);
+        if canonical_provider.is_empty() {
+            bail!("Provider cannot be empty");
+        }
+
+        let normalized_label = profile.label.and_then(|label| {
+            let trimmed = label.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+
+        let normalized_api_key = profile.api_key.and_then(|key| {
+            let trimmed = key.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+
+        if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == profile_id) {
+            if canonical_provider_name(&existing.provider) != canonical_provider {
+                bail!(
+                    "Profile id '{profile_id}' already belongs to provider '{}'",
+                    existing.provider
+                );
+            }
+
+            existing.provider.clone_from(&canonical_provider);
+            existing.label = normalized_label;
+            existing.api_key = normalized_api_key;
+            existing.disabled = false;
+
+            if set_default {
+                self.defaults
+                    .insert(canonical_provider, profile_id.to_string());
+            }
+            return Ok(false);
+        }
+
+        self.profiles.push(AuthProfile {
+            id: profile_id.to_string(),
+            provider: canonical_provider.clone(),
+            label: normalized_label,
+            api_key: normalized_api_key,
+            disabled: false,
+        });
+
+        if set_default {
+            self.defaults
+                .insert(canonical_provider, profile_id.to_string());
+        }
+
+        Ok(true)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthBroker {
+    profile_store: AuthProfileStore,
+    legacy_api_key: Option<String>,
+}
+
+impl AuthBroker {
+    pub fn load_or_init(config: &Config) -> Result<Self> {
+        let profile_store = AuthProfileStore::load_or_init_for_config(config)?;
 
         Ok(Self {
             profile_store,
@@ -205,6 +275,287 @@ impl AuthBroker {
 
         None
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub fn handle_command(command: crate::AuthCommands, config: &Config) -> Result<()> {
+    match command {
+        crate::AuthCommands::List => handle_list(config),
+        crate::AuthCommands::Status { provider } => handle_status(config, provider.as_deref()),
+        crate::AuthCommands::Login {
+            provider,
+            profile,
+            label,
+            api_key,
+            no_default,
+        } => handle_login(
+            config,
+            provider.as_str(),
+            profile.as_deref(),
+            label,
+            api_key,
+            no_default,
+        ),
+    }
+}
+
+fn handle_list(config: &Config) -> Result<()> {
+    let store = AuthProfileStore::load_or_init_for_config(config)?;
+    let path = auth_profiles_path(config);
+
+    println!("🔐 Auth profiles");
+    println!("Store: {}", path.display());
+    println!(
+        "Encryption: {}",
+        if config.secrets.encrypt {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+
+    if store.profiles.is_empty() {
+        println!();
+        println!("No auth profiles yet.");
+        println!(
+            "Create one with: asteroniris auth login --provider {}",
+            config.default_provider.as_deref().unwrap_or("openrouter")
+        );
+        return Ok(());
+    }
+
+    let mut profiles: Vec<&AuthProfile> = store.profiles.iter().collect();
+    profiles.sort_by(|a, b| {
+        canonical_provider_name(&a.provider)
+            .cmp(&canonical_provider_name(&b.provider))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    println!();
+    for profile in profiles {
+        let provider = canonical_provider_name(&profile.provider);
+        let is_default = store
+            .defaults
+            .get(&provider)
+            .is_some_and(|default_id| default_id == &profile.id);
+        let default_marker = if is_default { "*" } else { " " };
+        let status = if profile.disabled {
+            "disabled"
+        } else {
+            "active"
+        };
+        let key_state = if has_secret(profile.api_key.as_deref()) {
+            "set"
+        } else {
+            "missing"
+        };
+        let label = profile
+            .label
+            .as_deref()
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or("-");
+
+        println!(
+            "{default_marker} {} | provider={} | status={} | key={} | label={}",
+            profile.id, provider, status, key_state, label
+        );
+    }
+
+    let stale_defaults: Vec<_> = store
+        .defaults
+        .iter()
+        .filter(|(provider, profile_id)| {
+            !store.profiles.iter().any(|profile| {
+                canonical_provider_name(&profile.provider) == **provider
+                    && profile.id == **profile_id
+            })
+        })
+        .collect();
+
+    if !stale_defaults.is_empty() {
+        println!();
+        println!("⚠️  Stale default mappings:");
+        for (provider, profile_id) in stale_defaults {
+            println!("  provider={provider} -> {profile_id} (missing profile)");
+        }
+    }
+
+    println!();
+    println!("* marks provider default profile");
+    Ok(())
+}
+
+fn handle_status(config: &Config, provider: Option<&str>) -> Result<()> {
+    let broker = AuthBroker::load_or_init(config)?;
+    let store = AuthProfileStore::load_or_init_for_config(config)?;
+
+    let requested_provider = provider
+        .or(config.default_provider.as_deref())
+        .unwrap_or("openrouter");
+    let canonical_provider = canonical_provider_name(requested_provider);
+
+    let active_profile = store.active_profile_for_provider(&canonical_provider);
+    let default_profile_id = store.defaults.get(&canonical_provider);
+    let has_resolved_key = broker
+        .resolve_provider_api_key(&canonical_provider)
+        .is_some();
+    let uses_legacy = active_profile.is_none() && has_secret(config.api_key.as_deref());
+
+    println!("🔐 Auth status");
+    println!("Provider: {canonical_provider}");
+    println!(
+        "Resolved key: {}",
+        if has_resolved_key { "yes" } else { "no" }
+    );
+
+    match active_profile {
+        Some(profile) => {
+            println!("Source: profile");
+            println!("Profile id: {}", profile.id);
+            println!("Profile label: {}", profile.label.as_deref().unwrap_or("-"));
+            println!(
+                "Profile key: {}",
+                if has_secret(profile.api_key.as_deref()) {
+                    "set"
+                } else {
+                    "missing"
+                }
+            );
+            println!(
+                "Profile disabled: {}",
+                if profile.disabled { "yes" } else { "no" }
+            );
+        }
+        None if uses_legacy => {
+            println!("Source: legacy config.api_key fallback");
+            println!("Profile id: -");
+        }
+        None => {
+            println!("Source: none");
+            println!("Profile id: -");
+        }
+    }
+
+    println!(
+        "Default mapping: {}",
+        default_profile_id.map_or("(none)", String::as_str)
+    );
+    println!(
+        "Legacy config.api_key: {}",
+        if has_secret(config.api_key.as_deref()) {
+            "set"
+        } else {
+            "missing"
+        }
+    );
+
+    let memory_key_resolved = broker.resolve_memory_api_key(&config.memory).is_some();
+    println!();
+    println!(
+        "Memory embedding provider: {}",
+        config.memory.embedding_provider
+    );
+    println!(
+        "Memory embedding key resolved: {}",
+        if memory_key_resolved { "yes" } else { "no" }
+    );
+
+    Ok(())
+}
+
+fn handle_login(
+    config: &Config,
+    provider: &str,
+    profile: Option<&str>,
+    label: Option<String>,
+    api_key: Option<String>,
+    no_default: bool,
+) -> Result<()> {
+    let canonical_provider = canonical_provider_name(provider);
+    if canonical_provider.is_empty() {
+        bail!("Provider cannot be empty");
+    }
+
+    let mut store = AuthProfileStore::load_or_init_for_config(config)?;
+    let profile_id = profile
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map_or_else(
+            || format!("{canonical_provider}-default"),
+            ToOwned::to_owned,
+        );
+
+    let api_key_value = if let Some(key) = api_key {
+        key
+    } else {
+        if !std::io::stdin().is_terminal() {
+            bail!("--api-key is required in non-interactive mode");
+        }
+        Password::new()
+            .with_prompt(format!(
+                "API key for provider '{canonical_provider}' (input hidden)"
+            ))
+            .allow_empty_password(false)
+            .interact()
+            .context("Failed to read API key from terminal")?
+    };
+
+    let created = store.upsert_profile(
+        AuthProfile {
+            id: profile_id.clone(),
+            provider: canonical_provider.clone(),
+            label,
+            api_key: Some(api_key_value),
+            disabled: false,
+        },
+        !no_default,
+    )?;
+
+    store.save_for_config(config)?;
+
+    println!(
+        "✅ {} auth profile '{}' for provider '{}'",
+        if created { "Created" } else { "Updated" },
+        profile_id,
+        canonical_provider
+    );
+    println!(
+        "Default mapping: {}",
+        if no_default {
+            "unchanged"
+        } else {
+            "set to this profile"
+        }
+    );
+    println!(
+        "Storage: {} ({})",
+        auth_profiles_path(config).display(),
+        if config.secrets.encrypt {
+            "encrypted"
+        } else {
+            "plaintext"
+        }
+    );
+
+    Ok(())
+}
+
+fn auth_secret_store(config: &Config) -> SecretStore {
+    let secret_root = config
+        .config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    SecretStore::new(secret_root, config.secrets.encrypt)
+}
+
+fn has_secret(secret: Option<&str>) -> bool {
+    secret.map(str::trim).is_some_and(|value| !value.is_empty())
+}
+
+fn is_valid_profile_id(profile_id: &str) -> bool {
+    profile_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 pub fn auth_profiles_path(config: &Config) -> PathBuf {
@@ -392,5 +743,69 @@ mod tests {
             broker.resolve_memory_api_key(&config.memory).as_deref(),
             Some("sk-openai-profile")
         );
+    }
+
+    #[test]
+    fn upsert_profile_sets_provider_default_and_normalizes_values() {
+        let mut store = AuthProfileStore::default();
+
+        let created = store
+            .upsert_profile(
+                AuthProfile {
+                    id: "openai-main".into(),
+                    provider: "OpenAI".into(),
+                    label: Some("  Primary Key  ".into()),
+                    api_key: Some("  sk-openai-main  ".into()),
+                    disabled: true,
+                },
+                true,
+            )
+            .unwrap();
+
+        assert!(created);
+        assert_eq!(store.profiles.len(), 1);
+        assert_eq!(store.profiles[0].provider, "openai");
+        assert_eq!(store.profiles[0].label.as_deref(), Some("Primary Key"));
+        assert_eq!(store.profiles[0].api_key.as_deref(), Some("sk-openai-main"));
+        assert!(!store.profiles[0].disabled);
+        assert_eq!(
+            store.defaults.get("openai"),
+            Some(&"openai-main".to_string())
+        );
+    }
+
+    #[test]
+    fn upsert_profile_rejects_invalid_id() {
+        let mut store = AuthProfileStore::default();
+        let result = store.upsert_profile(
+            AuthProfile {
+                id: "bad id".into(),
+                provider: "openrouter".into(),
+                label: None,
+                api_key: Some("sk-test".into()),
+                disabled: false,
+            },
+            true,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_or_init_migrates_legacy_key_without_duplicate_profiles() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = test_config(&tmp);
+        config.default_provider = Some("openrouter".into());
+        config.api_key = Some("sk-legacy-openrouter".into());
+        config.secrets.encrypt = true;
+
+        let store_first = AuthProfileStore::load_or_init_for_config(&config).unwrap();
+        assert_eq!(store_first.profiles.len(), 1);
+
+        let store_second = AuthProfileStore::load_or_init_for_config(&config).unwrap();
+        assert_eq!(store_second.profiles.len(), 1);
+
+        let persisted = fs::read_to_string(auth_profiles_path(&config)).unwrap();
+        assert!(persisted.contains("enc2:"));
     }
 }

@@ -82,6 +82,7 @@ asteroniris status
 - `asteroniris status` - effective config/runtime summary
 - `asteroniris channel list|start|doctor` - channel management
 - `asteroniris cron list|add|remove` - scheduler management
+- `asteroniris auth list|status|login` - provider auth profile management
 - `asteroniris skills list|install|remove` - skill management
 - `asteroniris integrations info <name>` - integration details
 - `asteroniris service install|start|stop|status|uninstall` - OS service lifecycle

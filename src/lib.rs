@@ -115,6 +115,31 @@ pub enum CronCommands {
     },
 }
 
+/// Auth profile subcommands
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AuthCommands {
+    /// List configured auth profiles
+    List,
+    /// Show auth status for a provider
+    Status {
+        /// Provider to inspect (defaults to configured default provider)
+        provider: Option<String>,
+    },
+    /// Save or update an API-key auth profile
+    Login {
+        /// Provider name (e.g. openrouter, openai, anthropic)
+        provider: String,
+        /// Profile id (defaults to <provider>-default)
+        profile: Option<String>,
+        /// Human label for the profile
+        label: Option<String>,
+        /// API key to store (if omitted, prompt securely)
+        api_key: Option<String>,
+        /// Do not set this profile as provider default
+        no_default: bool,
+    },
+}
+
 /// Integration subcommands
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IntegrationCommands {

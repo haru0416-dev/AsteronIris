@@ -161,6 +161,12 @@ enum Commands {
         integration_command: IntegrationCommands,
     },
 
+    /// Manage auth profiles and credentials
+    Auth {
+        #[command(subcommand)]
+        auth_command: AuthCommands,
+    },
+
     /// Manage skills (user-defined capabilities)
     Skills {
         #[command(subcommand)]
@@ -230,6 +236,36 @@ enum IntegrationCommands {
     Info {
         /// Integration name
         name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AuthCommands {
+    /// List configured auth profiles
+    List,
+    /// Show auth status for a provider
+    Status {
+        /// Provider to inspect (defaults to configured default provider)
+        #[arg(short, long)]
+        provider: Option<String>,
+    },
+    /// Save or update an API-key auth profile
+    Login {
+        /// Provider name (e.g. openrouter, openai, anthropic)
+        #[arg(short, long)]
+        provider: String,
+        /// Profile id (defaults to <provider>-default)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Human label for the profile
+        #[arg(long)]
+        label: Option<String>,
+        /// API key to store (if omitted, prompt securely)
+        #[arg(long)]
+        api_key: Option<String>,
+        /// Do not set this profile as provider default
+        #[arg(long)]
+        no_default: bool,
     },
 }
 
@@ -452,6 +488,8 @@ async fn main() -> Result<()> {
         Commands::Integrations {
             integration_command,
         } => integrations::handle_command(integration_command, &config),
+
+        Commands::Auth { auth_command } => auth::handle_command(auth_command, &config),
 
         Commands::Skills { skill_command } => {
             skills::handle_command(skill_command, &config.workspace_dir)
