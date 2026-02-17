@@ -3,3 +3,10 @@
 *.db-journal
 .DS_Store
 .wt-pr37/
+
+# Private development materials (keep local, exclude from GitHub)
+.sisyphus/
+AGENTS.md
+GAP_ANALYSIS_*.md
+SPEC_*.md
+docs/operations/

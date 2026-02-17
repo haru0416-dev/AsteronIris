@@ -127,8 +127,7 @@ Autonomy extensions ship safe by default. New rollout controls live under
 - `Rollout stage: off|audit-only|sanitize`
 - `Rollout gates: verify_repair=on|off, contradiction_weighting=on|off, intent_audit_anomaly_detection=on|off`
 
-For operator rollout, SLO thresholds, alert triggers, and rollback steps, see
-`docs/operations/autonomy-rollout-runbook.md`.
+Operator rollout/SLO/rollback runbook is maintained privately and excluded from the public repository.
 
 ## Security Notes
 
