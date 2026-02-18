@@ -1,8 +1,9 @@
 use super::embeddings::EmbeddingProvider;
 use super::traits::{
-    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEvent, MemoryEventInput,
-    MemoryLayer, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
+    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryEvent, MemoryEventInput, MemoryLayer,
+    MemoryRecallItem, MemorySource, RecallQuery,
 };
+use crate::memory::vector;
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};

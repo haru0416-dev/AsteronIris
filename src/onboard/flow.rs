@@ -1,10 +1,11 @@
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, HeartbeatConfig,
-    ObservabilityConfig, PersonaConfig, RuntimeConfig, SecretsConfig,
+    MemoryConfig, ObservabilityConfig, PersonaConfig, RuntimeConfig, SecretsConfig,
 };
 use anyhow::{Context, Result};
 use console::style;
 use dialoguer::Confirm;
+use std::fs;
 
 use super::domain::default_model_for_provider;
 use super::prompts::{

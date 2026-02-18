@@ -35,32 +35,25 @@ pub fn render_status(config: &Config) -> String {
     lines.push(format!(
         "   Rollout stage: {}",
         match config.autonomy.rollout.stage {
-            crate::config::schema::AutonomyRolloutStage::Off => "off",
-            crate::config::schema::AutonomyRolloutStage::AuditOnly => "audit-only",
-            crate::config::schema::AutonomyRolloutStage::Sanitize => "sanitize",
+            Some(crate::config::schema::AutonomyRolloutStage::ReadOnly) => "read-only",
+            Some(crate::config::schema::AutonomyRolloutStage::Supervised) => "supervised",
+            Some(crate::config::schema::AutonomyRolloutStage::Full) => "full",
+            None => "off",
         }
     ));
     lines.push(format!(
-        "   Rollout gates: verify_repair={}, contradiction_weighting={}, intent_audit_anomaly_detection={}",
-        if config.autonomy.rollout.verify_repair_enabled {
+        "   Rollout policy: enabled={}, read_only_days={:?}, supervised_days={:?}",
+        if config.autonomy.rollout.enabled {
             "on"
         } else {
             "off"
         },
-        if config.autonomy.rollout.contradiction_weighting_enabled {
-            "on"
-        } else {
-            "off"
-        },
-        if config
-            .autonomy
-            .rollout
-            .intent_audit_anomaly_detection_enabled
-        {
-            "on"
-        } else {
-            "off"
-        }
+        config.autonomy.rollout.read_only_days,
+        config.autonomy.rollout.supervised_days
+    ));
+    lines.push(format!(
+        "   Verify/repair caps: max_attempts={}, max_repair_depth={}",
+        config.autonomy.verify_repair_max_attempts, config.autonomy.verify_repair_max_repair_depth
     ));
     lines.push(format!(
         "   Autonomy lifecycle metrics: {}",
@@ -162,7 +155,7 @@ fn memory_rollout_status(
     } else {
         "off"
     };
-    let conflict = if backend != "none" && config.autonomy.rollout.contradiction_weighting_enabled {
+    let conflict = if backend != "none" && config.autonomy.rollout.enabled {
         "on"
     } else {
         "off"
@@ -197,7 +190,7 @@ mod tests {
         let mut config = Config::default();
         config.memory.backend = "lancedb".into();
         config.memory.auto_save = true;
-        config.autonomy.rollout.contradiction_weighting_enabled = true;
+        config.autonomy.rollout.enabled = true;
 
         let rollout = memory_rollout_status(&config);
         assert_eq!(rollout.0, "on");

@@ -3,7 +3,7 @@ use crate::memory::vector;
 use rusqlite::{params, Connection};
 
 impl SqliteMemory {
-    fn fts5_search(
+    pub(super) fn fts5_search(
         conn: &Connection,
         query: &str,
         limit: usize,
@@ -45,7 +45,7 @@ impl SqliteMemory {
         Ok(results)
     }
 
-    fn vector_search(
+    pub(super) fn vector_search(
         conn: &Connection,
         query_embedding: &[f32],
         limit: usize,
