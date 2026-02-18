@@ -23,6 +23,7 @@ Core extension points are trait-based:
 
 - `src/providers/` -> model providers
 - `src/channels/` -> messaging channels
+  - Keep `src/channels/mod.rs` as a facade + re-exports; place channel-specific provider additions in `src/channels/providers/<channel>.rs`.
 - `src/tools/` -> tool surface
 - `src/memory/` -> memory backends
 - `src/observability/` -> observability backends

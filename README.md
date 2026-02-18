@@ -11,6 +11,7 @@ multi-channel I/O, memory backends, and a hardened local gateway.
 - Daemon mode that runs gateway + channels + heartbeat + scheduler
 - Memory backends: `sqlite`, `lancedb`, `markdown`, `none`
 - Channel integrations: CLI, Telegram, Discord, Slack, iMessage, Matrix, WhatsApp, Email, IRC
+- Channel implementation note: future channel-specific providers should live under `src/channels/providers/<channel>.rs` to keep `channels/mod.rs` as a thin facade.
 - Security controls: workspace-scoped policy, secret storage, deny-by-default checks
 
 ## Requirements
