@@ -33,7 +33,9 @@ pub fn create_observer(config: &ObservabilityConfig) -> Box<dyn Observer> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::observability::traits::{AutonomyLifecycleSignal, ObserverMetric};
+    use crate::observability::traits::{
+        AutonomyLifecycleSignal, MemoryLifecycleSignal, ObserverMetric,
+    };
     use std::time::Duration;
 
     #[test]
@@ -125,5 +127,30 @@ mod tests {
         assert_eq!(autonomy_counts.intent_policy_allowed, 1);
         assert_eq!(autonomy_counts.contradiction_detected, 1);
         assert_eq!(autonomy_counts.total, 3);
+    }
+
+    #[test]
+    fn observability_memory_lifecycle_metrics() {
+        let observer = PrometheusObserver::new();
+
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::ConsolidationStarted);
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::ConsolidationCompleted);
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::ConflictDetected);
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::ConflictResolved);
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::RevocationApplied);
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::GovernanceInspect);
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::GovernanceExport);
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::GovernanceDelete);
+
+        let memory_counts = observer.snapshot_memory_counts();
+        assert_eq!(memory_counts.total, 8);
+        assert_eq!(memory_counts.consolidation_started, 1);
+        assert_eq!(memory_counts.consolidation_completed, 1);
+        assert_eq!(memory_counts.conflict_detected, 1);
+        assert_eq!(memory_counts.conflict_resolved, 1);
+        assert_eq!(memory_counts.revocation_applied, 1);
+        assert_eq!(memory_counts.governance_inspect, 1);
+        assert_eq!(memory_counts.governance_export, 1);
+        assert_eq!(memory_counts.governance_delete, 1);
     }
 }

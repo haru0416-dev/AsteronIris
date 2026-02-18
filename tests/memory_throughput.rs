@@ -16,6 +16,8 @@ const DEFAULT_CONCURRENCY: usize = 8;
 const DEFAULT_N_STORE: usize = 1_000;
 const DEFAULT_N_RECALL: usize = 1_000;
 const DEFAULT_RECALL_LIMIT: usize = 10;
+const DEFAULT_CHURN_OPS: usize = 600;
+const DEFAULT_CHURN_WINDOW: usize = 64;
 
 const EMBEDDING_DIMS: usize = 16;
 const EMBEDDING_SEED: u64 = 0x5EED_BA5E;
@@ -217,4 +219,99 @@ async fn memory_throughput_ops_per_sec() {
     println!("RECALL_LIMIT={recall_limit}");
     println!("EMBEDDING_DIMS={EMBEDDING_DIMS}");
     println!("PAYLOAD_BYTES={PAYLOAD_BYTES}");
+}
+
+#[tokio::test]
+async fn memory_throughput_churn_bounded_recall() {
+    let tmp = TempDir::new().unwrap();
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(DeterministicEmbedding::with_seed(
+        EMBEDDING_DIMS,
+        EMBEDDING_SEED,
+    ));
+
+    let backend = selected_backend();
+    let concurrency = env_or_default_usize("THROUGHPUT_CONCURRENCY", DEFAULT_CONCURRENCY);
+    let n_ops = env_or_default_usize("THROUGHPUT_CHURN_OPS", DEFAULT_CHURN_OPS);
+    let churn_window = env_or_default_usize("THROUGHPUT_CHURN_WINDOW", DEFAULT_CHURN_WINDOW);
+    let recall_limit = env_or_default_usize("THROUGHPUT_RECALL_LIMIT", DEFAULT_RECALL_LIMIT);
+    println!("CHURN_BACKEND={backend}");
+
+    let mem: Arc<dyn Memory> = if backend == "lancedb" {
+        Arc::new(LanceDbMemory::with_embedder(tmp.path(), Arc::clone(&embedder), 0.7, 0.3).unwrap())
+    } else {
+        Arc::new(
+            SqliteMemory::with_embedder(tmp.path(), Arc::clone(&embedder), 0.7, 0.3, 10_000)
+                .unwrap(),
+        )
+    };
+
+    let churn_sem = Arc::new(Semaphore::new(concurrency));
+    let churn_start = Instant::now();
+    let mut churn_set = tokio::task::JoinSet::new();
+
+    for i in 0..n_ops {
+        let permit = churn_sem.clone().acquire_owned().await.unwrap();
+        let mem = Arc::clone(&mem);
+        let slot_key = format!("churn.k{:04}", i % churn_window.max(1));
+        let content = fixed_payload(i);
+        let query = recall_query(i);
+        churn_set.spawn(async move {
+            let _permit = permit;
+
+            mem.append_event(
+                MemoryEventInput::new(
+                    "default",
+                    slot_key,
+                    MemoryEventType::FactAdded,
+                    content,
+                    MemorySource::ExplicitUser,
+                    PrivacyLevel::Private,
+                )
+                .with_confidence(0.95)
+                .with_importance(0.7),
+            )
+            .await?;
+
+            let results = mem
+                .recall_scoped(RecallQuery::new("default", query, recall_limit))
+                .await?;
+            anyhow::ensure!(results.len() <= recall_limit);
+            anyhow::ensure!(results.iter().all(|item| item.score.is_finite()));
+
+            Ok::<(), anyhow::Error>(())
+        });
+    }
+
+    while let Some(res) = churn_set.join_next().await {
+        res.unwrap().unwrap();
+    }
+
+    let churn_dur = churn_start.elapsed();
+    let churn_ops = ops_per_sec(n_ops, churn_dur);
+    assert!(churn_ops.is_finite() && churn_ops > 0.0);
+
+    let mut matched_queries = 0usize;
+    for topic in 0..TOPICS {
+        let query = format!("topic_{topic}");
+        let results = mem
+            .recall_scoped(RecallQuery::new("default", query.clone(), recall_limit))
+            .await
+            .unwrap();
+        assert!(results.len() <= recall_limit);
+        if results.iter().any(|item| item.value.contains(&query)) {
+            matched_queries += 1;
+        }
+    }
+
+    assert!(
+        matched_queries >= TOPICS / 2,
+        "retrieval quality under churn regressed (matched_queries={matched_queries})"
+    );
+    assert_eq!(mem.count_events(None).await.unwrap(), n_ops);
+
+    println!("CHURN_OPS_PER_SEC={churn_ops:.2}");
+    println!("CHURN_N_OPS={n_ops}");
+    println!("CHURN_WINDOW={churn_window}");
+    println!("CHURN_MATCHED_QUERIES={matched_queries}");
+    println!("CHURN_RECALL_LIMIT={recall_limit}");
 }

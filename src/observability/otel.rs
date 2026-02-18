@@ -1,4 +1,6 @@
-use super::traits::{AutonomyLifecycleSignal, Observer, ObserverEvent, ObserverMetric};
+use super::traits::{
+    AutonomyLifecycleSignal, MemoryLifecycleSignal, Observer, ObserverEvent, ObserverMetric,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct OtelObserver {
@@ -33,6 +35,7 @@ impl OtelObserver {
             ObserverMetric::ActiveSessions(_) => "active_sessions",
             ObserverMetric::QueueDepth(_) => "queue_depth",
             ObserverMetric::AutonomyLifecycle(signal) => autonomy_signal_name(*signal),
+            ObserverMetric::MemoryLifecycle(signal) => memory_signal_name(*signal),
         }
     }
 
@@ -56,6 +59,19 @@ fn autonomy_signal_name(signal: AutonomyLifecycleSignal) -> &'static str {
         AutonomyLifecycleSignal::IntentPolicyDenied => "autonomy_intent_policy_denied",
         AutonomyLifecycleSignal::IntentDispatched => "autonomy_intent_dispatched",
         AutonomyLifecycleSignal::IntentExecutionBlocked => "autonomy_intent_execution_blocked",
+    }
+}
+
+fn memory_signal_name(signal: MemoryLifecycleSignal) -> &'static str {
+    match signal {
+        MemoryLifecycleSignal::ConsolidationStarted => "memory_consolidation_started",
+        MemoryLifecycleSignal::ConsolidationCompleted => "memory_consolidation_completed",
+        MemoryLifecycleSignal::ConflictDetected => "memory_conflict_detected",
+        MemoryLifecycleSignal::ConflictResolved => "memory_conflict_resolved",
+        MemoryLifecycleSignal::RevocationApplied => "memory_revocation_applied",
+        MemoryLifecycleSignal::GovernanceInspect => "memory_governance_inspect",
+        MemoryLifecycleSignal::GovernanceExport => "memory_governance_export",
+        MemoryLifecycleSignal::GovernanceDelete => "memory_governance_delete",
     }
 }
 
@@ -107,8 +123,11 @@ mod tests {
         obs.record_metric(&ObserverMetric::AutonomyLifecycle(
             AutonomyLifecycleSignal::IntentPolicyDenied,
         ));
+        obs.record_metric(&ObserverMetric::MemoryLifecycle(
+            MemoryLifecycleSignal::GovernanceDelete,
+        ));
         obs.flush();
 
-        assert_eq!(obs.snapshot_counts(), (2, 3));
+        assert_eq!(obs.snapshot_counts(), (2, 4));
     }
 }

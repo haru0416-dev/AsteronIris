@@ -90,3 +90,82 @@ jobs:
         with:
           name: memory-throughput
           path: memory_throughput.txt
+
+  memory-backend-parity:
+    name: Memory backend parity matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, lancedb, markdown]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          version: "29.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify protoc
+        run: protoc --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Run backend parity lifecycle test
+        run: |
+          set -euo pipefail
+          mkdir -p .sisyphus/evidence
+          printf 'backend=%s\n' "${{ matrix.backend }}" | tee .sisyphus/evidence/task-24-ci-happy.txt
+          BACKEND=${{ matrix.backend }} cargo test --test memory_backend_parity -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-happy.txt
+      - name: Upload lifecycle happy evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-24-ci-happy-${{ matrix.backend }}
+          path: .sisyphus/evidence/task-24-ci-happy.txt
+
+  sqlite-schema-migration:
+    name: Sqlite schema migration verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          version: "29.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify protoc
+        run: protoc --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Run migration test
+        run: |
+          set -euo pipefail
+          mkdir -p .sisyphus/evidence
+          printf 'schema-migration-check\n' | tee .sisyphus/evidence/task-24-ci-happy.txt
+          cargo test sqlite_schema_migrates_from_v1_to_v2 -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-happy.txt
+      - name: Upload migration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-24-ci-happy
+          path: .sisyphus/evidence/task-24-ci-happy.txt
+
+  sqlite-schema-rollback:
+    name: Sqlite schema rollback verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          version: "29.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify protoc
+        run: protoc --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Run rollback regression test
+        run: |
+          set -euo pipefail
+          mkdir -p .sisyphus/evidence
+          printf 'schema-rollback-check\n' | tee .sisyphus/evidence/task-24-ci-error.txt
+          cargo test sqlite_schema_rejects_inconsistent_state -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-error.txt
+      - name: Upload rollback evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-24-ci-error
+          path: .sisyphus/evidence/task-24-ci-error.txt

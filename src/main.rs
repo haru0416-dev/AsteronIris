@@ -464,6 +464,18 @@ async fn main() -> Result<()> {
                 config.memory.backend,
                 if config.memory.auto_save { "on" } else { "off" }
             );
+            let (consolidation, conflict, revocation, governance) = memory_rollout_status(&config);
+            println!(
+                "   Memory rollout: consolidation={consolidation}, conflict={conflict}, revocation={revocation}, governance={governance}"
+            );
+            println!(
+                "   Memory lifecycle metrics: {}",
+                if observability_backend_supports_memory_metrics(&config.observability.backend) {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
 
             println!();
             println!("Security:");
@@ -530,6 +542,44 @@ fn observability_backend_supports_autonomy_metrics(backend: &str) -> bool {
     matches!(backend, "log" | "prometheus" | "otel")
 }
 
+fn observability_backend_supports_memory_metrics(backend: &str) -> bool {
+    matches!(backend, "log" | "prometheus" | "otel")
+}
+
+fn memory_rollout_status(
+    config: &Config,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    let backend = config.memory.backend.as_str();
+    let consolidation = if backend != "none" && config.memory.auto_save {
+        "on"
+    } else {
+        "off"
+    };
+    let conflict = if backend != "none" && config.autonomy.rollout.contradiction_weighting_enabled {
+        "on"
+    } else {
+        "off"
+    };
+
+    let capability = crate::memory::capability_matrix_for_backend(backend);
+    let revocation = capability.map_or("unknown", |matrix| {
+        capability_support_label(matrix.forget_tombstone)
+    });
+    let governance = capability.map_or("unknown", |matrix| {
+        capability_support_label(matrix.forget_hard)
+    });
+
+    (consolidation, conflict, revocation, governance)
+}
+
+fn capability_support_label(support: crate::memory::CapabilitySupport) -> &'static str {
+    match support {
+        crate::memory::CapabilitySupport::Supported => "supported",
+        crate::memory::CapabilitySupport::Degraded => "degraded",
+        crate::memory::CapabilitySupport::Unsupported => "unsupported",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,5 +588,19 @@ mod tests {
     #[test]
     fn cli_definition_has_no_flag_conflicts() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn status_reports_memory_rollout_support() {
+        let mut config = Config::default();
+        config.memory.backend = "lancedb".into();
+        config.memory.auto_save = true;
+        config.autonomy.rollout.contradiction_weighting_enabled = true;
+
+        let rollout = memory_rollout_status(&config);
+        assert_eq!(rollout.0, "on");
+        assert_eq!(rollout.1, "on");
+        assert_eq!(rollout.2, "degraded");
+        assert_eq!(rollout.3, "supported");
     }
 }

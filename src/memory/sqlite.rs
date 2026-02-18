@@ -1,15 +1,19 @@
 use super::embeddings::EmbeddingProvider;
 use super::traits::{
-    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEntry, MemoryEvent,
-    MemoryEventInput, MemoryEventType, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
+    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEvent, MemoryEventInput,
+    MemoryLayer, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
 };
 use super::vector;
 use async_trait::async_trait;
 use chrono::Local;
-use rusqlite::{params, Connection, ToSql};
+use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
+
+#[path = "sqlite/events.rs"]
+mod events;
+#[path = "sqlite/projection.rs"]
+mod projection;
 
 /// SQLite-backed persistent memory — the brain
 ///
@@ -28,7 +32,34 @@ pub struct SqliteMemory {
     cache_max: usize,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 impl SqliteMemory {
+    const MEMORY_SCHEMA_V1: i64 = 1;
+    const MEMORY_SCHEMA_V2: i64 = 2;
+    const MEMORY_SCHEMA_V3: i64 = 3;
+    const MEMORY_EVENTS_V2_COLUMNS: [&'static str; 4] = [
+        "layer",
+        "provenance_source_class",
+        "provenance_reference",
+        "provenance_evidence_uri",
+    ];
+    const MEMORY_EVENTS_V3_COLUMNS: [&'static str; 2] = ["retention_tier", "retention_expires_at"];
+    const MEMORIES_V3_COLUMNS: [&'static str; 6] = [
+        "layer",
+        "provenance_source_class",
+        "provenance_reference",
+        "provenance_evidence_uri",
+        "retention_tier",
+        "retention_expires_at",
+    ];
+    const RETRIEVAL_DOCS_V3_COLUMNS: [&'static str; 6] = [
+        "layer",
+        "provenance_source_class",
+        "provenance_reference",
+        "provenance_evidence_uri",
+        "retention_tier",
+        "retention_expires_at",
+    ];
     const TREND_TTL_DAYS: f64 = 30.0;
     const TREND_DECAY_WINDOW_DAYS: f64 = 45.0;
 
@@ -74,6 +105,7 @@ impl SqliteMemory {
     }
 
     /// Initialize all tables: memories, FTS5, `embedding_cache`
+    #[allow(clippy::too_many_lines)]
     fn init_schema(conn: &Connection) -> anyhow::Result<()> {
         conn.execute_batch(
             "-- Core memories table
@@ -82,6 +114,12 @@ impl SqliteMemory {
                 key         TEXT NOT NULL UNIQUE,
                 content     TEXT NOT NULL,
                 category    TEXT NOT NULL DEFAULT 'core',
+                layer       TEXT NOT NULL DEFAULT 'working',
+                provenance_source_class TEXT,
+                provenance_reference TEXT,
+                provenance_evidence_uri TEXT,
+                retention_tier TEXT NOT NULL DEFAULT 'working',
+                retention_expires_at TEXT,
                 embedding   BLOB,
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
@@ -125,11 +163,17 @@ impl SqliteMemory {
                 event_id TEXT PRIMARY KEY,
                 entity_id TEXT NOT NULL,
                 slot_key TEXT NOT NULL,
+                layer TEXT NOT NULL DEFAULT 'working',
                 event_type TEXT NOT NULL,
                 value TEXT NOT NULL,
                 source TEXT NOT NULL,
                 confidence REAL NOT NULL,
                 importance REAL NOT NULL,
+                provenance_source_class TEXT,
+                provenance_reference TEXT,
+                provenance_evidence_uri TEXT,
+                retention_tier TEXT NOT NULL DEFAULT 'working',
+                retention_expires_at TEXT,
                 privacy_level TEXT NOT NULL,
                 occurred_at TEXT NOT NULL,
                 ingested_at TEXT NOT NULL,
@@ -157,6 +201,12 @@ impl SqliteMemory {
                 entity_id TEXT NOT NULL,
                 slot_key TEXT NOT NULL,
                 text_body TEXT NOT NULL,
+                layer TEXT NOT NULL DEFAULT 'working',
+                provenance_source_class TEXT,
+                provenance_reference TEXT,
+                provenance_evidence_uri TEXT,
+                retention_tier TEXT NOT NULL DEFAULT 'working',
+                retention_expires_at TEXT,
                 recency_score REAL NOT NULL,
                 importance REAL NOT NULL,
                 reliability REAL NOT NULL,
@@ -176,6 +226,574 @@ impl SqliteMemory {
                 executed_at TEXT NOT NULL
             );",
         )?;
+        Self::run_schema_migrations(conn)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn run_schema_migrations(conn: &Connection) -> anyhow::Result<()> {
+        let version_table_exists = Self::table_exists(conn, "memory_schema_version")?;
+        let memory_event_columns = Self::table_columns(conn, "memory_events")?;
+        let memories_columns = Self::table_columns(conn, "memories")?;
+        let retrieval_doc_columns = Self::table_columns(conn, "retrieval_docs")?;
+        let pragma_user_version = Self::get_user_version(conn)?;
+
+        let has_all_v2_columns = Self::MEMORY_EVENTS_V2_COLUMNS
+            .iter()
+            .all(|column| memory_event_columns.iter().any(|entry| entry == *column));
+        let has_any_v2_columns = Self::MEMORY_EVENTS_V2_COLUMNS
+            .iter()
+            .any(|column| memory_event_columns.iter().any(|entry| entry == *column));
+        let has_all_events_v3_columns = Self::MEMORY_EVENTS_V3_COLUMNS
+            .iter()
+            .all(|column| memory_event_columns.iter().any(|entry| entry == *column));
+        let has_any_events_v3_columns = Self::MEMORY_EVENTS_V3_COLUMNS
+            .iter()
+            .any(|column| memory_event_columns.iter().any(|entry| entry == *column));
+        let has_all_memories_v3_columns = Self::MEMORIES_V3_COLUMNS
+            .iter()
+            .all(|column| memories_columns.iter().any(|entry| entry == *column));
+        let has_any_memories_v3_columns = Self::MEMORIES_V3_COLUMNS
+            .iter()
+            .any(|column| memories_columns.iter().any(|entry| entry == *column));
+        let has_all_retrieval_v3_columns = Self::RETRIEVAL_DOCS_V3_COLUMNS
+            .iter()
+            .all(|column| retrieval_doc_columns.iter().any(|entry| entry == *column));
+        let has_any_retrieval_v3_columns = Self::RETRIEVAL_DOCS_V3_COLUMNS
+            .iter()
+            .any(|column| retrieval_doc_columns.iter().any(|entry| entry == *column));
+
+        if !version_table_exists {
+            if has_any_v2_columns && !has_all_v2_columns {
+                anyhow::bail!(
+                    "sqlite schema inconsistent: memory_events has partial v2 columns without memory_schema_version"
+                );
+            }
+
+            if pragma_user_version > Self::MEMORY_SCHEMA_V3 {
+                anyhow::bail!(
+                    "sqlite schema version unsupported: user_version={pragma_user_version}"
+                );
+            }
+
+            if has_any_events_v3_columns != has_all_events_v3_columns {
+                anyhow::bail!(
+                    "sqlite schema inconsistent: memory_events has partial v3 retention columns without memory_schema_version"
+                );
+            }
+            if has_any_memories_v3_columns != has_all_memories_v3_columns {
+                anyhow::bail!(
+                    "sqlite schema inconsistent: memories has partial v3 metadata columns without memory_schema_version"
+                );
+            }
+            if has_any_retrieval_v3_columns != has_all_retrieval_v3_columns {
+                anyhow::bail!(
+                    "sqlite schema inconsistent: retrieval_docs has partial v3 metadata columns without memory_schema_version"
+                );
+            }
+
+            Self::ensure_schema_version_table(conn)?;
+            match pragma_user_version {
+                0 => {
+                    if has_all_v2_columns
+                        && has_all_events_v3_columns
+                        && has_all_memories_v3_columns
+                        && has_all_retrieval_v3_columns
+                    {
+                        Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
+                    } else if has_all_v2_columns {
+                        Self::migrate_v2_to_v3(conn)?;
+                        Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
+                    } else {
+                        Self::migrate_v1_to_v2(conn)?;
+                        Self::migrate_v2_to_v3(conn)?;
+                        Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
+                    }
+                }
+                Self::MEMORY_SCHEMA_V1 => {
+                    if has_all_v2_columns {
+                        anyhow::bail!(
+                            "sqlite schema inconsistent: PRAGMA user_version=1 but memory_events already has v2 columns"
+                        );
+                    }
+                    Self::migrate_v1_to_v2(conn)?;
+                    Self::migrate_v2_to_v3(conn)?;
+                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
+                }
+                Self::MEMORY_SCHEMA_V2 => {
+                    if !has_all_v2_columns {
+                        let missing_columns =
+                            Self::missing_v2_columns(&memory_event_columns).join(", ");
+                        anyhow::bail!(
+                            "sqlite schema inconsistent: user_version=2 but memory_events missing columns: {missing_columns}"
+                        );
+                    }
+                    Self::migrate_v2_to_v3(conn)?;
+                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
+                }
+                Self::MEMORY_SCHEMA_V3 => {
+                    Self::validate_v3_columns(
+                        &memory_event_columns,
+                        &memories_columns,
+                        &retrieval_doc_columns,
+                        "user_version=3",
+                    )?;
+                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
+                }
+                other => anyhow::bail!("sqlite schema version unsupported: user_version={other}"),
+            }
+            Self::ensure_v3_indexes(conn)?;
+            return Ok(());
+        }
+
+        let schema_version = Self::get_schema_version(conn)?;
+        Self::validate_schema_markers(conn, schema_version, pragma_user_version)?;
+        match schema_version {
+            Self::MEMORY_SCHEMA_V1 => {
+                Self::migrate_v1_to_v2(conn)?;
+                Self::migrate_v2_to_v3(conn)?;
+                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
+            }
+            Self::MEMORY_SCHEMA_V2 => {
+                if !has_all_v2_columns {
+                    let missing_columns =
+                        Self::missing_v2_columns(&memory_event_columns).join(", ");
+                    anyhow::bail!(
+                        "sqlite schema inconsistent: memory_schema_version=2 but memory_events missing columns: {missing_columns}"
+                    );
+                }
+                Self::migrate_v2_to_v3(conn)?;
+                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
+            }
+            Self::MEMORY_SCHEMA_V3 => Self::validate_v3_columns(
+                &memory_event_columns,
+                &memories_columns,
+                &retrieval_doc_columns,
+                "memory_schema_version=3",
+            )?,
+            other => anyhow::bail!("sqlite schema version unsupported: {other}"),
+        }
+
+        Self::ensure_v3_indexes(conn)?;
+        Ok(())
+    }
+
+    fn ensure_v3_indexes(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_memory_events_entity_layer
+                 ON memory_events(entity_id, layer, occurred_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_memory_events_retention_expires
+                 ON memory_events(retention_expires_at)
+                 WHERE retention_expires_at IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS idx_retrieval_docs_entity_layer_visibility
+                 ON retrieval_docs(entity_id, layer, visibility, updated_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_retrieval_docs_retention_expires
+                 ON retrieval_docs(retention_expires_at)
+                 WHERE retention_expires_at IS NOT NULL;",
+        )?;
+        Ok(())
+    }
+
+    fn migrate_v1_to_v2(conn: &Connection) -> anyhow::Result<()> {
+        let memory_event_columns = Self::table_columns(conn, "memory_events")?;
+        let normalized_columns: Vec<String> = memory_event_columns
+            .iter()
+            .map(|column| column.trim().to_ascii_lowercase())
+            .collect();
+
+        let has_all_v2_columns = Self::MEMORY_EVENTS_V2_COLUMNS.iter().all(|column| {
+            normalized_columns
+                .iter()
+                .any(|entry| entry == &column.to_ascii_lowercase())
+        });
+        if has_all_v2_columns {
+            return Ok(());
+        }
+
+        let has_any_v2_columns = Self::MEMORY_EVENTS_V2_COLUMNS.iter().any(|column| {
+            normalized_columns
+                .iter()
+                .any(|entry| entry == &column.to_ascii_lowercase())
+        });
+        if has_any_v2_columns {
+            anyhow::bail!(
+                "sqlite schema inconsistent: memory_events migration requires all-or-none v2 columns"
+            );
+        }
+
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let mut migration_sql = String::new();
+        if !normalized_columns
+            .iter()
+            .any(|column| column == &"layer".to_ascii_lowercase())
+        {
+            migration_sql.push_str(
+                "ALTER TABLE memory_events ADD COLUMN layer TEXT NOT NULL DEFAULT 'working';\n",
+            );
+        }
+        if !normalized_columns
+            .iter()
+            .any(|column| column == &"provenance_source_class".to_ascii_lowercase())
+        {
+            migration_sql
+                .push_str("ALTER TABLE memory_events ADD COLUMN provenance_source_class TEXT;\n");
+        }
+        if !normalized_columns
+            .iter()
+            .any(|column| column == &"provenance_reference".to_ascii_lowercase())
+        {
+            migration_sql
+                .push_str("ALTER TABLE memory_events ADD COLUMN provenance_reference TEXT;\n");
+        }
+        if !normalized_columns
+            .iter()
+            .any(|column| column == &"provenance_evidence_uri".to_ascii_lowercase())
+        {
+            migration_sql
+                .push_str("ALTER TABLE memory_events ADD COLUMN provenance_evidence_uri TEXT;\n");
+        }
+
+        let migration_result = if migration_sql.is_empty() {
+            Ok(())
+        } else {
+            conn.execute_batch(&migration_sql)
+        };
+
+        match migration_result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(err) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(err.into());
+            }
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn migrate_v2_to_v3(conn: &Connection) -> anyhow::Result<()> {
+        let memory_event_columns: Vec<String> = Self::table_columns(conn, "memory_events")?
+            .into_iter()
+            .map(|column| column.to_ascii_lowercase())
+            .collect();
+        let memories_columns: Vec<String> = Self::table_columns(conn, "memories")?
+            .into_iter()
+            .map(|column| column.to_ascii_lowercase())
+            .collect();
+        let retrieval_doc_columns: Vec<String> = Self::table_columns(conn, "retrieval_docs")?
+            .into_iter()
+            .map(|column| column.to_ascii_lowercase())
+            .collect();
+
+        if Self::has_all_columns(&memory_event_columns, &Self::MEMORY_EVENTS_V3_COLUMNS)
+            && Self::has_all_columns(&memories_columns, &Self::MEMORIES_V3_COLUMNS)
+            && Self::has_all_columns(&retrieval_doc_columns, &Self::RETRIEVAL_DOCS_V3_COLUMNS)
+        {
+            return Ok(());
+        }
+
+        if Self::has_any_columns(&memory_event_columns, &Self::MEMORY_EVENTS_V3_COLUMNS)
+            && !Self::has_all_columns(&memory_event_columns, &Self::MEMORY_EVENTS_V3_COLUMNS)
+        {
+            anyhow::bail!(
+                "sqlite schema inconsistent: memory_events migration requires all-or-none v3 retention columns"
+            );
+        }
+        if Self::has_any_columns(&memories_columns, &Self::MEMORIES_V3_COLUMNS)
+            && !Self::has_all_columns(&memories_columns, &Self::MEMORIES_V3_COLUMNS)
+        {
+            anyhow::bail!(
+                "sqlite schema inconsistent: memories migration requires all-or-none v3 metadata columns"
+            );
+        }
+        if Self::has_any_columns(&retrieval_doc_columns, &Self::RETRIEVAL_DOCS_V3_COLUMNS)
+            && !Self::has_all_columns(&retrieval_doc_columns, &Self::RETRIEVAL_DOCS_V3_COLUMNS)
+        {
+            anyhow::bail!(
+                "sqlite schema inconsistent: retrieval_docs migration requires all-or-none v3 metadata columns"
+            );
+        }
+
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let mut migration_sql = String::new();
+        if !memory_event_columns
+            .iter()
+            .any(|column| column == "retention_tier")
+        {
+            migration_sql.push_str(
+                "ALTER TABLE memory_events ADD COLUMN retention_tier TEXT NOT NULL DEFAULT 'working';\n",
+            );
+        }
+        if !memory_event_columns
+            .iter()
+            .any(|column| column == "retention_expires_at")
+        {
+            migration_sql
+                .push_str("ALTER TABLE memory_events ADD COLUMN retention_expires_at TEXT;\n");
+        }
+        if !memories_columns.iter().any(|column| column == "layer") {
+            migration_sql.push_str(
+                "ALTER TABLE memories ADD COLUMN layer TEXT NOT NULL DEFAULT 'working';\n",
+            );
+        }
+        if !memories_columns
+            .iter()
+            .any(|column| column == "provenance_source_class")
+        {
+            migration_sql
+                .push_str("ALTER TABLE memories ADD COLUMN provenance_source_class TEXT;\n");
+        }
+        if !memories_columns
+            .iter()
+            .any(|column| column == "provenance_reference")
+        {
+            migration_sql.push_str("ALTER TABLE memories ADD COLUMN provenance_reference TEXT;\n");
+        }
+        if !memories_columns
+            .iter()
+            .any(|column| column == "provenance_evidence_uri")
+        {
+            migration_sql
+                .push_str("ALTER TABLE memories ADD COLUMN provenance_evidence_uri TEXT;\n");
+        }
+        if !memories_columns
+            .iter()
+            .any(|column| column == "retention_tier")
+        {
+            migration_sql.push_str(
+                "ALTER TABLE memories ADD COLUMN retention_tier TEXT NOT NULL DEFAULT 'working';\n",
+            );
+        }
+        if !memories_columns
+            .iter()
+            .any(|column| column == "retention_expires_at")
+        {
+            migration_sql.push_str("ALTER TABLE memories ADD COLUMN retention_expires_at TEXT;\n");
+        }
+        if !retrieval_doc_columns.iter().any(|column| column == "layer") {
+            migration_sql.push_str(
+                "ALTER TABLE retrieval_docs ADD COLUMN layer TEXT NOT NULL DEFAULT 'working';\n",
+            );
+        }
+        if !retrieval_doc_columns
+            .iter()
+            .any(|column| column == "provenance_source_class")
+        {
+            migration_sql
+                .push_str("ALTER TABLE retrieval_docs ADD COLUMN provenance_source_class TEXT;\n");
+        }
+        if !retrieval_doc_columns
+            .iter()
+            .any(|column| column == "provenance_reference")
+        {
+            migration_sql
+                .push_str("ALTER TABLE retrieval_docs ADD COLUMN provenance_reference TEXT;\n");
+        }
+        if !retrieval_doc_columns
+            .iter()
+            .any(|column| column == "provenance_evidence_uri")
+        {
+            migration_sql
+                .push_str("ALTER TABLE retrieval_docs ADD COLUMN provenance_evidence_uri TEXT;\n");
+        }
+        if !retrieval_doc_columns
+            .iter()
+            .any(|column| column == "retention_tier")
+        {
+            migration_sql.push_str("ALTER TABLE retrieval_docs ADD COLUMN retention_tier TEXT NOT NULL DEFAULT 'working';\n");
+        }
+        if !retrieval_doc_columns
+            .iter()
+            .any(|column| column == "retention_expires_at")
+        {
+            migration_sql
+                .push_str("ALTER TABLE retrieval_docs ADD COLUMN retention_expires_at TEXT;\n");
+        }
+
+        migration_sql.push_str(concat!(
+            "CREATE INDEX IF NOT EXISTS idx_memory_events_entity_layer\n",
+            "                ON memory_events(entity_id, layer, occurred_at DESC);\n",
+            "CREATE INDEX IF NOT EXISTS idx_memory_events_retention_expires\n",
+            "                ON memory_events(retention_expires_at)\n",
+            "                WHERE retention_expires_at IS NOT NULL;\n",
+            "CREATE INDEX IF NOT EXISTS idx_retrieval_docs_entity_layer_visibility\n",
+            "                ON retrieval_docs(entity_id, layer, visibility, updated_at DESC);\n",
+            "CREATE INDEX IF NOT EXISTS idx_retrieval_docs_retention_expires\n",
+            "                ON retrieval_docs(retention_expires_at)\n",
+            "                WHERE retention_expires_at IS NOT NULL;\n",
+        ));
+
+        let migration_result = if migration_sql.is_empty() {
+            Ok(())
+        } else {
+            conn.execute_batch(&migration_sql)
+        };
+
+        match migration_result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(err) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(err.into());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn table_exists(conn: &Connection, table_name: &str) -> anyhow::Result<bool> {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table_name],
+            |row| row.get(0),
+        )?;
+        Ok(count == 1)
+    }
+
+    fn table_columns(conn: &Connection, table_name: &str) -> anyhow::Result<Vec<String>> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table_name})"))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        let mut columns = Vec::new();
+        for row in rows {
+            columns.push(row?);
+        }
+        Ok(columns)
+    }
+
+    fn missing_v2_columns(columns: &[String]) -> Vec<&'static str> {
+        Self::MEMORY_EVENTS_V2_COLUMNS
+            .iter()
+            .copied()
+            .filter(|column| !columns.iter().any(|entry| entry == column))
+            .collect()
+    }
+
+    fn missing_columns<'a>(columns: &[String], required: &'a [&'a str]) -> Vec<&'a str> {
+        required
+            .iter()
+            .copied()
+            .filter(|column| !columns.iter().any(|entry| entry == column))
+            .collect()
+    }
+
+    fn has_all_columns(columns: &[String], required: &[&str]) -> bool {
+        required
+            .iter()
+            .all(|column| columns.iter().any(|entry| entry == *column))
+    }
+
+    fn has_any_columns(columns: &[String], required: &[&str]) -> bool {
+        required
+            .iter()
+            .any(|column| columns.iter().any(|entry| entry == *column))
+    }
+
+    fn validate_v3_columns(
+        memory_event_columns: &[String],
+        memories_columns: &[String],
+        retrieval_doc_columns: &[String],
+        state: &str,
+    ) -> anyhow::Result<()> {
+        let missing_event_v3 =
+            Self::missing_columns(memory_event_columns, &Self::MEMORY_EVENTS_V3_COLUMNS);
+        if !missing_event_v3.is_empty() {
+            anyhow::bail!(
+                "sqlite schema inconsistent: {state} but memory_events missing v3 columns: {}",
+                missing_event_v3.join(", ")
+            );
+        }
+
+        let missing_memories_v3 =
+            Self::missing_columns(memories_columns, &Self::MEMORIES_V3_COLUMNS);
+        if !missing_memories_v3.is_empty() {
+            anyhow::bail!(
+                "sqlite schema inconsistent: {state} but memories missing v3 columns: {}",
+                missing_memories_v3.join(", ")
+            );
+        }
+
+        let missing_retrieval_v3 =
+            Self::missing_columns(retrieval_doc_columns, &Self::RETRIEVAL_DOCS_V3_COLUMNS);
+        if !missing_retrieval_v3.is_empty() {
+            anyhow::bail!(
+                "sqlite schema inconsistent: {state} but retrieval_docs missing v3 columns: {}",
+                missing_retrieval_v3.join(", ")
+            );
+        }
+
+        Ok(())
+    }
+
+    fn ensure_schema_version_table(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memory_schema_version (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                version INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )?;
+        Ok(())
+    }
+
+    fn validate_schema_markers(
+        conn: &Connection,
+        app_version: i64,
+        pragma_version: i64,
+    ) -> anyhow::Result<()> {
+        if pragma_version == 0 {
+            Self::set_user_version(conn, app_version)?;
+            return Ok(());
+        }
+
+        if pragma_version != app_version {
+            anyhow::bail!(
+                "sqlite schema inconsistent: memory_schema_version={app_version} but PRAGMA user_version={pragma_version}"
+            );
+        }
+
+        Ok(())
+    }
+
+    fn get_schema_version(conn: &Connection) -> anyhow::Result<i64> {
+        let row_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM memory_schema_version", [], |row| {
+                row.get(0)
+            })?;
+
+        if row_count != 1 {
+            anyhow::bail!(
+                "sqlite schema inconsistent: memory_schema_version must contain exactly one row"
+            );
+        }
+
+        let version: i64 = conn.query_row(
+            "SELECT version FROM memory_schema_version WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(version)
+    }
+
+    fn set_schema_version(conn: &Connection, version: i64) -> anyhow::Result<()> {
+        let now = Local::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO memory_schema_version (id, version, updated_at)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET
+                 version = excluded.version,
+                 updated_at = excluded.updated_at",
+            params![version, now],
+        )?;
+        Self::set_user_version(conn, version)?;
+        Ok(())
+    }
+
+    fn get_user_version(conn: &Connection) -> anyhow::Result<i64> {
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        Ok(version)
+    }
+
+    fn set_user_version(conn: &Connection, version: i64) -> anyhow::Result<()> {
+        conn.execute_batch(&format!("PRAGMA user_version = {version}"))?;
         Ok(())
     }
 
@@ -204,6 +822,38 @@ impl SqliteMemory {
             MemorySource::System => "system",
             MemorySource::Inferred => "inferred",
         }
+    }
+
+    fn layer_to_str(layer: &MemoryLayer) -> &'static str {
+        match layer {
+            MemoryLayer::Working => "working",
+            MemoryLayer::Episodic => "episodic",
+            MemoryLayer::Semantic => "semantic",
+            MemoryLayer::Procedural => "procedural",
+            MemoryLayer::Identity => "identity",
+        }
+    }
+
+    fn retention_tier_for_layer(layer: &MemoryLayer) -> &'static str {
+        match layer {
+            MemoryLayer::Working => "working",
+            MemoryLayer::Episodic => "episodic",
+            MemoryLayer::Semantic => "semantic",
+            MemoryLayer::Procedural => "procedural",
+            MemoryLayer::Identity => "identity",
+        }
+    }
+
+    fn retention_expiry_for_layer(layer: &MemoryLayer, occurred_at: &str) -> Option<String> {
+        let retention_days = match layer {
+            MemoryLayer::Working => Some(2),
+            MemoryLayer::Episodic => Some(30),
+            MemoryLayer::Semantic | MemoryLayer::Procedural | MemoryLayer::Identity => None,
+        }?;
+
+        chrono::DateTime::parse_from_rfc3339(occurred_at)
+            .ok()
+            .map(|ts| (ts + chrono::Duration::days(retention_days)).to_rfc3339())
     }
 
     fn str_to_source(source: &str) -> MemorySource {
@@ -237,6 +887,22 @@ impl SqliteMemory {
             MemorySource::ToolVerified => 3,
             MemorySource::System => 2,
             MemorySource::Inferred => 1,
+        }
+    }
+
+    fn compare_normalized_timestamps(incoming: &str, incumbent: &str) -> std::cmp::Ordering {
+        let incoming_normalized = chrono::DateTime::parse_from_rfc3339(incoming)
+            .ok()
+            .and_then(|parsed| parsed.timestamp_nanos_opt());
+        let incumbent_normalized = chrono::DateTime::parse_from_rfc3339(incumbent)
+            .ok()
+            .and_then(|parsed| parsed.timestamp_nanos_opt());
+
+        match (incoming_normalized, incumbent_normalized) {
+            (Some(incoming), Some(incumbent)) => incoming.cmp(&incumbent),
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
         }
     }
 
@@ -457,646 +1123,6 @@ impl SqliteMemory {
     fn name(&self) -> &str {
         "sqlite"
     }
-
-    async fn upsert_projection_entry(
-        &self,
-        key: &str,
-        content: &str,
-        category: MemoryCategory,
-    ) -> anyhow::Result<()> {
-        // Compute embedding (async, before lock)
-        let embedding_bytes = self
-            .get_or_compute_embedding(content)
-            .await?
-            .map(|emb| vector::vec_to_bytes(&emb));
-
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-        let now = Local::now().to_rfc3339();
-        let cat = Self::category_to_str(&category);
-        let id = Uuid::new_v4().to_string();
-
-        conn.execute(
-            "INSERT INTO memories (id, key, content, category, embedding, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(key) DO UPDATE SET
-                content = excluded.content,
-                category = excluded.category,
-                embedding = excluded.embedding,
-                updated_at = excluded.updated_at",
-            params![id, key, content, cat, embedding_bytes, now, now],
-        )?;
-
-        Ok(())
-    }
-
-    async fn search_projection(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        if query.trim().is_empty() || limit == 0 {
-            return Ok(Vec::new());
-        }
-
-        // Compute query embedding (async, before lock)
-        let query_embedding = self.get_or_compute_embedding(query).await?;
-
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-
-        // FTS5 BM25 keyword search
-        let search_limit = limit.saturating_mul(2);
-        let keyword_results = Self::fts5_search(&conn, query, search_limit).unwrap_or_default();
-
-        // Vector similarity search (if embeddings available)
-        let vector_results = if let Some(ref qe) = query_embedding {
-            Self::vector_search(&conn, qe, search_limit).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        // Hybrid merge
-        let merged = if vector_results.is_empty() {
-            // No embeddings — use keyword results only
-            keyword_results
-                .iter()
-                .map(|(id, score)| vector::ScoredResult {
-                    id: id.clone(),
-                    vector_score: None,
-                    keyword_score: Some(*score),
-                    final_score: *score,
-                })
-                .collect::<Vec<_>>()
-        } else {
-            vector::hybrid_merge(
-                &vector_results,
-                &keyword_results,
-                self.vector_weight,
-                self.keyword_weight,
-                limit,
-            )
-        };
-
-        // Fetch full entries for merged results
-        let mut results = Vec::new();
-        let mut by_id_stmt = conn
-            .prepare("SELECT id, key, content, category, created_at FROM memories WHERE id = ?1")?;
-        for scored in &merged {
-            if let Ok(entry) = by_id_stmt.query_row(params![scored.id], |row| {
-                Ok(MemoryEntry {
-                    id: row.get(0)?,
-                    key: row.get(1)?,
-                    content: row.get(2)?,
-                    category: Self::str_to_category(&row.get::<_, String>(3)?),
-                    timestamp: row.get(4)?,
-                    session_id: None,
-                    score: Some(f64::from(scored.final_score)),
-                })
-            }) {
-                results.push(entry);
-            }
-        }
-
-        // If hybrid returned nothing, fall back to LIKE search
-        if results.is_empty() {
-            let keywords: Vec<String> =
-                query.split_whitespace().map(|w| format!("%{w}%")).collect();
-            if !keywords.is_empty() {
-                let conditions: Vec<String> = keywords
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| {
-                        format!("(content LIKE ?{} OR key LIKE ?{})", i * 2 + 1, i * 2 + 2)
-                    })
-                    .collect();
-                let where_clause = conditions.join(" OR ");
-                let sql = format!(
-                    "SELECT id, key, content, category, created_at FROM memories
-                     WHERE {where_clause}
-                     ORDER BY updated_at DESC
-                     LIMIT ?{}",
-                    keywords.len() * 2 + 1
-                );
-                let mut stmt = conn.prepare(&sql)?;
-                let mut param_values: Vec<&dyn ToSql> = Vec::with_capacity(keywords.len() * 2 + 1);
-                for kw in &keywords {
-                    param_values.push(kw);
-                    param_values.push(kw);
-                }
-                #[allow(clippy::cast_possible_wrap)]
-                let limit_i64 = limit as i64;
-                param_values.push(&limit_i64);
-                let rows = stmt.query_map(param_values.as_slice(), |row| {
-                    Ok(MemoryEntry {
-                        id: row.get(0)?,
-                        key: row.get(1)?,
-                        content: row.get(2)?,
-                        category: Self::str_to_category(&row.get::<_, String>(3)?),
-                        timestamp: row.get(4)?,
-                        session_id: None,
-                        score: Some(1.0),
-                    })
-                })?;
-                for row in rows {
-                    results.push(row?);
-                }
-            }
-        }
-
-        results.truncate(limit);
-        Ok(results)
-    }
-
-    async fn fetch_projection_entry(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT id, key, content, category, created_at FROM memories WHERE key = ?1",
-        )?;
-
-        let mut rows = stmt.query_map(params![key], |row| {
-            Ok(MemoryEntry {
-                id: row.get(0)?,
-                key: row.get(1)?,
-                content: row.get(2)?,
-                category: Self::str_to_category(&row.get::<_, String>(3)?),
-                timestamp: row.get(4)?,
-                session_id: None,
-                score: None,
-            })
-        })?;
-
-        match rows.next() {
-            Some(Ok(entry)) => Ok(Some(entry)),
-            _ => Ok(None),
-        }
-    }
-
-    async fn list_projection_entries(
-        &self,
-        category: Option<&MemoryCategory>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-
-        let mut results = Vec::new();
-
-        let row_mapper = |row: &rusqlite::Row| -> rusqlite::Result<MemoryEntry> {
-            Ok(MemoryEntry {
-                id: row.get(0)?,
-                key: row.get(1)?,
-                content: row.get(2)?,
-                category: Self::str_to_category(&row.get::<_, String>(3)?),
-                timestamp: row.get(4)?,
-                session_id: None,
-                score: None,
-            })
-        };
-
-        if let Some(cat) = category {
-            let cat_str = Self::category_to_str(cat);
-            let mut stmt = conn.prepare(
-                "SELECT id, key, content, category, created_at FROM memories
-                 WHERE category = ?1 ORDER BY updated_at DESC",
-            )?;
-            let rows = stmt.query_map(params![cat_str], row_mapper)?;
-            for row in rows {
-                results.push(row?);
-            }
-        } else {
-            let mut stmt = conn.prepare(
-                "SELECT id, key, content, category, created_at FROM memories
-                 ORDER BY updated_at DESC",
-            )?;
-            let rows = stmt.query_map([], row_mapper)?;
-            for row in rows {
-                results.push(row?);
-            }
-        }
-
-        Ok(results)
-    }
-
-    async fn delete_projection_entry(&self, key: &str) -> anyhow::Result<bool> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-        let affected = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
-        Ok(affected > 0)
-    }
-
-    async fn count_projection_entries(&self) -> anyhow::Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?;
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        Ok(count as usize)
-    }
-
-    async fn health_check(&self) -> bool {
-        self.conn
-            .lock()
-            .map(|c| c.execute_batch("SELECT 1").is_ok())
-            .unwrap_or(false)
-    }
-
-    async fn append_event(&self, input: MemoryEventInput) -> anyhow::Result<MemoryEvent> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-
-        let event_id = Uuid::new_v4().to_string();
-        let ingested_at = Local::now().to_rfc3339();
-        let source = Self::source_to_str(&input.source);
-        let privacy = Self::privacy_to_str(&input.privacy_level);
-        let event_type = input.event_type.to_string();
-        let contradiction_penalty =
-            if matches!(input.event_type, MemoryEventType::ContradictionMarked) {
-                Self::contradiction_penalty(input.confidence, input.importance)
-            } else {
-                0.0
-            };
-
-        conn.execute(
-            "INSERT INTO memory_events (
-                event_id, entity_id, slot_key, event_type, value, source,
-                confidence, importance, privacy_level, occurred_at, ingested_at, supersedes_event_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL)",
-            params![
-                event_id,
-                input.entity_id,
-                input.slot_key,
-                event_type,
-                input.value,
-                source,
-                input.confidence,
-                input.importance,
-                privacy,
-                input.occurred_at,
-                ingested_at,
-            ],
-        )?;
-
-        if contradiction_penalty > 0.0 {
-            let doc_id = format!("{}:{}", input.entity_id, input.slot_key);
-            conn.execute(
-                "UPDATE retrieval_docs
-                 SET contradiction_penalty = MIN(1.0, contradiction_penalty + ?2)
-                 WHERE doc_id = ?1",
-                params![doc_id, contradiction_penalty],
-            )?;
-        }
-
-        let shadow_id = Uuid::new_v4().to_string();
-        let shadow_category = if input.slot_key.starts_with("persona/") {
-            "persona"
-        } else {
-            match input.source {
-                MemorySource::ExplicitUser | MemorySource::ToolVerified => "core",
-                MemorySource::System => "daily",
-                MemorySource::Inferred => "conversation",
-            }
-        };
-
-        conn.execute(
-            "INSERT INTO memories (id, key, content, category, embedding, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?5)
-             ON CONFLICT(key) DO UPDATE SET
-                content = excluded.content,
-                category = excluded.category,
-                updated_at = excluded.updated_at",
-            params![
-                shadow_id,
-                input.slot_key,
-                input.value,
-                shadow_category,
-                input.occurred_at,
-            ],
-        )?;
-
-        let mut incumbent_stmt = conn.prepare(
-            "SELECT winner_event_id, source, updated_at FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
-        )?;
-        let current: Option<(String, String, String)> = incumbent_stmt
-            .query_row(params![input.entity_id, input.slot_key], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
-            .ok();
-
-        let should_replace = if let Some((_, current_source, current_updated_at)) = current {
-            let current_priority = Self::source_priority(&Self::str_to_source(&current_source));
-            let incoming_priority = Self::source_priority(&input.source);
-            incoming_priority > current_priority
-                || (incoming_priority == current_priority
-                    && input.occurred_at >= current_updated_at)
-        } else {
-            true
-        };
-
-        if should_replace {
-            conn.execute(
-                "INSERT INTO belief_slots (
-                    entity_id, slot_key, value, status, winner_event_id,
-                    source, confidence, importance, privacy_level, updated_at
-                ) VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7, ?8, ?9)
-                ON CONFLICT(entity_id, slot_key) DO UPDATE SET
-                    value = excluded.value,
-                    status = excluded.status,
-                    winner_event_id = excluded.winner_event_id,
-                    source = excluded.source,
-                    confidence = excluded.confidence,
-                    importance = excluded.importance,
-                    privacy_level = excluded.privacy_level,
-                    updated_at = excluded.updated_at",
-                params![
-                    input.entity_id,
-                    input.slot_key,
-                    input.value,
-                    event_id,
-                    source,
-                    input.confidence,
-                    input.importance,
-                    privacy,
-                    input.occurred_at,
-                ],
-            )?;
-
-            let doc_id = format!("{}:{}", input.entity_id, input.slot_key);
-            conn.execute(
-                "INSERT INTO retrieval_docs (
-                    doc_id, entity_id, slot_key, text_body, recency_score,
-                    importance, reliability, contradiction_penalty, visibility, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, 1.0, ?5, ?6, ?7, ?8, ?9)
-                ON CONFLICT(doc_id) DO UPDATE SET
-                    text_body = excluded.text_body,
-                    recency_score = excluded.recency_score,
-                    importance = excluded.importance,
-                    reliability = excluded.reliability,
-                    contradiction_penalty = excluded.contradiction_penalty,
-                    visibility = excluded.visibility,
-                    updated_at = excluded.updated_at",
-                params![
-                    doc_id,
-                    input.entity_id,
-                    input.slot_key,
-                    input.value,
-                    input.importance,
-                    input.confidence,
-                    contradiction_penalty,
-                    privacy,
-                    input.occurred_at,
-                ],
-            )?;
-        }
-
-        Ok(MemoryEvent {
-            event_id,
-            entity_id: input.entity_id,
-            slot_key: input.slot_key,
-            event_type: input.event_type,
-            value: input.value,
-            source: input.source,
-            confidence: input.confidence,
-            importance: input.importance,
-            privacy_level: input.privacy_level,
-            occurred_at: input.occurred_at,
-            ingested_at,
-        })
-    }
-
-    async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
-        query.enforce_policy()?;
-
-        if query.query.trim().is_empty() || query.limit == 0 {
-            return Ok(Vec::new());
-        }
-
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-
-        let like_query = format!("%{}%", query.query);
-        #[allow(clippy::cast_possible_wrap)]
-        let limit_i64 = query.limit as i64;
-        let mut stmt = conn.prepare(
-            "SELECT entity_id, slot_key, text_body, reliability, importance, visibility, updated_at,
-                    (0.35 * 1.0 + 0.25 * CASE WHEN text_body LIKE ?2 THEN 1.0 ELSE 0.0 END +
-                     0.20 * (
-                        CASE
-                            WHEN slot_key LIKE 'trend.%'
-                              OR slot_key LIKE 'trend/%'
-                              OR slot_key LIKE '%.trend.%'
-                              OR slot_key LIKE '%/trend/%'
-                            THEN
-                                CASE
-                                    WHEN COALESCE(julianday('now') - julianday(updated_at), 0.0) <= ?3
-                                    THEN recency_score
-                                    ELSE MAX(
-                                        0.0,
-                                        recency_score - (
-                                            (COALESCE(julianday('now') - julianday(updated_at), 0.0) - ?3) / ?4
-                                        )
-                                    )
-                                END
-                            ELSE recency_score
-                        END
-                     ) + 0.10 * importance + 0.10 * reliability - contradiction_penalty) AS final_score
-             FROM retrieval_docs
-             WHERE entity_id = ?1
-               AND visibility != 'secret'
-               AND text_body LIKE ?2
-             ORDER BY final_score DESC, updated_at DESC, doc_id ASC
-             LIMIT ?5",
-        )?;
-
-        let rows = stmt.query_map(
-            params![
-                query.entity_id,
-                like_query,
-                Self::TREND_TTL_DAYS,
-                Self::TREND_DECAY_WINDOW_DAYS,
-                limit_i64
-            ],
-            |row| {
-                let visibility: String = row.get(5)?;
-                Ok(MemoryRecallItem {
-                    entity_id: row.get(0)?,
-                    slot_key: row.get(1)?,
-                    value: row.get(2)?,
-                    source: MemorySource::System,
-                    confidence: row.get(3)?,
-                    importance: row.get(4)?,
-                    privacy_level: Self::str_to_privacy(&visibility),
-                    score: row.get(7)?,
-                    occurred_at: row.get(6)?,
-                })
-            },
-        )?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
-    async fn resolve_slot(
-        &self,
-        entity_id: &str,
-        slot_key: &str,
-    ) -> anyhow::Result<Option<BeliefSlot>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT value, source, confidence, importance, privacy_level, updated_at
-             FROM belief_slots
-             WHERE entity_id = ?1 AND slot_key = ?2 AND status = 'active'",
-        )?;
-
-        let row = stmt
-            .query_row(params![entity_id, slot_key], |row| {
-                Ok(BeliefSlot {
-                    entity_id: entity_id.to_string(),
-                    slot_key: slot_key.to_string(),
-                    value: row.get(0)?,
-                    source: Self::str_to_source(&row.get::<_, String>(1)?),
-                    confidence: row.get(2)?,
-                    importance: row.get(3)?,
-                    privacy_level: Self::str_to_privacy(&row.get::<_, String>(4)?),
-                    updated_at: row.get(5)?,
-                })
-            })
-            .ok();
-        Ok(row)
-    }
-
-    async fn forget_slot(
-        &self,
-        entity_id: &str,
-        slot_key: &str,
-        mode: ForgetMode,
-        reason: &str,
-    ) -> anyhow::Result<ForgetOutcome> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-        let now = Local::now().to_rfc3339();
-        let phase = match mode {
-            ForgetMode::Soft => "soft",
-            ForgetMode::Hard => "hard",
-            ForgetMode::Tombstone => "tombstone",
-        };
-
-        conn.execute(
-            "INSERT INTO deletion_ledger (
-                ledger_id, entity_id, target_slot_key, phase, reason, requested_by, executed_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, 'memory_forget', ?6)",
-            params![
-                Uuid::new_v4().to_string(),
-                entity_id,
-                slot_key,
-                phase,
-                reason,
-                now
-            ],
-        )?;
-
-        let doc_id = format!("{entity_id}:{slot_key}");
-        let applied = match mode {
-            ForgetMode::Soft => {
-                let affected_slot = conn.execute(
-                    "UPDATE belief_slots SET status = 'soft_deleted', updated_at = ?3
-                     WHERE entity_id = ?1 AND slot_key = ?2",
-                    params![entity_id, slot_key, now],
-                )?;
-                let _ = conn.execute(
-                    "UPDATE retrieval_docs SET visibility = 'secret', updated_at = ?2 WHERE doc_id = ?1",
-                    params![doc_id, now],
-                )?;
-                affected_slot > 0
-            }
-            ForgetMode::Hard => {
-                let affected_slot = conn.execute(
-                    "DELETE FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
-                    params![entity_id, slot_key],
-                )?;
-                let _ = conn.execute(
-                    "DELETE FROM retrieval_docs WHERE doc_id = ?1",
-                    params![doc_id],
-                )?;
-                affected_slot > 0
-            }
-            ForgetMode::Tombstone => {
-                conn.execute(
-                    "INSERT INTO belief_slots (
-                        entity_id, slot_key, value, status, winner_event_id, source,
-                        confidence, importance, privacy_level, updated_at
-                    ) VALUES (?1, ?2, '', 'tombstoned', ?3, 'system', 1.0, 1.0, 'secret', ?4)
-                    ON CONFLICT(entity_id, slot_key) DO UPDATE SET
-                        value = excluded.value,
-                        status = excluded.status,
-                        winner_event_id = excluded.winner_event_id,
-                        source = excluded.source,
-                        confidence = excluded.confidence,
-                        importance = excluded.importance,
-                        privacy_level = excluded.privacy_level,
-                        updated_at = excluded.updated_at",
-                    params![entity_id, slot_key, Uuid::new_v4().to_string(), now],
-                )?;
-                let _ = conn.execute(
-                    "DELETE FROM retrieval_docs WHERE doc_id = ?1",
-                    params![doc_id],
-                )?;
-                true
-            }
-        };
-
-        Ok(ForgetOutcome {
-            entity_id: entity_id.to_string(),
-            slot_key: slot_key.to_string(),
-            mode,
-            applied,
-        })
-    }
-
-    async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-
-        let count: i64 = if let Some(entity) = entity_id {
-            conn.query_row(
-                "SELECT COUNT(*) FROM memory_events WHERE entity_id = ?1",
-                params![entity],
-                |row| row.get(0),
-            )?
-        } else {
-            conn.query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))?
-        };
-
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        Ok(count as usize)
-    }
 }
 
 #[async_trait]
@@ -1145,12 +1171,62 @@ mod tests {
     use super::*;
     use crate::memory::{MemoryEventType, MemoryInferenceEvent};
     use chrono::{Duration, Utc};
+    use rusqlite::Connection;
+    use std::fs;
     use tempfile::TempDir;
 
     fn temp_sqlite() -> (TempDir, SqliteMemory) {
         let tmp = TempDir::new().unwrap();
         let mem = SqliteMemory::new(tmp.path()).unwrap();
         (tmp, mem)
+    }
+
+    fn legacy_db_path(tmp: &TempDir) -> PathBuf {
+        tmp.path().join("memory").join("brain.db")
+    }
+
+    fn seed_legacy_v1_db(tmp: &TempDir) {
+        let db_path = legacy_db_path(tmp);
+        fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let conn = Connection::open(db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE memories (
+                id          TEXT PRIMARY KEY,
+                key         TEXT NOT NULL UNIQUE,
+                content     TEXT NOT NULL,
+                category    TEXT NOT NULL DEFAULT 'core',
+                embedding   BLOB,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+
+            CREATE TABLE memory_events (
+                event_id TEXT PRIMARY KEY,
+                entity_id TEXT NOT NULL,
+                slot_key TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                value TEXT NOT NULL,
+                source TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                importance REAL NOT NULL,
+                privacy_level TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                ingested_at TEXT NOT NULL,
+                supersedes_event_id TEXT
+            );
+
+            INSERT INTO memories (id, key, content, category, embedding, created_at, updated_at)
+            VALUES ('m1', 'legacy_key', 'legacy content', 'core', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+
+            INSERT INTO memory_events (
+                event_id, entity_id, slot_key, event_type, value, source,
+                confidence, importance, privacy_level, occurred_at, ingested_at, supersedes_event_id
+            ) VALUES (
+                'e1', 'tenant_1', 'legacy.slot', 'fact_added', 'legacy event', 'system',
+                0.8, 0.5, 'private', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL
+            );",
+        )
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1488,6 +1564,226 @@ mod tests {
         // Check that embedding column exists by querying it
         let result = conn.execute_batch("SELECT embedding FROM memories LIMIT 0");
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn sqlite_schema_migrates_from_v1_to_v2() {
+        let tmp = TempDir::new().unwrap();
+        seed_legacy_v1_db(&tmp);
+
+        let mem = SqliteMemory::new(tmp.path()).unwrap();
+        let legacy_projection = mem.fetch_projection_entry("legacy_key").await.unwrap();
+        assert!(
+            legacy_projection.is_some(),
+            "legacy row should remain readable"
+        );
+        assert_eq!(legacy_projection.unwrap().content, "legacy content");
+
+        let conn = mem.conn.lock().unwrap();
+        let migration_event: (String, Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT layer, provenance_source_class, provenance_reference, provenance_evidence_uri FROM memory_events WHERE event_id = 'e1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        let (layer, source_class, reference, evidence_uri) = migration_event;
+        assert_eq!(
+            layer, "working",
+            "legacy events should default layer to working"
+        );
+        assert!(
+            source_class.is_none(),
+            "legacy provenance source should be null"
+        );
+        assert!(
+            reference.is_none(),
+            "legacy provenance reference should be null"
+        );
+        assert!(
+            evidence_uri.is_none(),
+            "legacy provenance evidence URI should be null"
+        );
+        let schema_version: i64 = conn
+            .query_row(
+                "SELECT version FROM memory_schema_version WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(schema_version, SqliteMemory::MEMORY_SCHEMA_V3);
+
+        let columns = SqliteMemory::table_columns(&conn, "memory_events").unwrap();
+        for expected_column in SqliteMemory::MEMORY_EVENTS_V2_COLUMNS {
+            assert!(
+                columns.contains(&expected_column.to_string()),
+                "missing migrated column: {expected_column}"
+            );
+        }
+        for expected_column in SqliteMemory::MEMORY_EVENTS_V3_COLUMNS {
+            assert!(
+                columns.contains(&expected_column.to_string()),
+                "missing migrated column: {expected_column}"
+            );
+        }
+
+        let memory_columns = SqliteMemory::table_columns(&conn, "memories").unwrap();
+        for expected_column in SqliteMemory::MEMORIES_V3_COLUMNS {
+            assert!(
+                memory_columns.contains(&expected_column.to_string()),
+                "missing migrated memories column: {expected_column}"
+            );
+        }
+
+        let retrieval_columns = SqliteMemory::table_columns(&conn, "retrieval_docs").unwrap();
+        for expected_column in SqliteMemory::RETRIEVAL_DOCS_V3_COLUMNS {
+            assert!(
+                retrieval_columns.contains(&expected_column.to_string()),
+                "missing migrated retrieval_docs column: {expected_column}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_schema_rollback_guard() {
+        let tmp = TempDir::new().unwrap();
+        seed_legacy_v1_db(&tmp);
+
+        let db_path = legacy_db_path(&tmp);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE memory_schema_version (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                version INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO memory_schema_version (id, version, updated_at)
+            VALUES (1, 2, '2024-01-01T00:00:00Z');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let err = SqliteMemory::new(tmp.path())
+            .err()
+            .expect("expected migration consistency error")
+            .to_string();
+        assert!(
+            err.contains(
+                "sqlite schema inconsistent: memory_schema_version=2 but memory_events missing columns"
+            ),
+            "unexpected error: {err}"
+        );
+
+        let verify_conn = Connection::open(&db_path).unwrap();
+        let memories_count: i64 = verify_conn
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            memories_count, 1,
+            "rollback guard should preserve existing rows"
+        );
+        let events_count: i64 = verify_conn
+            .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            events_count, 1,
+            "rollback guard should preserve legacy events"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_schema_rejects_inconsistent_state() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = legacy_db_path(&tmp);
+        fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+
+        let conn = Connection::open(db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE memory_events (
+                event_id TEXT PRIMARY KEY,
+                entity_id TEXT NOT NULL,
+                slot_key TEXT NOT NULL,
+                layer TEXT NOT NULL DEFAULT 'working',
+                event_type TEXT NOT NULL,
+                value TEXT NOT NULL,
+                source TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                importance REAL NOT NULL,
+                privacy_level TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                ingested_at TEXT NOT NULL,
+                supersedes_event_id TEXT
+            );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let err = SqliteMemory::new(tmp.path())
+            .err()
+            .expect("expected migration inconsistency error")
+            .to_string();
+        assert!(
+            err.contains(
+                "sqlite schema inconsistent: memory_events has partial v2 columns without memory_schema_version"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_schema_syncs_user_version_marker() {
+        let tmp = TempDir::new().unwrap();
+        seed_legacy_v1_db(&tmp);
+
+        let mem = SqliteMemory::new(tmp.path()).unwrap();
+        let conn = mem.conn.lock().unwrap();
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(user_version, SqliteMemory::MEMORY_SCHEMA_V3);
+    }
+
+    #[tokio::test]
+    async fn sqlite_schema_rejects_user_version_mismatch() {
+        let tmp = TempDir::new().unwrap();
+        seed_legacy_v1_db(&tmp);
+
+        {
+            let mem = SqliteMemory::new(tmp.path()).unwrap();
+            let conn = mem.conn.lock().unwrap();
+            conn.execute_batch("PRAGMA user_version = 1").unwrap();
+        }
+
+        let err = SqliteMemory::new(tmp.path())
+            .err()
+            .expect("expected user_version mismatch error")
+            .to_string();
+        assert!(
+            err.contains(
+                "sqlite schema inconsistent: memory_schema_version=3 but PRAGMA user_version=1"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_schema_rejects_unsupported_user_version() {
+        let tmp = TempDir::new().unwrap();
+        seed_legacy_v1_db(&tmp);
+
+        let db_path = legacy_db_path(&tmp);
+        let conn = Connection::open(db_path).unwrap();
+        conn.execute_batch("PRAGMA user_version = 999").unwrap();
+        drop(conn);
+
+        let err = SqliteMemory::new(tmp.path())
+            .err()
+            .expect("expected unsupported user_version error")
+            .to_string();
+        assert!(
+            err.contains("sqlite schema version unsupported: user_version=999"),
+            "unexpected error: {err}"
+        );
     }
 
     // ── FTS5 sync trigger tests ──────────────────────────────────

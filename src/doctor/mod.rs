@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::memory::CapabilitySupport;
 use crate::security::ExternalActionExecution;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -7,6 +8,7 @@ const DAEMON_STALE_SECONDS: i64 = 30;
 const SCHEDULER_STALE_SECONDS: i64 = 120;
 const CHANNEL_STALE_SECONDS: i64 = 300;
 
+#[allow(clippy::too_many_lines)]
 pub fn run(config: &Config) -> Result<()> {
     let state_file = crate::daemon::state_file_path(config);
     if !state_file.exists() {
@@ -112,6 +114,11 @@ pub fn run(config: &Config) -> Result<()> {
         println!("    {line}");
     }
 
+    println!("  Memory rollout:");
+    for line in memory_rollout_lines(config, &snapshot) {
+        println!("    {line}");
+    }
+
     if let Some(runtime_note) =
         crate::runtime::runtime_kind_contract_note(config.runtime.kind.as_str())
     {
@@ -185,6 +192,80 @@ fn backend_supports_autonomy_lifecycle_metrics(backend: &str) -> bool {
     matches!(backend, "log" | "prometheus" | "otel")
 }
 
+fn memory_rollout_lines(config: &Config, snapshot: &serde_json::Value) -> Vec<String> {
+    let mut lines = Vec::with_capacity(5);
+    let backend = config.memory.backend.as_str();
+    let capability = crate::memory::capability_matrix_for_backend(backend);
+
+    let consolidation = if backend != "none" && config.memory.auto_save {
+        "on"
+    } else {
+        "off"
+    };
+    let conflict = if backend != "none" && config.autonomy.rollout.contradiction_weighting_enabled {
+        "on"
+    } else {
+        "off"
+    };
+    let revocation = capability.map_or("unknown", |matrix| {
+        capability_support_label(matrix.forget_tombstone)
+    });
+    let governance = capability.map_or("unknown", |matrix| {
+        capability_support_label(matrix.forget_hard)
+    });
+
+    lines.push(format!(
+        "memory backend: {backend} (consolidation={consolidation}, conflict={conflict})"
+    ));
+    lines.push(format!(
+        "lifecycle support: revocation={revocation}, governance={governance}"
+    ));
+
+    if let Some(rollout) = snapshot
+        .get("memory_rollout")
+        .and_then(serde_json::Value::as_object)
+    {
+        let consolidation_health = rollout
+            .get("consolidation")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let conflict_health = rollout
+            .get("conflict")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let revocation_health = rollout
+            .get("revocation")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let governance_health = rollout
+            .get("governance")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+
+        lines.push(format!(
+            "daemon lifecycle health: consolidation={consolidation_health}, conflict={conflict_health}, revocation={revocation_health}, governance={governance_health}"
+        ));
+    } else {
+        lines.push(
+            "daemon lifecycle health: missing config in state file; non-fatal, using static capability fallback".to_string(),
+        );
+        lines.push(
+            "action: restart daemon after rollout update to surface consolidation/conflict/revocation/governance telemetry"
+                .to_string(),
+        );
+    }
+
+    lines
+}
+
+fn capability_support_label(support: CapabilitySupport) -> &'static str {
+    match support {
+        CapabilitySupport::Supported => "supported",
+        CapabilitySupport::Degraded => "degraded",
+        CapabilitySupport::Unsupported => "unsupported",
+    }
+}
+
 fn parse_rfc3339(raw: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(raw)
         .ok()
@@ -193,7 +274,7 @@ fn parse_rfc3339(raw: &str) -> Option<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
-    use super::autonomy_governance_lines;
+    use super::{autonomy_governance_lines, memory_rollout_lines};
     use crate::config::Config;
 
     #[test]
@@ -221,5 +302,48 @@ mod tests {
         assert!(lines.iter().any(|line| {
             line.contains("autonomy lifecycle metrics") && line.contains("enabled")
         }));
+    }
+
+    #[test]
+    fn doctor_reports_memory_rollout() {
+        let mut config = Config::default();
+        config.memory.backend = "sqlite".into();
+        config.memory.auto_save = true;
+        config.autonomy.rollout.contradiction_weighting_enabled = true;
+
+        let snapshot = serde_json::json!({
+            "memory_rollout": {
+                "consolidation": "healthy",
+                "conflict": "healthy",
+                "revocation": "healthy",
+                "governance": "healthy"
+            }
+        });
+
+        let lines = memory_rollout_lines(&config, &snapshot);
+
+        assert!(lines.iter().any(|line| {
+            line.contains("memory backend: sqlite") && line.contains("consolidation=on")
+        }));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("revocation=supported")
+                && line.contains("governance=supported")));
+        assert!(lines.iter().any(|line| {
+            line.contains("daemon lifecycle health") && line.contains("consolidation=healthy")
+        }));
+    }
+
+    #[test]
+    fn doctor_reports_memory_rollout_missing_config() {
+        let config = Config::default();
+        let snapshot = serde_json::json!({});
+
+        let lines = memory_rollout_lines(&config, &snapshot);
+
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("missing config") && line.contains("non-fatal")));
+        assert!(lines.iter().any(|line| line.contains("action:")));
     }
 }

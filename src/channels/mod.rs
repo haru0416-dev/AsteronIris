@@ -22,9 +22,13 @@ pub use whatsapp::WhatsAppChannel;
 
 use crate::auth::AuthBroker;
 use crate::config::Config;
-use crate::memory::{self, Memory};
+use crate::memory::traits::MemoryLayer;
+use crate::memory::{
+    self, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
+};
 use crate::providers::{self, Provider};
 use crate::security::external_content::{prepare_external_content, ExternalAction};
+use crate::security::policy::TenantPolicyContext;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use std::sync::Arc;
@@ -51,6 +55,30 @@ fn apply_external_ingress_policy(source: &str, text: &str) -> ExternalIngressPol
         persisted_summary: prepared.persisted_summary.as_memory_value(),
         blocked: matches!(prepared.action, ExternalAction::Block),
     }
+}
+
+const CHANNEL_AUTOSAVE_ENTITY_ID: &str = "default";
+
+fn channel_runtime_policy_context() -> TenantPolicyContext {
+    TenantPolicyContext::disabled()
+}
+
+fn channel_autosave_input(channel: &str, sender: &str, summary: String) -> MemoryEventInput {
+    MemoryEventInput::new(
+        CHANNEL_AUTOSAVE_ENTITY_ID,
+        format!("external.channel.{channel}.{sender}"),
+        MemoryEventType::FactAdded,
+        summary,
+        MemorySource::ExplicitUser,
+        PrivacyLevel::Private,
+    )
+    .with_layer(MemoryLayer::Working)
+    .with_confidence(0.95)
+    .with_importance(0.6)
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::ExplicitUser,
+        "channels.autosave.ingress",
+    ))
 }
 
 fn spawn_supervised_listener(
@@ -691,20 +719,18 @@ pub async fn start_channels(config: Config) -> Result<()> {
 
         // Auto-save to memory
         if config.memory.auto_save {
-            let _ = mem
-                .append_event(
-                    crate::memory::MemoryEventInput::new(
-                        "default",
-                        format!("external.channel.{}.{}", msg.channel, msg.sender),
-                        crate::memory::MemoryEventType::FactAdded,
+            let policy_context = channel_runtime_policy_context();
+            if let Err(error) = policy_context.enforce_recall_scope(CHANNEL_AUTOSAVE_ENTITY_ID) {
+                tracing::warn!(error, "channel autosave skipped due to policy context");
+            } else {
+                let _ = mem
+                    .append_event(channel_autosave_input(
+                        &msg.channel,
+                        &msg.sender,
                         ingress.persisted_summary.clone(),
-                        crate::memory::MemorySource::ExplicitUser,
-                        crate::memory::PrivacyLevel::Private,
-                    )
-                    .with_confidence(0.95)
-                    .with_importance(0.6),
-                )
-                .await;
+                    ))
+                    .await;
+            }
         }
 
         if ingress.blocked {

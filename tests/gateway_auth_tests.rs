@@ -1,12 +1,11 @@
 use asteroniris::config::{Config, GatewayDefenseMode, ObservabilityConfig, WebhookConfig};
-use asteroniris::gateway::run_gateway;
+use asteroniris::gateway::run_gateway_with_listener;
 use asteroniris::observability::create_observer;
 use asteroniris::observability::multi::MultiObserver;
 use asteroniris::observability::traits::{Observer, ObserverEvent, ObserverMetric};
 use asteroniris::security::pairing::PairingGuard;
 use reqwest::StatusCode;
 use serde_json::Value;
-use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,10 +25,17 @@ impl GatewayTestServer {
         defense_kill_switch: bool,
     ) -> Self {
         let workspace = TempDir::new().expect("temp workspace should be created");
-        let port = reserve_local_port();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("ephemeral gateway listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("ephemeral gateway listener should expose local address")
+            .port();
 
         let mut config = Config::default();
         config.workspace_dir = workspace.path().to_path_buf();
+        config.config_path = workspace.path().join("config.toml");
         config.default_provider = Some("openrouter".to_string());
         config.api_key = Some("sk-test-key".to_string());
         config.memory.backend = "none".to_string();
@@ -44,7 +50,8 @@ impl GatewayTestServer {
         });
 
         let host = "127.0.0.1".to_string();
-        let handle = tokio::spawn(async move { run_gateway(&host, port, config).await });
+        let handle =
+            tokio::spawn(async move { run_gateway_with_listener(&host, listener, config).await });
 
         wait_until_gateway_ready(port).await;
 
@@ -62,21 +69,13 @@ impl Drop for GatewayTestServer {
     }
 }
 
-fn reserve_local_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("port reservation should bind")
-        .local_addr()
-        .expect("reserved listener should have local address")
-        .port()
-}
-
 async fn wait_until_gateway_ready(port: u16) {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(200))
         .build()
         .expect("reqwest client should be built");
 
-    for _ in 0..80 {
+    for _ in 0..200 {
         let health = client
             .get(format!("http://127.0.0.1:{port}/health"))
             .send()

@@ -61,7 +61,7 @@ pub fn run_if_due(config: &MemoryConfig, workspace_dir: &Path) -> Result<()> {
         )?,
     };
 
-    let _ = prune_v2_lifecycle_rows(workspace_dir, config.conversation_retention_days)?;
+    let _ = prune_v2_lifecycle_rows(workspace_dir, config)?;
 
     write_state(workspace_dir, &report)?;
 
@@ -349,8 +349,22 @@ fn prune_conversation_rows(workspace_dir: &Path, retention_days: u32) -> Result<
     Ok(u64::try_from(affected).unwrap_or(0))
 }
 
-fn prune_v2_lifecycle_rows(workspace_dir: &Path, retention_days: u32) -> Result<u64> {
-    if retention_days == 0 {
+#[allow(clippy::too_many_lines)]
+fn prune_v2_lifecycle_rows(workspace_dir: &Path, config: &MemoryConfig) -> Result<u64> {
+    let working_retention = config.layer_retention_days("working");
+    let episodic_retention = config.layer_retention_days("episodic");
+    let semantic_retention = config.layer_retention_days("semantic");
+    let procedural_retention = config.layer_retention_days("procedural");
+    let identity_retention = config.layer_retention_days("identity");
+    let ledger_retention = config.ledger_retention_or_default();
+
+    if working_retention == 0
+        && episodic_retention == 0
+        && semantic_retention == 0
+        && procedural_retention == 0
+        && identity_retention == 0
+        && ledger_retention == 0
+    {
         return Ok(0);
     }
 
@@ -360,55 +374,88 @@ fn prune_v2_lifecycle_rows(workspace_dir: &Path, retention_days: u32) -> Result<
     }
 
     let conn = Connection::open(db_path)?;
-    let cutoff = (Local::now() - Duration::days(i64::from(retention_days))).to_rfc3339();
     let mut affected_total = 0_u64;
 
-    let hard_deleted = match conn.execute(
-        "UPDATE belief_slots SET status = 'hard_deleted', updated_at = ?1
-         WHERE status = 'soft_deleted' AND updated_at < ?1",
-        params![cutoff],
-    ) {
-        Ok(n) => n,
-        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
-            if message.contains("no such table") =>
-        {
-            0
-        }
-        Err(err) => return Err(err.into()),
-    };
-    affected_total += u64::try_from(hard_deleted).unwrap_or(0);
+    let layer_purge_ops = [
+        ("working", working_retention),
+        ("episodic", episodic_retention),
+        ("semantic", semantic_retention),
+        ("procedural", procedural_retention),
+        ("identity", identity_retention),
+    ];
 
-    let tombstone_purge = match conn.execute(
-        "DELETE FROM belief_slots WHERE status = 'tombstoned' AND updated_at < ?1",
-        params![cutoff],
-    ) {
-        Ok(n) => n,
-        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
-            if message.contains("no such table") =>
-        {
-            0
+    for (layer, retention_days) in layer_purge_ops.iter().copied() {
+        if retention_days == 0 {
+            continue;
         }
-        Err(err) => return Err(err.into()),
-    };
-    affected_total += u64::try_from(tombstone_purge).unwrap_or(0);
 
-    let hidden_docs = match conn.execute(
-        "DELETE FROM retrieval_docs WHERE visibility = 'secret' AND updated_at < ?1",
-        params![cutoff],
-    ) {
-        Ok(n) => n,
-        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
-            if message.contains("no such table") =>
-        {
-            0
-        }
-        Err(err) => return Err(err.into()),
-    };
-    affected_total += u64::try_from(hidden_docs).unwrap_or(0);
+        let cutoff = (Local::now() - Duration::days(i64::from(retention_days))).to_rfc3339();
 
+        let hard_deleted = match conn.execute(
+            "UPDATE belief_slots
+             SET status = 'hard_deleted', updated_at = ?1
+             WHERE status = 'soft_deleted'
+               AND updated_at < ?1
+               AND EXISTS (
+                   SELECT 1 FROM memories
+                   WHERE memories.key = belief_slots.slot_key
+                     AND memories.layer = ?2
+               )",
+            params![cutoff, layer],
+        ) {
+            Ok(n) => n,
+            Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                if message.contains("no such table") =>
+            {
+                0
+            }
+            Err(err) => return Err(err.into()),
+        };
+        affected_total += u64::try_from(hard_deleted).unwrap_or(0);
+
+        let tombstone_purge = match conn.execute(
+            "DELETE FROM belief_slots
+             WHERE status = 'tombstoned'
+               AND updated_at < ?1
+               AND EXISTS (
+                   SELECT 1 FROM memories
+                   WHERE memories.key = belief_slots.slot_key
+                     AND memories.layer = ?2
+               )",
+            params![cutoff, layer],
+        ) {
+            Ok(n) => n,
+            Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                if message.contains("no such table") =>
+            {
+                0
+            }
+            Err(err) => return Err(err.into()),
+        };
+        affected_total += u64::try_from(tombstone_purge).unwrap_or(0);
+
+        let hidden_docs = match conn.execute(
+            "DELETE FROM retrieval_docs
+             WHERE visibility = 'secret'
+               AND layer = ?2
+               AND updated_at < ?1",
+            params![cutoff, layer],
+        ) {
+            Ok(n) => n,
+            Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                if message.contains("no such table") =>
+            {
+                0
+            }
+            Err(err) => return Err(err.into()),
+        };
+        affected_total += u64::try_from(hidden_docs).unwrap_or(0);
+    }
+
+    let ledger_cutoff = (Local::now() - Duration::days(i64::from(ledger_retention))).to_rfc3339();
     let old_ledger = match conn.execute(
         "DELETE FROM deletion_ledger WHERE executed_at < ?1",
-        params![cutoff],
+        params![ledger_cutoff],
     ) {
         Ok(n) => n,
         Err(rusqlite::Error::SqliteFailure(_, Some(message)))
@@ -484,6 +531,7 @@ fn split_name(filename: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::traits::MemoryLayer;
     use crate::memory::{
         Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
     };
@@ -662,6 +710,159 @@ mod tests {
                 .unwrap()
                 .is_some(),
             "core memory should remain"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_hygiene_per_layer_retention() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path();
+
+        let memory = SqliteMemory::new(workspace).unwrap();
+        let old = (Local::now() - Duration::days(40)).to_rfc3339();
+
+        memory
+            .append_event(
+                MemoryEventInput::new(
+                    "default",
+                    "working_slot",
+                    MemoryEventType::FactAdded,
+                    "working retention case",
+                    MemorySource::Inferred,
+                    PrivacyLevel::Private,
+                )
+                .with_layer(MemoryLayer::Working)
+                .with_occurred_at(old.clone()),
+            )
+            .await
+            .unwrap();
+
+        memory
+            .append_event(
+                MemoryEventInput::new(
+                    "default",
+                    "semantic_slot",
+                    MemoryEventType::FactAdded,
+                    "semantic retention case",
+                    MemorySource::Inferred,
+                    PrivacyLevel::Private,
+                )
+                .with_layer(MemoryLayer::Semantic)
+                .with_occurred_at(old.clone()),
+            )
+            .await
+            .unwrap();
+
+        drop(memory);
+
+        let db_path = workspace.join("memory").join("brain.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE belief_slots SET status = 'soft_deleted', updated_at = ?1 WHERE entity_id = ?2 AND slot_key = ?3",
+            params![old, "default", "working_slot"],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE belief_slots SET status = 'soft_deleted', updated_at = ?1 WHERE entity_id = ?2 AND slot_key = ?3",
+            params![old, "default", "semantic_slot"],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE retrieval_docs SET visibility = 'secret', updated_at = ?1 WHERE doc_id = ?2",
+            params![old, "default:working_slot"],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE retrieval_docs SET visibility = 'secret', updated_at = ?1 WHERE doc_id = ?2",
+            params![old, "default:semantic_slot"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO deletion_ledger (
+                ledger_id, entity_id, target_slot_key, phase, reason, requested_by, executed_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                "ledger-old-1",
+                "default",
+                "working_slot",
+                "soft",
+                "test",
+                "test",
+                old,
+            ],
+        )
+        .unwrap();
+
+        drop(conn);
+
+        let mut cfg = default_cfg();
+        cfg.archive_after_days = 0;
+        cfg.purge_after_days = 0;
+        cfg.conversation_retention_days = 365;
+        cfg.layer_retention_working_days = Some(1);
+        cfg.layer_retention_semantic_days = Some(365);
+        cfg.layer_retention_episodic_days = Some(1);
+        cfg.layer_retention_procedural_days = Some(1);
+        cfg.layer_retention_identity_days = Some(1);
+        cfg.ledger_retention_days = Some(1);
+
+        run_if_due(&cfg, workspace).unwrap();
+
+        let conn = Connection::open(&db_path).unwrap();
+        let working_status: String = conn
+            .query_row(
+                "SELECT status FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
+                params!["default", "working_slot"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            working_status, "hard_deleted",
+            "working layer should hard-delete stale soft_deleted slots"
+        );
+
+        let semantic_status: String = conn
+            .query_row(
+                "SELECT status FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
+                params!["default", "semantic_slot"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            semantic_status, "soft_deleted",
+            "semantic layer should be retained with longer policy"
+        );
+
+        let working_docs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM retrieval_docs WHERE doc_id = ?1",
+                params!["default:working_slot"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            working_docs, 0,
+            "working retrieval docs should be pruned by secret visibility"
+        );
+
+        let semantic_docs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM retrieval_docs WHERE doc_id = ?1",
+                params!["default:semantic_slot"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            semantic_docs, 1,
+            "semantic retrieval docs should persist with longer retention"
+        );
+
+        let ledger_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM deletion_ledger", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            ledger_rows, 0,
+            "deletion ledger uses separate retention policy"
         );
     }
 }

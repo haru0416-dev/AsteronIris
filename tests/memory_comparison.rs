@@ -5,74 +5,49 @@
 use std::time::Instant;
 use tempfile::TempDir;
 
-// We test both backends through the public memory module
+#[path = "support/memory_harness.rs"]
+mod memory_harness;
+
 use asteroniris::memory::{
-    markdown::MarkdownMemory, sqlite::SqliteMemory, ForgetMode, Memory, MemoryCategory,
-    MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
+    capability_matrix_for_memory, ensure_forget_mode_supported, CapabilitySupport, ForgetMode,
+    MarkdownMemory, Memory, MemoryCategory, MemoryRecallItem, MemorySource, PrivacyLevel,
+    SqliteMemory,
+};
+use memory_harness::{
+    append_test_event, assert_event_count_parity, capture_recall_items_as_csv,
+    find_degraded_backends, forget_hard, format_capability_evidence, lancedb_fixture,
+    markdown_memory_from_path, memory_count, recall_scoped_values, resolve_slot_value,
+    sqlite_fixture, sqlite_memory_from_path, ParityRelation,
 };
 
 // ── Helpers ────────────────────────────────────────────────────
 
 fn sqlite_backend(dir: &std::path::Path) -> SqliteMemory {
-    SqliteMemory::new(dir).expect("SQLite init failed")
+    sqlite_memory_from_path(dir)
 }
 
 fn markdown_backend(dir: &std::path::Path) -> MarkdownMemory {
-    MarkdownMemory::new(dir)
+    markdown_memory_from_path(dir)
 }
 
-fn source_for_category(category: &MemoryCategory) -> MemorySource {
-    match category {
-        MemoryCategory::Core => MemorySource::ExplicitUser,
-        MemoryCategory::Daily => MemorySource::System,
-        MemoryCategory::Conversation => MemorySource::Inferred,
-        MemoryCategory::Custom(_) => MemorySource::ToolVerified,
-    }
+async fn store(mem: &dyn Memory, key: &str, content: &str, category: MemoryCategory) {
+    append_test_event(mem, "default", key, content, category).await;
 }
 
-async fn store(mem: &impl Memory, key: &str, content: &str, category: MemoryCategory) {
-    let source = source_for_category(&category);
-    mem.append_event(
-        MemoryEventInput::new(
-            "default",
-            key,
-            MemoryEventType::FactAdded,
-            content,
-            source,
-            PrivacyLevel::Private,
-        )
-        .with_confidence(0.95)
-        .with_importance(0.6),
-    )
-    .await
-    .unwrap();
+async fn count(mem: &dyn Memory) -> usize {
+    memory_count(mem).await
 }
 
-async fn count(mem: &impl Memory) -> usize {
-    mem.count_events(None).await.unwrap()
+async fn get_value(mem: &dyn Memory, key: &str) -> Option<String> {
+    resolve_slot_value(mem, "default", key).await
 }
 
-async fn get_value(mem: &impl Memory, key: &str) -> Option<String> {
-    mem.resolve_slot("default", key)
-        .await
-        .unwrap()
-        .map(|slot| slot.value)
+async fn recall(mem: &dyn Memory, query: &str, limit: usize) -> Vec<(String, String, f64)> {
+    recall_scoped_values(mem, "default", query, limit).await
 }
 
-async fn recall(mem: &impl Memory, query: &str, limit: usize) -> Vec<(String, String, f64)> {
-    mem.recall_scoped(RecallQuery::new("default", query, limit))
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|item| (item.slot_key, item.value, item.score))
-        .collect()
-}
-
-async fn forget(mem: &impl Memory, key: &str) -> bool {
-    mem.forget_slot("default", key, ForgetMode::Hard, "comparison")
-        .await
-        .unwrap()
-        .applied
+async fn forget(mem: &dyn Memory, key: &str) -> bool {
+    forget_hard(mem, "default", key).await
 }
 
 // ── Test 1: Store performance ──────────────────────────────────
@@ -465,4 +440,137 @@ async fn compare_category_filter() {
     // Markdown: categories determined by file location
     assert!(md_core >= 1);
     assert!(md_all >= 1);
+}
+
+#[tokio::test]
+async fn memory_test_harness_smoke() {
+    let (_tmp_sq, sqlite) = sqlite_fixture();
+    let (_tmp_md, markdown) = memory_harness::markdown_fixture();
+    let (_tmp_ld, lancedb) = lancedb_fixture();
+
+    append_test_event(
+        &sqlite,
+        "h-smoke",
+        "smoke.pref",
+        "value: rust",
+        MemoryCategory::Core,
+    )
+    .await;
+    append_test_event(
+        &markdown,
+        "h-smoke",
+        "smoke.pref",
+        "value: rust",
+        MemoryCategory::Core,
+    )
+    .await;
+    append_test_event(
+        &lancedb,
+        "h-smoke",
+        "smoke.pref",
+        "value: rust",
+        MemoryCategory::Core,
+    )
+    .await;
+
+    assert_event_count_parity(
+        ParityRelation::Exact,
+        memory_count(&sqlite).await,
+        1,
+        "sqlite fixture receives one event",
+    );
+
+    assert_event_count_parity(
+        ParityRelation::Exact,
+        memory_count(&lancedb).await,
+        1,
+        "lancedb fixture receives one event",
+    );
+
+    assert_event_count_parity(
+        ParityRelation::Exact,
+        memory_count(&markdown).await,
+        1,
+        "markdown fixture receives one event",
+    );
+
+    let sqlite_value = resolve_slot_value(&sqlite, "h-smoke", "smoke.pref").await;
+    let markdown_value = resolve_slot_value(&markdown, "h-smoke", "smoke.pref").await;
+    let lancedb_value = resolve_slot_value(&lancedb, "h-smoke", "smoke.pref").await;
+
+    assert_eq!(sqlite_value.as_deref(), Some("value: rust"));
+    assert_eq!(lancedb_value.as_deref(), Some("value: rust"));
+    assert_eq!(markdown_value.as_deref(), Some("value: rust"));
+
+    let markdown_csv = capture_recall_items_as_csv(&[MemoryRecallItem {
+        entity_id: "h-smoke".to_string(),
+        slot_key: "smoke.pref".to_string(),
+        value: "value: rust".to_string(),
+        source: MemorySource::ExplicitUser,
+        confidence: 1.0,
+        importance: 1.0,
+        privacy_level: PrivacyLevel::Private,
+        score: 0.0,
+        occurred_at: "0000-00-00T00:00:00Z".to_string(),
+    }]);
+    assert_eq!(markdown_csv, "smoke.pref,h-smoke,0.000000\n");
+
+    let evidence = format_capability_evidence();
+    assert!(evidence.contains("backend=sqlite"));
+    assert!(evidence.contains("backend=lancedb"));
+    assert!(evidence.contains("backend=markdown"));
+}
+
+#[tokio::test]
+async fn memory_test_harness_flags_degraded() {
+    let (_tmp_sq, sqlite) = sqlite_fixture();
+    let (_tmp_md, markdown) = memory_harness::markdown_fixture();
+    let (_tmp_ld, lancedb) = lancedb_fixture();
+
+    let sqlite_caps = capability_matrix_for_memory(&sqlite);
+    let lancedb_caps = capability_matrix_for_memory(&lancedb);
+    let markdown_caps = capability_matrix_for_memory(&markdown);
+
+    assert_eq!(sqlite_caps.forget_soft, CapabilitySupport::Supported);
+    assert_eq!(lancedb_caps.forget_soft, CapabilitySupport::Degraded);
+    assert_eq!(markdown_caps.forget_soft, CapabilitySupport::Degraded);
+
+    assert_eq!(lancedb_caps.forget_hard, CapabilitySupport::Supported);
+    assert_eq!(markdown_caps.forget_hard, CapabilitySupport::Unsupported);
+
+    assert_eq!(lancedb_caps.forget_tombstone, CapabilitySupport::Degraded);
+    assert_eq!(markdown_caps.forget_tombstone, CapabilitySupport::Degraded);
+
+    assert!(
+        ensure_forget_mode_supported(&sqlite, ForgetMode::Hard).is_ok(),
+        "sqlite hard forget is supported"
+    );
+    assert!(
+        ensure_forget_mode_supported(&lancedb, ForgetMode::Soft).is_ok(),
+        "lancedb soft forget is degraded but contractually supported"
+    );
+    assert!(
+        ensure_forget_mode_supported(&lancedb, ForgetMode::Tombstone).is_ok(),
+        "lancedb tombstone forget is degraded but contractually supported"
+    );
+    assert!(
+        ensure_forget_mode_supported(&markdown, ForgetMode::Tombstone).is_ok(),
+        "markdown tombstone forget is contractually supported"
+    );
+
+    assert!(
+        find_degraded_backends().contains(&"lancedb"),
+        "lancedb must be marked as degraded/unsupported",
+    );
+    assert!(
+        find_degraded_backends().contains(&"markdown"),
+        "markdown must be marked as degraded/unsupported",
+    );
+
+    let markdown_hard = ensure_forget_mode_supported(&markdown, ForgetMode::Hard)
+        .expect_err("markdown hard delete should be rejected in test contract");
+    assert_eq!(
+        markdown_hard.to_string(),
+        "memory backend 'markdown' does not support forget mode 'hard'"
+    );
 }

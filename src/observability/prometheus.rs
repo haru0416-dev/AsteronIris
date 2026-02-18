@@ -1,4 +1,6 @@
-use super::traits::{AutonomyLifecycleSignal, Observer, ObserverEvent, ObserverMetric};
+use super::traits::{
+    AutonomyLifecycleSignal, MemoryLifecycleSignal, Observer, ObserverEvent, ObserverMetric,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct PrometheusObserver {
@@ -15,6 +17,15 @@ pub struct PrometheusObserver {
     autonomy_intent_policy_denied_count: AtomicU64,
     autonomy_intent_dispatched_count: AtomicU64,
     autonomy_intent_execution_blocked_count: AtomicU64,
+    memory_lifecycle_total: AtomicU64,
+    memory_consolidation_started_count: AtomicU64,
+    memory_consolidation_completed_count: AtomicU64,
+    memory_conflict_detected_count: AtomicU64,
+    memory_conflict_resolved_count: AtomicU64,
+    memory_revocation_applied_count: AtomicU64,
+    memory_governance_inspect_count: AtomicU64,
+    memory_governance_export_count: AtomicU64,
+    memory_governance_delete_count: AtomicU64,
 }
 
 #[cfg(test)]
@@ -30,6 +41,20 @@ pub struct AutonomyMetricCounts {
     pub intent_policy_denied: u64,
     pub intent_dispatched: u64,
     pub intent_execution_blocked: u64,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryMetricCounts {
+    pub total: u64,
+    pub consolidation_started: u64,
+    pub consolidation_completed: u64,
+    pub conflict_detected: u64,
+    pub conflict_resolved: u64,
+    pub revocation_applied: u64,
+    pub governance_inspect: u64,
+    pub governance_export: u64,
+    pub governance_delete: u64,
 }
 
 impl PrometheusObserver {
@@ -49,6 +74,15 @@ impl PrometheusObserver {
             autonomy_intent_policy_denied_count: AtomicU64::new(0),
             autonomy_intent_dispatched_count: AtomicU64::new(0),
             autonomy_intent_execution_blocked_count: AtomicU64::new(0),
+            memory_lifecycle_total: AtomicU64::new(0),
+            memory_consolidation_started_count: AtomicU64::new(0),
+            memory_consolidation_completed_count: AtomicU64::new(0),
+            memory_conflict_detected_count: AtomicU64::new(0),
+            memory_conflict_resolved_count: AtomicU64::new(0),
+            memory_revocation_applied_count: AtomicU64::new(0),
+            memory_governance_inspect_count: AtomicU64::new(0),
+            memory_governance_export_count: AtomicU64::new(0),
+            memory_governance_delete_count: AtomicU64::new(0),
         }
     }
 
@@ -94,6 +128,45 @@ impl PrometheusObserver {
         }
     }
 
+    fn record_memory_signal(&self, signal: MemoryLifecycleSignal) {
+        self.memory_lifecycle_total.fetch_add(1, Ordering::Relaxed);
+
+        match signal {
+            MemoryLifecycleSignal::ConsolidationStarted => {
+                self.memory_consolidation_started_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MemoryLifecycleSignal::ConsolidationCompleted => {
+                self.memory_consolidation_completed_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MemoryLifecycleSignal::ConflictDetected => {
+                self.memory_conflict_detected_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MemoryLifecycleSignal::ConflictResolved => {
+                self.memory_conflict_resolved_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MemoryLifecycleSignal::RevocationApplied => {
+                self.memory_revocation_applied_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MemoryLifecycleSignal::GovernanceInspect => {
+                self.memory_governance_inspect_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MemoryLifecycleSignal::GovernanceExport => {
+                self.memory_governance_export_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MemoryLifecycleSignal::GovernanceDelete => {
+                self.memory_governance_delete_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
     #[cfg(test)]
     fn snapshot_counts(&self) -> (u64, u64, u64) {
         (
@@ -126,6 +199,25 @@ impl PrometheusObserver {
                 .load(Ordering::Relaxed),
         }
     }
+
+    #[cfg(test)]
+    pub fn snapshot_memory_counts(&self) -> MemoryMetricCounts {
+        MemoryMetricCounts {
+            total: self.memory_lifecycle_total.load(Ordering::Relaxed),
+            consolidation_started: self
+                .memory_consolidation_started_count
+                .load(Ordering::Relaxed),
+            consolidation_completed: self
+                .memory_consolidation_completed_count
+                .load(Ordering::Relaxed),
+            conflict_detected: self.memory_conflict_detected_count.load(Ordering::Relaxed),
+            conflict_resolved: self.memory_conflict_resolved_count.load(Ordering::Relaxed),
+            revocation_applied: self.memory_revocation_applied_count.load(Ordering::Relaxed),
+            governance_inspect: self.memory_governance_inspect_count.load(Ordering::Relaxed),
+            governance_export: self.memory_governance_export_count.load(Ordering::Relaxed),
+            governance_delete: self.memory_governance_delete_count.load(Ordering::Relaxed),
+        }
+    }
 }
 
 impl Observer for PrometheusObserver {
@@ -138,8 +230,13 @@ impl Observer for PrometheusObserver {
 
     fn record_metric(&self, metric: &ObserverMetric) {
         self.metric_count.fetch_add(1, Ordering::Relaxed);
-        if let ObserverMetric::AutonomyLifecycle(signal) = metric {
-            self.record_autonomy_signal(*signal);
+        match metric {
+            ObserverMetric::AutonomyLifecycle(signal) => self.record_autonomy_signal(*signal),
+            ObserverMetric::MemoryLifecycle(signal) => self.record_memory_signal(*signal),
+            ObserverMetric::RequestLatency(_)
+            | ObserverMetric::TokensUsed(_)
+            | ObserverMetric::ActiveSessions(_)
+            | ObserverMetric::QueueDepth(_) => {}
         }
     }
 
@@ -149,6 +246,7 @@ impl Observer for PrometheusObserver {
             metrics_total = self.metric_count.load(Ordering::Relaxed),
             errors_total = self.error_count.load(Ordering::Relaxed),
             autonomy_total = self.autonomy_lifecycle_total.load(Ordering::Relaxed),
+            memory_total = self.memory_lifecycle_total.load(Ordering::Relaxed),
             "observer.prometheus.flush"
         );
     }
@@ -180,12 +278,18 @@ mod tests {
         obs.record_metric(&ObserverMetric::AutonomyLifecycle(
             AutonomyLifecycleSignal::IntentCreated,
         ));
+        obs.record_metric(&ObserverMetric::MemoryLifecycle(
+            MemoryLifecycleSignal::GovernanceDelete,
+        ));
         obs.record_metric(&ObserverMetric::RequestLatency(Duration::from_millis(10)));
         obs.flush();
 
-        assert_eq!(obs.snapshot_counts(), (2, 2, 1));
+        assert_eq!(obs.snapshot_counts(), (2, 3, 1));
         let autonomy = obs.snapshot_autonomy_counts();
         assert_eq!(autonomy.total, 1);
         assert_eq!(autonomy.intent_created, 1);
+        let memory = obs.snapshot_memory_counts();
+        assert_eq!(memory.total, 1);
+        assert_eq!(memory.governance_delete, 1);
     }
 }

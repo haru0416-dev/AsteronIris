@@ -1,5 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use crate::memory::{Memory, RecallQuery};
+use crate::security::policy::TenantPolicyContext;
 use async_trait::async_trait;
 use serde_json::json;
 use std::fmt::Write;
@@ -13,6 +14,63 @@ pub struct MemoryRecallTool {
 impl MemoryRecallTool {
     pub fn new(memory: Arc<dyn Memory>) -> Self {
         Self { memory }
+    }
+
+    fn parse_policy_context(args: &serde_json::Value) -> anyhow::Result<TenantPolicyContext> {
+        let Some(raw_context) = args.get("policy_context") else {
+            return Ok(TenantPolicyContext::disabled());
+        };
+
+        let Some(raw_context) = raw_context.as_object() else {
+            anyhow::bail!("Invalid 'policy_context' parameter: expected object");
+        };
+
+        let tenant_mode_enabled = match raw_context.get("tenant_mode_enabled") {
+            Some(value) => value.as_bool().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid 'policy_context.tenant_mode_enabled' parameter: expected boolean"
+                )
+            })?,
+            None => false,
+        };
+
+        let tenant_id = match raw_context.get("tenant_id") {
+            Some(serde_json::Value::String(value)) => Some(value.clone()),
+            Some(serde_json::Value::Null) | None => None,
+            Some(_) => {
+                anyhow::bail!(
+                    "Invalid 'policy_context.tenant_id' parameter: expected string or null"
+                )
+            }
+        };
+
+        Ok(TenantPolicyContext {
+            tenant_mode_enabled,
+            tenant_id,
+        })
+    }
+
+    fn build_recall_request(args: &serde_json::Value) -> anyhow::Result<RecallQuery> {
+        let query = args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'query' parameter"))?;
+
+        #[allow(clippy::cast_possible_truncation)]
+        let limit = args
+            .get("limit")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(5, |v| v as usize);
+
+        let entity_id = args
+            .get("entity_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'entity_id' parameter"))?;
+
+        let request = RecallQuery::new(entity_id, query, limit)
+            .with_policy_context(Self::parse_policy_context(args)?);
+        request.enforce_policy()?;
+        Ok(request)
     }
 }
 
@@ -41,6 +99,19 @@ impl Tool for MemoryRecallTool {
                 "limit": {
                     "type": "integer",
                     "description": "Max results to return (default: 5)"
+                },
+                "policy_context": {
+                    "type": "object",
+                    "description": "Optional tenant policy context to enforce recall scope",
+                    "properties": {
+                        "tenant_mode_enabled": {
+                            "type": "boolean"
+                        },
+                        "tenant_id": {
+                            "type": ["string", "null"]
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "required": ["entity_id", "query"]
@@ -48,23 +119,19 @@ impl Tool for MemoryRecallTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let query = args
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'query' parameter"))?;
-
-        #[allow(clippy::cast_possible_truncation)]
-        let limit = args
-            .get("limit")
-            .and_then(serde_json::Value::as_u64)
-            .map_or(5, |v| v as usize);
-
-        let entity_id = args
-            .get("entity_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'entity_id' parameter"))?;
-
-        let request = RecallQuery::new(entity_id, query, limit);
+        let request = match Self::build_recall_request(&args) {
+            Ok(request) => request,
+            Err(error) => {
+                if error.to_string().starts_with("blocked by security policy:") {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("Memory recall failed: {error}")),
+                    });
+                }
+                return Err(error);
+            }
+        };
 
         match self.memory.recall_scoped(request).await {
             Ok(entries) if entries.is_empty() => Ok(ToolResult {
@@ -213,5 +280,32 @@ mod tests {
         let tool = MemoryRecallTool::new(mem);
         assert_eq!(tool.name(), "memory_recall");
         assert!(tool.parameters_schema()["properties"]["query"].is_object());
+    }
+
+    #[tokio::test]
+    async fn recall_rejects_default_scope_when_tenant_mode_enabled() {
+        let (_tmp, mem) = seeded_mem();
+        let tool = MemoryRecallTool::new(mem);
+
+        let result = tool
+            .execute(json!({
+                "entity_id": "default",
+                "query": "anything",
+                "policy_context": {
+                    "tenant_mode_enabled": true,
+                    "tenant_id": "tenant-alpha"
+                }
+            }))
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error,
+            Some(
+                "Memory recall failed: blocked by security policy: tenant mode forbids default recall scope"
+                    .to_string()
+            )
+        );
     }
 }

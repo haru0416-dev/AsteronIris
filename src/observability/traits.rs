@@ -35,6 +35,7 @@ pub enum ObserverMetric {
     ActiveSessions(u64),
     QueueDepth(u64),
     AutonomyLifecycle(AutonomyLifecycleSignal),
+    MemoryLifecycle(MemoryLifecycleSignal),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +51,18 @@ pub enum AutonomyLifecycleSignal {
     IntentExecutionBlocked,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryLifecycleSignal {
+    ConsolidationStarted,
+    ConsolidationCompleted,
+    ConflictDetected,
+    ConflictResolved,
+    RevocationApplied,
+    GovernanceInspect,
+    GovernanceExport,
+    GovernanceDelete,
+}
+
 /// Core observability trait — implement for any backend
 pub trait Observer: Send + Sync {
     /// Record a discrete event
@@ -60,6 +73,10 @@ pub trait Observer: Send + Sync {
 
     fn record_autonomy_lifecycle(&self, signal: AutonomyLifecycleSignal) {
         self.record_metric(&ObserverMetric::AutonomyLifecycle(signal));
+    }
+
+    fn record_memory_lifecycle(&self, signal: MemoryLifecycleSignal) {
+        self.record_metric(&ObserverMetric::MemoryLifecycle(signal));
     }
 
     /// Flush any buffered data (no-op for most backends)

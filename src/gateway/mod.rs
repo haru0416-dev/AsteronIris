@@ -10,10 +10,14 @@
 use crate::auth::AuthBroker;
 use crate::channels::{Channel, WhatsAppChannel};
 use crate::config::{Config, GatewayDefenseMode};
-use crate::memory::{self, Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
+use crate::memory::traits::MemoryLayer;
+use crate::memory::{
+    self, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
+};
 use crate::providers::{self, Provider};
 use crate::security::external_content::{prepare_external_content, ExternalAction};
 use crate::security::pairing::{constant_time_eq, is_public_bind, PairingGuard};
+use crate::security::policy::TenantPolicyContext;
 use crate::security::SecurityPolicy;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
@@ -53,6 +57,48 @@ fn apply_external_ingress_policy(source: &str, text: &str) -> ExternalIngressPol
     }
 }
 
+const GATEWAY_AUTOSAVE_ENTITY_ID: &str = "default";
+
+fn gateway_runtime_policy_context() -> TenantPolicyContext {
+    TenantPolicyContext::disabled()
+}
+
+fn gateway_webhook_autosave_event(summary: String) -> MemoryEventInput {
+    MemoryEventInput::new(
+        GATEWAY_AUTOSAVE_ENTITY_ID,
+        "external.gateway.webhook",
+        MemoryEventType::FactAdded,
+        summary,
+        MemorySource::ExplicitUser,
+        PrivacyLevel::Private,
+    )
+    .with_layer(MemoryLayer::Working)
+    .with_confidence(0.95)
+    .with_importance(0.5)
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::ExplicitUser,
+        "gateway.autosave.webhook",
+    ))
+}
+
+fn gateway_whatsapp_autosave_event(sender: &str, summary: String) -> MemoryEventInput {
+    MemoryEventInput::new(
+        GATEWAY_AUTOSAVE_ENTITY_ID,
+        format!("external.whatsapp.{sender}"),
+        MemoryEventType::FactAdded,
+        summary,
+        MemorySource::ExplicitUser,
+        PrivacyLevel::Private,
+    )
+    .with_layer(MemoryLayer::Working)
+    .with_confidence(0.95)
+    .with_importance(0.6)
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::ExplicitUser,
+        "gateway.autosave.whatsapp",
+    ))
+}
+
 /// Shared state for all axum handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -86,6 +132,16 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
 
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    run_gateway_with_listener(host, listener, config).await
+}
+
+/// Run the HTTP gateway from a pre-bound listener.
+pub async fn run_gateway_with_listener(
+    host: &str,
+    listener: tokio::net::TcpListener,
+    config: Config,
+) -> Result<()> {
     let actual_port = listener.local_addr()?.port();
     let display_addr = format!("{host}:{actual_port}");
 
@@ -438,21 +494,20 @@ async fn handle_webhook(
     let ingress = apply_external_ingress_policy(source, &webhook_body.message);
 
     if state.auto_save {
-        let _ = state
-            .mem
-            .append_event(
-                MemoryEventInput::new(
-                    "default",
-                    "external.gateway.webhook",
-                    MemoryEventType::FactAdded,
+        let policy_context = gateway_runtime_policy_context();
+        if let Err(error) = policy_context.enforce_recall_scope(GATEWAY_AUTOSAVE_ENTITY_ID) {
+            tracing::warn!(
+                error,
+                "gateway webhook autosave skipped due to policy context"
+            );
+        } else {
+            let _ = state
+                .mem
+                .append_event(gateway_webhook_autosave_event(
                     ingress.persisted_summary.clone(),
-                    MemorySource::ExplicitUser,
-                    PrivacyLevel::Private,
-                )
-                .with_confidence(0.95)
-                .with_importance(0.5),
-            )
-            .await;
+                ))
+                .await;
+        }
     }
 
     if ingress.blocked {
@@ -612,26 +667,26 @@ async fn handle_whatsapp_message(
             msg.sender,
             truncate_with_ellipsis(&msg.content, 50)
         );
+        let source = "gateway:whatsapp";
 
         // Auto-save to memory
         if state.auto_save {
-            let source = "gateway:whatsapp";
             let ingress = apply_external_ingress_policy(source, &msg.content);
-            let _ = state
-                .mem
-                .append_event(
-                    MemoryEventInput::new(
-                        "default",
-                        format!("external.whatsapp.{}", msg.sender),
-                        MemoryEventType::FactAdded,
+            let policy_context = gateway_runtime_policy_context();
+            if let Err(error) = policy_context.enforce_recall_scope(GATEWAY_AUTOSAVE_ENTITY_ID) {
+                tracing::warn!(
+                    error,
+                    "gateway whatsapp autosave skipped due to policy context"
+                );
+            } else {
+                let _ = state
+                    .mem
+                    .append_event(gateway_whatsapp_autosave_event(
+                        &msg.sender,
                         ingress.persisted_summary.clone(),
-                        MemorySource::ExplicitUser,
-                        PrivacyLevel::Private,
-                    )
-                    .with_confidence(0.95)
-                    .with_importance(0.6),
-                )
-                .await;
+                    ))
+                    .await;
+            }
 
             if ingress.blocked {
                 tracing::warn!(

@@ -4,6 +4,7 @@ pub mod composio;
 pub mod file_read;
 pub mod file_write;
 pub mod memory_forget;
+pub mod memory_governance;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod shell;
@@ -15,6 +16,7 @@ pub use composio::ComposioTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
 pub use memory_forget::MemoryForgetTool;
+pub use memory_governance::MemoryGovernanceTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use shell::ShellTool;
@@ -52,7 +54,8 @@ pub fn all_tools(
         Box::new(FileWriteTool::new(security.clone())),
         Box::new(MemoryStoreTool::new(memory.clone())),
         Box::new(MemoryRecallTool::new(memory.clone())),
-        Box::new(MemoryForgetTool::new(memory)),
+        Box::new(MemoryForgetTool::new(memory.clone())),
+        Box::new(MemoryGovernanceTool::new(memory, security.clone())),
     ];
 
     if browser_config.enabled {

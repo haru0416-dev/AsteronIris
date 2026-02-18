@@ -1,9 +1,12 @@
 use super::traits::{
-    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEntry, MemoryEvent,
-    MemoryEventInput, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
+    BeliefSlot, ForgetArtifact, ForgetArtifactCheck, ForgetArtifactObservation,
+    ForgetArtifactRequirement, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEntry,
+    MemoryEvent, MemoryEventInput, MemoryLayer, MemoryProvenance, MemoryRecallItem, MemorySource,
+    PrivacyLevel, RecallQuery,
 };
 use async_trait::async_trait;
 use chrono::Local;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -16,7 +19,19 @@ pub struct MarkdownMemory {
     workspace_dir: PathBuf,
 }
 
-#[allow(clippy::unused_self, clippy::unused_async)]
+#[derive(Debug)]
+struct ParsedMarkdownLine {
+    key: String,
+    content: String,
+    layer: Option<MemoryLayer>,
+    provenance: Option<MemoryProvenance>,
+}
+
+#[allow(
+    clippy::unused_self,
+    clippy::unused_async,
+    clippy::trivially_copy_pass_by_ref
+)]
 impl MarkdownMemory {
     pub fn new(workspace_dir: &Path) -> Self {
         Self {
@@ -84,20 +99,201 @@ impl MarkdownMemory {
                 !trimmed.is_empty() && !trimmed.starts_with('#')
             })
             .enumerate()
-            .map(|(i, line)| {
-                let trimmed = line.trim();
-                let clean = trimmed.strip_prefix("- ").unwrap_or(trimmed);
-                MemoryEntry {
-                    id: format!("{filename}:{i}"),
-                    key: format!("{filename}:{i}"),
-                    content: clean.to_string(),
-                    category: category.clone(),
-                    timestamp: filename.to_string(),
-                    session_id: None,
-                    score: None,
-                }
+            .filter_map(|(i, line)| Self::parse_markdown_entry_line(line).map(|entry| (i, entry)))
+            .map(|(i, entry)| MemoryEntry {
+                id: format!("{filename}:{i}"),
+                key: entry.key,
+                content: entry.content,
+                category: category.clone(),
+                timestamp: filename.to_string(),
+                session_id: None,
+                score: None,
             })
             .collect()
+    }
+
+    fn encode_tag_value(value: &str) -> String {
+        value
+            .chars()
+            .flat_map(|ch| match ch {
+                '%' => "%25".chars().collect::<Vec<_>>(),
+                ';' => "%3B".chars().collect::<Vec<_>>(),
+                '=' => "%3D".chars().collect::<Vec<_>>(),
+                '&' => "%26".chars().collect::<Vec<_>>(),
+                '\\' => "%5C".chars().collect::<Vec<_>>(),
+                '[' => "%5B".chars().collect::<Vec<_>>(),
+                ']' => "%5D".chars().collect::<Vec<_>>(),
+                _ => vec![ch],
+            })
+            .collect()
+    }
+
+    fn decode_tag_value(value: &str) -> Option<String> {
+        let mut decoded = String::new();
+        let mut chars = value.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch != '%' {
+                decoded.push(ch);
+                continue;
+            }
+
+            let a = chars.next()?;
+            let b = chars.next()?;
+            let hex = format!("{a}{b}");
+            let decoded_byte = u8::from_str_radix(&hex, 16).ok()?;
+            decoded.push(decoded_byte as char);
+        }
+        Some(decoded)
+    }
+
+    fn parse_markdown_tags(raw: &str) -> HashMap<String, String> {
+        raw.split(';')
+            .filter_map(|chunk| {
+                let (k, v) = chunk.split_once('=')?;
+                if k.is_empty() || v.is_empty() {
+                    return None;
+                }
+                let value = Self::decode_tag_value(v)?;
+                Some((k.to_string(), value))
+            })
+            .collect()
+    }
+
+    fn memory_layer_to_str(layer: &MemoryLayer) -> &'static str {
+        match layer {
+            MemoryLayer::Working => "working",
+            MemoryLayer::Episodic => "episodic",
+            MemoryLayer::Semantic => "semantic",
+            MemoryLayer::Procedural => "procedural",
+            MemoryLayer::Identity => "identity",
+        }
+    }
+
+    fn parse_memory_layer(raw: &str) -> Option<MemoryLayer> {
+        match raw {
+            "working" => Some(MemoryLayer::Working),
+            "episodic" => Some(MemoryLayer::Episodic),
+            "semantic" => Some(MemoryLayer::Semantic),
+            "procedural" => Some(MemoryLayer::Procedural),
+            "identity" => Some(MemoryLayer::Identity),
+            _ => None,
+        }
+    }
+
+    fn memory_source_to_str(source: &MemorySource) -> &'static str {
+        match source {
+            MemorySource::ExplicitUser => "explicit_user",
+            MemorySource::ToolVerified => "tool_verified",
+            MemorySource::System => "system",
+            MemorySource::Inferred => "inferred",
+        }
+    }
+
+    fn parse_memory_source(raw: &str) -> Option<MemorySource> {
+        match raw {
+            "explicit_user" => Some(MemorySource::ExplicitUser),
+            "tool_verified" => Some(MemorySource::ToolVerified),
+            "system" => Some(MemorySource::System),
+            "inferred" => Some(MemorySource::Inferred),
+            _ => None,
+        }
+    }
+
+    fn format_tagged_line(
+        key: &str,
+        value: &str,
+        layer: &MemoryLayer,
+        provenance: Option<&MemoryProvenance>,
+    ) -> String {
+        let mut tag_fields = vec![format!("layer={}", Self::memory_layer_to_str(layer))];
+
+        if let Some(provenance) = provenance {
+            tag_fields.push(format!(
+                "provenance_source_class={}",
+                Self::memory_source_to_str(&provenance.source_class)
+            ));
+            tag_fields.push(format!(
+                "provenance_reference={}",
+                Self::encode_tag_value(&provenance.reference)
+            ));
+
+            if let Some(uri) = &provenance.evidence_uri {
+                tag_fields.push(format!(
+                    "provenance_evidence_uri={}",
+                    Self::encode_tag_value(uri)
+                ));
+            }
+        }
+
+        let tagged = format!("[md:{}]", tag_fields.join(";"));
+        format!("- **{key}** {tagged}: {value}")
+    }
+
+    fn parse_markdown_entry_line(line: &str) -> Option<ParsedMarkdownLine> {
+        let line = line.trim();
+        let without_bullet = line.strip_prefix("- ")?;
+        let without_key = without_bullet.strip_prefix("**")?;
+        let end_key = without_key.find("**")?;
+        let (key, rest) = without_key.split_at(end_key);
+        let rest = rest.strip_prefix("**").unwrap_or("").trim_start();
+
+        if let Some(content) = rest.strip_prefix(": ") {
+            return Some(ParsedMarkdownLine {
+                key: key.to_string(),
+                content: content.to_string(),
+                layer: None,
+                provenance: None,
+            });
+        }
+
+        if let Some(rest_after_marker) = rest.strip_prefix("[md:") {
+            let tag_end = rest_after_marker.find("]: ");
+            let Some(tag_end) = tag_end else {
+                return Some(ParsedMarkdownLine {
+                    key: key.to_string(),
+                    content: format!("[md:{rest_after_marker}"),
+                    layer: None,
+                    provenance: None,
+                });
+            };
+
+            let raw_tags = &rest_after_marker[..tag_end];
+            let content = &rest_after_marker[(tag_end + 3)..];
+            let tags = Self::parse_markdown_tags(raw_tags);
+
+            let layer = tags
+                .get("layer")
+                .and_then(|value| Self::parse_memory_layer(value))
+                .unwrap_or(MemoryLayer::Working);
+
+            let provenance = tags.get("provenance_source_class").and_then(|source_raw| {
+                let source = Self::parse_memory_source(source_raw)?;
+                let reference = tags.get("provenance_reference")?.clone();
+                Some(MemoryProvenance {
+                    source_class: source,
+                    reference,
+                    evidence_uri: tags
+                        .get("provenance_evidence_uri")
+                        .map(std::string::ToString::to_string),
+                })
+            });
+
+            return Some(ParsedMarkdownLine {
+                key: key.to_string(),
+                content: content.to_string(),
+                layer: Some(layer),
+                provenance,
+            });
+        }
+
+        None
+    }
+
+    #[allow(dead_code)]
+    fn parse_markdown_entry_metadata(
+        line: &str,
+    ) -> Option<(Option<MemoryLayer>, Option<MemoryProvenance>)> {
+        Self::parse_markdown_entry_line(line).map(|entry| (entry.layer, entry.provenance))
     }
 
     async fn read_all_entries(&self) -> anyhow::Result<Vec<MemoryEntry>> {
@@ -147,8 +343,10 @@ impl MarkdownMemory {
         key: &str,
         content: &str,
         category: MemoryCategory,
+        layer: MemoryLayer,
+        provenance: Option<&MemoryProvenance>,
     ) -> anyhow::Result<()> {
-        let entry = format!("- **{key}**: {content}");
+        let entry = Self::format_tagged_line(key, content, &layer, provenance);
         let path = match category {
             MemoryCategory::Core => self.core_path(),
             _ => self.daily_path(),
@@ -224,14 +422,21 @@ impl MarkdownMemory {
     }
 
     async fn append_event(&self, input: MemoryEventInput) -> anyhow::Result<MemoryEvent> {
+        let input = input.normalize_for_ingress()?;
         let key = format!("{}:{}", input.entity_id, input.slot_key);
         let category = match input.source {
             MemorySource::ExplicitUser | MemorySource::ToolVerified => MemoryCategory::Core,
             MemorySource::System => MemoryCategory::Daily,
             MemorySource::Inferred => MemoryCategory::Conversation,
         };
-        self.upsert_projection_entry(&key, &input.value, category)
-            .await?;
+        self.upsert_projection_entry(
+            &key,
+            &input.value,
+            category,
+            input.layer,
+            input.provenance.as_ref(),
+        )
+        .await?;
 
         Ok(MemoryEvent {
             event_id: uuid::Uuid::new_v4().to_string(),
@@ -242,6 +447,7 @@ impl MarkdownMemory {
             source: input.source,
             confidence: input.confidence,
             importance: input.importance,
+            provenance: input.provenance,
             privacy_level: input.privacy_level,
             occurred_at: input.occurred_at,
             ingested_at: chrono::Utc::now().to_rfc3339(),
@@ -301,12 +507,58 @@ impl MarkdownMemory {
         let key = format!("{entity_id}:{slot_key}");
         let _ = reason;
         let applied = self.delete_projection_entry(&key).await?;
-        Ok(ForgetOutcome {
-            entity_id: entity_id.to_string(),
-            slot_key: slot_key.to_string(),
+
+        let slot_observed = if self.resolve_slot(entity_id, slot_key).await?.is_some() {
+            ForgetArtifactObservation::PresentRetrievable
+        } else {
+            ForgetArtifactObservation::Absent
+        };
+        let projection_observed = if self.fetch_projection_entry(&key).await?.is_some() {
+            ForgetArtifactObservation::PresentRetrievable
+        } else {
+            ForgetArtifactObservation::Absent
+        };
+
+        let slot_requirement = match mode {
+            ForgetMode::Hard => ForgetArtifactRequirement::MustBeAbsent,
+            ForgetMode::Soft | ForgetMode::Tombstone => {
+                ForgetArtifactRequirement::MustBeNonRetrievable
+            }
+        };
+        let projection_requirement = slot_requirement;
+
+        let artifact_checks = vec![
+            ForgetArtifactCheck::new(ForgetArtifact::Slot, slot_requirement, slot_observed),
+            ForgetArtifactCheck::new(
+                ForgetArtifact::RetrievalDocs,
+                ForgetArtifactRequirement::NotGoverned,
+                ForgetArtifactObservation::Absent,
+            ),
+            ForgetArtifactCheck::new(
+                ForgetArtifact::ProjectionDocs,
+                projection_requirement,
+                projection_observed,
+            ),
+            ForgetArtifactCheck::new(
+                ForgetArtifact::Caches,
+                ForgetArtifactRequirement::NotGoverned,
+                ForgetArtifactObservation::Absent,
+            ),
+            ForgetArtifactCheck::new(
+                ForgetArtifact::Ledger,
+                ForgetArtifactRequirement::NotGoverned,
+                ForgetArtifactObservation::Absent,
+            ),
+        ];
+
+        Ok(ForgetOutcome::from_checks(
+            entity_id,
+            slot_key,
             mode,
             applied,
-        })
+            true,
+            artifact_checks,
+        ))
     }
 
     async fn count_events(&self, _entity_id: Option<&str>) -> anyhow::Result<usize> {
@@ -387,9 +639,15 @@ mod tests {
     #[tokio::test]
     async fn markdown_store_core() {
         let (_tmp, mem) = temp_workspace();
-        mem.upsert_projection_entry("pref", "User likes Rust", MemoryCategory::Core)
-            .await
-            .unwrap();
+        mem.upsert_projection_entry(
+            "pref",
+            "User likes Rust",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
         let content = sync_fs::read_to_string(mem.core_path()).unwrap();
         assert!(content.contains("User likes Rust"));
     }
@@ -397,9 +655,15 @@ mod tests {
     #[tokio::test]
     async fn markdown_store_daily() {
         let (_tmp, mem) = temp_workspace();
-        mem.upsert_projection_entry("note", "Finished tests", MemoryCategory::Daily)
-            .await
-            .unwrap();
+        mem.upsert_projection_entry(
+            "note",
+            "Finished tests",
+            MemoryCategory::Daily,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
         let path = mem.daily_path();
         let content = sync_fs::read_to_string(path).unwrap();
         assert!(content.contains("Finished tests"));
@@ -408,15 +672,33 @@ mod tests {
     #[tokio::test]
     async fn markdown_recall_keyword() {
         let (_tmp, mem) = temp_workspace();
-        mem.upsert_projection_entry("a", "Rust is fast", MemoryCategory::Core)
-            .await
-            .unwrap();
-        mem.upsert_projection_entry("b", "Python is slow", MemoryCategory::Core)
-            .await
-            .unwrap();
-        mem.upsert_projection_entry("c", "Rust and safety", MemoryCategory::Core)
-            .await
-            .unwrap();
+        mem.upsert_projection_entry(
+            "a",
+            "Rust is fast",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
+        mem.upsert_projection_entry(
+            "b",
+            "Python is slow",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
+        mem.upsert_projection_entry(
+            "c",
+            "Rust and safety",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
 
         let results = mem.search_projection("Rust", 10).await.unwrap();
         assert!(results.len() >= 2);
@@ -428,9 +710,15 @@ mod tests {
     #[tokio::test]
     async fn markdown_recall_no_match() {
         let (_tmp, mem) = temp_workspace();
-        mem.upsert_projection_entry("a", "Rust is great", MemoryCategory::Core)
-            .await
-            .unwrap();
+        mem.upsert_projection_entry(
+            "a",
+            "Rust is great",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
         let results = mem.search_projection("javascript", 10).await.unwrap();
         assert!(results.is_empty());
     }
@@ -438,12 +726,24 @@ mod tests {
     #[tokio::test]
     async fn markdown_count() {
         let (_tmp, mem) = temp_workspace();
-        mem.upsert_projection_entry("a", "first", MemoryCategory::Core)
-            .await
-            .unwrap();
-        mem.upsert_projection_entry("b", "second", MemoryCategory::Core)
-            .await
-            .unwrap();
+        mem.upsert_projection_entry(
+            "a",
+            "first",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
+        mem.upsert_projection_entry(
+            "b",
+            "second",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
         let count = mem.count_projection_entries().await.unwrap();
         assert!(count >= 2);
     }
@@ -451,12 +751,24 @@ mod tests {
     #[tokio::test]
     async fn markdown_list_by_category() {
         let (_tmp, mem) = temp_workspace();
-        mem.upsert_projection_entry("a", "core fact", MemoryCategory::Core)
-            .await
-            .unwrap();
-        mem.upsert_projection_entry("b", "daily note", MemoryCategory::Daily)
-            .await
-            .unwrap();
+        mem.upsert_projection_entry(
+            "a",
+            "core fact",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
+        mem.upsert_projection_entry(
+            "b",
+            "daily note",
+            MemoryCategory::Daily,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
 
         let core = mem
             .list_projection_entries(Some(&MemoryCategory::Core))
@@ -474,9 +786,15 @@ mod tests {
     #[tokio::test]
     async fn markdown_forget_is_noop() {
         let (_tmp, mem) = temp_workspace();
-        mem.upsert_projection_entry("a", "permanent", MemoryCategory::Core)
-            .await
-            .unwrap();
+        mem.upsert_projection_entry(
+            "a",
+            "permanent",
+            MemoryCategory::Core,
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
         let removed = mem.delete_projection_entry("a").await.unwrap();
         assert!(!removed, "Markdown memory is append-only");
     }

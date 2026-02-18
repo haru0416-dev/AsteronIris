@@ -1,8 +1,9 @@
 use crate::auth::AuthBroker;
 use crate::config::Config;
+use crate::memory::traits::MemoryLayer;
 use crate::memory::{
-    self, Memory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource,
-    PrivacyLevel, RecallQuery,
+    self, Memory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemoryProvenance,
+    MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
 };
 use crate::observability::{self, Observer, ObserverEvent};
 use crate::persona::state_header::StateHeaderV1;
@@ -13,6 +14,7 @@ use crate::security::external_content::{
     decide_external_action, detect_injection_signals, sanitize_marker_collision,
     wrap_external_content, ExternalAction,
 };
+use crate::security::policy::TenantPolicyContext;
 use crate::security::writeback_guard::{
     validate_writeback_payload, ImmutableStateHeader, SelfTaskWriteback, WritebackGuardVerdict,
 };
@@ -227,6 +229,37 @@ struct MainSessionTurnParams<'a> {
     temperature: f64,
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeMemoryWriteContext {
+    entity_id: String,
+    policy_context: TenantPolicyContext,
+}
+
+impl RuntimeMemoryWriteContext {
+    fn main_session_default() -> Self {
+        Self {
+            entity_id: "default".to_string(),
+            policy_context: TenantPolicyContext::disabled(),
+        }
+    }
+
+    fn for_entity_with_policy(
+        entity_id: impl Into<String>,
+        policy_context: TenantPolicyContext,
+    ) -> Self {
+        Self {
+            entity_id: entity_id.into(),
+            policy_context,
+        }
+    }
+
+    fn enforce_write_scope(&self) -> Result<()> {
+        self.policy_context
+            .enforce_recall_scope(&self.entity_id)
+            .map_err(anyhow::Error::msg)
+    }
+}
+
 /// Build context preamble by searching memory for relevant entries
 fn sanitize_external_fragment_for_context(slot_key: &str, value: &str) -> String {
     if !value.contains("digest_sha256=") {
@@ -247,27 +280,83 @@ fn sanitize_external_fragment_for_context(slot_key: &str, value: &str) -> String
     }
 }
 
+const CONTEXT_REPLAY_REVOKED_MARKERS: [&str; 2] = [
+    "__LANCEDB_DEGRADED_SOFT_FORGET_MARKER__",
+    "__LANCEDB_DEGRADED_TOMBSTONE_MARKER__",
+];
+
+fn is_revocation_marker_payload(value: &str) -> bool {
+    CONTEXT_REPLAY_REVOKED_MARKERS
+        .iter()
+        .any(|marker| value.contains(marker))
+}
+
+async fn allow_context_replay_item(mem: &dyn Memory, entry: &MemoryRecallItem) -> bool {
+    if is_revocation_marker_payload(&entry.value) {
+        return false;
+    }
+
+    let resolved = mem.resolve_slot(&entry.entity_id, &entry.slot_key).await;
+    matches!(resolved, Ok(Some(slot)) if slot.value == entry.value)
+}
+
 async fn build_context(mem: &dyn Memory, user_msg: &str) -> String {
+    build_context_with_policy(mem, "default", user_msg, TenantPolicyContext::disabled())
+        .await
+        .unwrap_or_default()
+}
+
+fn build_context_recall_query(
+    entity_id: &str,
+    user_msg: &str,
+    policy_context: TenantPolicyContext,
+) -> Result<RecallQuery> {
+    let query = RecallQuery::new(entity_id, user_msg, 5).with_policy_context(policy_context);
+    query.enforce_policy()?;
+    Ok(query)
+}
+
+async fn build_context_with_policy(
+    mem: &dyn Memory,
+    entity_id: &str,
+    user_msg: &str,
+    policy_context: TenantPolicyContext,
+) -> Result<String> {
     let mut context = String::new();
 
     // Pull relevant memories for this message
-    let query = RecallQuery::new("default", user_msg, 5);
-    if let Ok(entries) = mem.recall_scoped(query).await {
-        if !entries.is_empty() {
-            context.push_str("[Memory context]\n");
-            for entry in &entries {
-                let value = if entry.slot_key.starts_with("external.") {
-                    sanitize_external_fragment_for_context(&entry.slot_key, &entry.value)
-                } else {
-                    entry.value.clone()
-                };
-                let _ = writeln!(context, "- {}: {}", entry.slot_key, value);
-            }
-            context.push('\n');
+    let query = build_context_recall_query(entity_id, user_msg, policy_context)?;
+    let entries = mem.recall_scoped(query).await?;
+    let mut replayable_entries = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if allow_context_replay_item(mem, &entry).await {
+            replayable_entries.push(entry);
         }
     }
 
-    context
+    if !replayable_entries.is_empty() {
+        context.push_str("[Memory context]\n");
+        for entry in &replayable_entries {
+            let value = if entry.slot_key.starts_with("external.") {
+                sanitize_external_fragment_for_context(&entry.slot_key, &entry.value)
+            } else {
+                entry.value.clone()
+            };
+            let _ = writeln!(context, "- {}: {}", entry.slot_key, value);
+        }
+        context.push('\n');
+    }
+
+    Ok(context)
+}
+
+pub async fn build_context_for_integration(
+    mem: &dyn Memory,
+    entity_id: &str,
+    user_msg: &str,
+    policy_context: TenantPolicyContext,
+) -> Result<String> {
+    build_context_with_policy(mem, entity_id, user_msg, policy_context).await
 }
 
 const PERSONA_REFLECT_SYSTEM_PROMPT: &str = r#"You are a deterministic reflection/writeback stage.
@@ -442,6 +531,25 @@ async fn execute_main_session_turn(
     params: &MainSessionTurnParams<'_>,
     user_message: &str,
 ) -> Result<String> {
+    execute_main_session_turn_with_policy(
+        config,
+        security,
+        mem,
+        params,
+        user_message,
+        RuntimeMemoryWriteContext::main_session_default(),
+    )
+    .await
+}
+
+async fn execute_main_session_turn_with_policy(
+    config: &Config,
+    security: &SecurityPolicy,
+    mem: Arc<dyn Memory>,
+    params: &MainSessionTurnParams<'_>,
+    user_message: &str,
+    write_context: RuntimeMemoryWriteContext,
+) -> Result<String> {
     let caps = VerifyRepairCaps::from_config(config);
     let mut attempts = 0_u32;
     let mut repair_depth = 0_u32;
@@ -454,6 +562,7 @@ async fn execute_main_session_turn(
             mem.clone(),
             params,
             user_message,
+            &write_context,
         )
         .await
         {
@@ -500,6 +609,36 @@ pub async fn run_main_session_turn_for_integration(
     temperature: f64,
     user_message: &str,
 ) -> Result<String> {
+    run_main_session_turn_for_integration_with_policy(
+        config,
+        security,
+        mem,
+        answer_provider,
+        reflect_provider,
+        system_prompt,
+        model_name,
+        temperature,
+        "default",
+        TenantPolicyContext::disabled(),
+        user_message,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_main_session_turn_for_integration_with_policy(
+    config: &Config,
+    security: &SecurityPolicy,
+    mem: Arc<dyn Memory>,
+    answer_provider: &dyn Provider,
+    reflect_provider: &dyn Provider,
+    system_prompt: &str,
+    model_name: &str,
+    temperature: f64,
+    entity_id: &str,
+    policy_context: TenantPolicyContext,
+    user_message: &str,
+) -> Result<String> {
     let params = MainSessionTurnParams {
         answer_provider,
         reflect_provider,
@@ -508,36 +647,59 @@ pub async fn run_main_session_turn_for_integration(
         temperature,
     };
 
-    execute_main_session_turn(config, security, mem, &params, user_message).await
+    execute_main_session_turn_with_policy(
+        config,
+        security,
+        mem,
+        &params,
+        user_message,
+        RuntimeMemoryWriteContext::for_entity_with_policy(entity_id, policy_context),
+    )
+    .await
 }
 
+#[allow(clippy::too_many_lines)]
 async fn execute_main_session_turn_with_accounting(
     config: &Config,
     security: &SecurityPolicy,
     mem: Arc<dyn Memory>,
     params: &MainSessionTurnParams<'_>,
     user_message: &str,
+    write_context: &RuntimeMemoryWriteContext,
 ) -> Result<TurnExecutionOutcome> {
     let mut accounting = TurnCallAccounting::for_persona_mode(config.persona.enabled_main_session);
+    write_context.enforce_write_scope()?;
 
     if config.memory.auto_save {
         let _ = mem
             .append_event(
                 MemoryEventInput::new(
-                    "default",
+                    &write_context.entity_id,
                     "conversation.user_msg",
                     MemoryEventType::FactAdded,
                     user_message,
                     MemorySource::ExplicitUser,
                     PrivacyLevel::Private,
                 )
+                .with_layer(MemoryLayer::Working)
                 .with_confidence(0.95)
-                .with_importance(0.6),
+                .with_importance(0.6)
+                .with_provenance(MemoryProvenance::source_reference(
+                    MemorySource::ExplicitUser,
+                    "agent.autosave.user_msg",
+                )),
             )
             .await;
     }
 
-    let context = build_context(mem.as_ref(), user_message).await;
+    let context = build_context_with_policy(
+        mem.as_ref(),
+        &write_context.entity_id,
+        user_message,
+        write_context.policy_context.clone(),
+    )
+    .await
+    .unwrap_or_default();
     let enriched = if context.is_empty() {
         user_message.to_string()
     } else {
@@ -595,20 +757,46 @@ async fn execute_main_session_turn_with_accounting(
         let _ = mem
             .append_event(
                 MemoryEventInput::new(
-                    "default",
+                    &write_context.entity_id,
                     "conversation.assistant_resp",
                     MemoryEventType::FactAdded,
                     summary,
                     MemorySource::System,
                     PrivacyLevel::Private,
                 )
+                .with_layer(MemoryLayer::Working)
                 .with_confidence(0.9)
-                .with_importance(0.4),
+                .with_importance(0.4)
+                .with_provenance(MemoryProvenance::source_reference(
+                    MemorySource::System,
+                    "agent.autosave.assistant_resp",
+                )),
             )
             .await;
 
-        if let Err(error) = run_post_turn_inference_pass(mem.as_ref(), &response).await {
+        if let Err(error) =
+            run_post_turn_inference_pass(mem.as_ref(), write_context, &response).await
+        {
             tracing::warn!(error = %error, "post-turn memory inference pass failed");
+        }
+
+        match mem.count_events(Some(&write_context.entity_id)).await {
+            Ok(checkpoint_event_count) => {
+                let input = memory::ConsolidationInput::new(
+                    &write_context.entity_id,
+                    checkpoint_event_count,
+                    user_message,
+                    &response,
+                );
+                memory::enqueue_consolidation_task(
+                    mem.clone(),
+                    config.workspace_dir.clone(),
+                    input,
+                );
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "post-turn consolidation checkpoint skipped");
+            }
         }
     }
 
@@ -628,7 +816,10 @@ fn parse_inference_payload(line: &str) -> Option<(&str, &str)> {
     Some((slot_key, value))
 }
 
-fn build_post_turn_inference_events(assistant_response: &str) -> Vec<MemoryInferenceEvent> {
+fn build_post_turn_inference_events(
+    entity_id: &str,
+    assistant_response: &str,
+) -> Vec<MemoryInferenceEvent> {
     const INFERRED_PREFIX: &str = "INFERRED_CLAIM ";
     const CONTRADICTION_PREFIX: &str = "CONTRADICTION_EVENT ";
 
@@ -638,27 +829,54 @@ fn build_post_turn_inference_events(assistant_response: &str) -> Vec<MemoryInfer
             let line = line.trim();
             if let Some(payload) = line.strip_prefix(INFERRED_PREFIX) {
                 let (slot_key, value) = parse_inference_payload(payload)?;
-                return Some(MemoryInferenceEvent::inferred_claim(
-                    "default", slot_key, value,
-                ));
+                return Some(
+                    MemoryInferenceEvent::inferred_claim(entity_id, slot_key, value)
+                        .with_layer(MemoryLayer::Semantic),
+                );
             }
             if let Some(payload) = line.strip_prefix(CONTRADICTION_PREFIX) {
                 let (slot_key, value) = parse_inference_payload(payload)?;
-                return Some(MemoryInferenceEvent::contradiction_marked(
-                    "default", slot_key, value,
-                ));
+                return Some(
+                    MemoryInferenceEvent::contradiction_marked(entity_id, slot_key, value)
+                        .with_layer(MemoryLayer::Episodic),
+                );
             }
             None
         })
         .collect()
 }
 
-async fn run_post_turn_inference_pass(mem: &dyn Memory, assistant_response: &str) -> Result<()> {
-    let events = build_post_turn_inference_events(assistant_response);
+fn inference_provenance_reference(event: &MemoryInferenceEvent) -> (&'static str, MemorySource) {
+    match event {
+        MemoryInferenceEvent::InferredClaim { .. } => {
+            ("inference.post_turn.inferred_claim", MemorySource::Inferred)
+        }
+        MemoryInferenceEvent::ContradictionEvent { .. } => (
+            "inference.post_turn.contradiction_event",
+            MemorySource::System,
+        ),
+    }
+}
+
+async fn run_post_turn_inference_pass(
+    mem: &dyn Memory,
+    write_context: &RuntimeMemoryWriteContext,
+    assistant_response: &str,
+) -> Result<()> {
+    write_context.enforce_write_scope()?;
+    let events = build_post_turn_inference_events(&write_context.entity_id, assistant_response);
     if events.is_empty() {
         return Ok(());
     }
-    memory::persist_inference_events(mem, events).await?;
+
+    for event in events {
+        let (reference, source_class) = inference_provenance_reference(&event);
+        let input = event
+            .into_memory_event_input()
+            .with_provenance(MemoryProvenance::source_reference(source_class, reference));
+        mem.append_event(input).await?;
+    }
+
     Ok(())
 }
 
@@ -1204,6 +1422,7 @@ mod tests {
                     temperature: 0.2,
                 },
                 &format!("turn-{turn}-message"),
+                &RuntimeMemoryWriteContext::main_session_default(),
             )
             .await
             .unwrap();

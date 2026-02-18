@@ -1,4 +1,6 @@
-use super::traits::{AutonomyLifecycleSignal, Observer, ObserverEvent, ObserverMetric};
+use super::traits::{
+    AutonomyLifecycleSignal, MemoryLifecycleSignal, Observer, ObserverEvent, ObserverMetric,
+};
 use tracing::info;
 
 /// Log-based observer — uses tracing, zero external deps
@@ -61,6 +63,9 @@ impl Observer for LogObserver {
             ObserverMetric::AutonomyLifecycle(signal) => {
                 info!(signal = %autonomy_signal_name(*signal), "metric.autonomy_lifecycle");
             }
+            ObserverMetric::MemoryLifecycle(signal) => {
+                info!(signal = %memory_signal_name(*signal), "metric.memory_lifecycle");
+            }
         }
     }
 
@@ -80,6 +85,19 @@ fn autonomy_signal_name(signal: AutonomyLifecycleSignal) -> &'static str {
         AutonomyLifecycleSignal::IntentPolicyDenied => "intent_policy_denied",
         AutonomyLifecycleSignal::IntentDispatched => "intent_dispatched",
         AutonomyLifecycleSignal::IntentExecutionBlocked => "intent_execution_blocked",
+    }
+}
+
+fn memory_signal_name(signal: MemoryLifecycleSignal) -> &'static str {
+    match signal {
+        MemoryLifecycleSignal::ConsolidationStarted => "consolidation_started",
+        MemoryLifecycleSignal::ConsolidationCompleted => "consolidation_completed",
+        MemoryLifecycleSignal::ConflictDetected => "conflict_detected",
+        MemoryLifecycleSignal::ConflictResolved => "conflict_resolved",
+        MemoryLifecycleSignal::RevocationApplied => "revocation_applied",
+        MemoryLifecycleSignal::GovernanceInspect => "governance_inspect",
+        MemoryLifecycleSignal::GovernanceExport => "governance_export",
+        MemoryLifecycleSignal::GovernanceDelete => "governance_delete",
     }
 }
 
@@ -134,6 +152,9 @@ mod tests {
         obs.record_metric(&ObserverMetric::QueueDepth(999));
         obs.record_metric(&ObserverMetric::AutonomyLifecycle(
             AutonomyLifecycleSignal::IntentCreated,
+        ));
+        obs.record_metric(&ObserverMetric::MemoryLifecycle(
+            MemoryLifecycleSignal::ConsolidationCompleted,
         ));
     }
 }

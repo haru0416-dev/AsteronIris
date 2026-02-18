@@ -1,4 +1,5 @@
 pub mod chunker;
+pub mod consolidation;
 pub mod embeddings;
 pub mod hygiene;
 pub mod lancedb;
@@ -7,20 +8,83 @@ pub mod sqlite;
 pub mod traits;
 pub mod vector;
 
+#[allow(unused_imports)]
+pub use consolidation::{
+    enqueue_consolidation_task, run_consolidation_once, ConsolidationDisposition,
+    ConsolidationInput, ConsolidationOutput, CONSOLIDATION_SLOT_KEY,
+};
 pub use lancedb::LanceDbMemory;
 pub use markdown::MarkdownMemory;
 pub use sqlite::SqliteMemory;
 pub use traits::Memory;
 #[allow(unused_imports)]
 pub use traits::{
-    BeliefSlot, ForgetMode, ForgetOutcome, MemoryCategory, MemoryEntry, MemoryEvent,
-    MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemoryRecallItem, MemorySource,
-    PrivacyLevel, RecallQuery,
+    BeliefSlot, CapabilitySupport, ForgetArtifact, ForgetArtifactCheck, ForgetArtifactObservation,
+    ForgetArtifactRequirement, ForgetMode, ForgetOutcome, ForgetStatus, MemoryCapabilityMatrix,
+    MemoryCategory, MemoryEntry, MemoryEvent, MemoryEventInput, MemoryEventType,
+    MemoryInferenceEvent, MemoryProvenance, MemoryRecallItem, MemorySource, PrivacyLevel,
+    RecallQuery,
 };
 
 use crate::config::MemoryConfig;
 use std::path::Path;
 use std::sync::Arc;
+
+const SQLITE_CAPABILITY_MATRIX: MemoryCapabilityMatrix = MemoryCapabilityMatrix {
+    backend: "sqlite",
+    forget_soft: CapabilitySupport::Supported,
+    forget_hard: CapabilitySupport::Supported,
+    forget_tombstone: CapabilitySupport::Supported,
+    unsupported_contract: "sqlite supports soft/hard/tombstone forget semantics",
+};
+
+const LANCEDB_CAPABILITY_MATRIX: MemoryCapabilityMatrix = MemoryCapabilityMatrix {
+    backend: "lancedb",
+    forget_soft: CapabilitySupport::Degraded,
+    forget_hard: CapabilitySupport::Supported,
+    forget_tombstone: CapabilitySupport::Degraded,
+    unsupported_contract:
+        "lancedb soft/tombstone are marker rewrites; hard forget removes projection",
+};
+
+const MARKDOWN_CAPABILITY_MATRIX: MemoryCapabilityMatrix = MemoryCapabilityMatrix {
+    backend: "markdown",
+    forget_soft: CapabilitySupport::Degraded,
+    forget_hard: CapabilitySupport::Unsupported,
+    forget_tombstone: CapabilitySupport::Degraded,
+    unsupported_contract: "markdown is append-only; hard forget cannot physically delete",
+};
+
+const BACKEND_CAPABILITY_MATRIX: [MemoryCapabilityMatrix; 3] = [
+    SQLITE_CAPABILITY_MATRIX,
+    LANCEDB_CAPABILITY_MATRIX,
+    MARKDOWN_CAPABILITY_MATRIX,
+];
+
+pub fn backend_capability_matrix() -> &'static [MemoryCapabilityMatrix] {
+    &BACKEND_CAPABILITY_MATRIX
+}
+
+pub fn capability_matrix_for_backend(backend: &str) -> Option<MemoryCapabilityMatrix> {
+    let normalized = if backend == "none" {
+        "markdown"
+    } else {
+        backend
+    };
+    BACKEND_CAPABILITY_MATRIX
+        .iter()
+        .find(|capability| capability.backend == normalized)
+        .copied()
+}
+
+#[must_use]
+pub fn capability_matrix_for_memory(memory: &dyn Memory) -> MemoryCapabilityMatrix {
+    capability_matrix_for_backend(memory.name()).unwrap_or(MARKDOWN_CAPABILITY_MATRIX)
+}
+
+pub fn ensure_forget_mode_supported(memory: &dyn Memory, mode: ForgetMode) -> anyhow::Result<()> {
+    capability_matrix_for_memory(memory).require_forget_mode(mode)
+}
 
 /// Factory: create the right memory backend from config
 pub fn create_memory(
@@ -89,6 +153,7 @@ pub async fn persist_inference_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -133,5 +198,19 @@ mod tests {
         };
         let mem = create_memory(&cfg, tmp.path(), None).unwrap();
         assert_eq!(mem.name(), "markdown");
+    }
+
+    #[test]
+    fn memory_hygiene_failure_nonfatal() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("state"), "not-json").unwrap();
+
+        let cfg = MemoryConfig {
+            backend: "sqlite".into(),
+            ..MemoryConfig::default()
+        };
+
+        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
+        assert_eq!(mem.name(), "sqlite");
     }
 }

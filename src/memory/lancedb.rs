@@ -1,7 +1,9 @@
 use super::embeddings::EmbeddingProvider;
 use super::traits::{
-    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEntry, MemoryEvent,
-    MemoryEventInput, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
+    BeliefSlot, ForgetArtifact, ForgetArtifactCheck, ForgetArtifactObservation,
+    ForgetArtifactRequirement, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEvent,
+    MemoryEventInput, MemoryLayer, MemoryProvenance, MemoryRecallItem, MemorySource, PrivacyLevel,
+    RecallQuery,
 };
 use super::vector;
 
@@ -10,7 +12,7 @@ use async_trait::async_trait;
 use chrono::Local;
 
 use arrow_array::builder::{FixedSizeListBuilder, Float32Builder};
-use arrow_array::{Array, RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{Array, Float64Array, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 
 use lancedb::index::scalar::FtsIndexBuilder;
@@ -38,6 +40,11 @@ const EMBEDDING_STATUS_READY: &str = "ready";
 const EMBEDDING_STATUS_PENDING: &str = "pending";
 const EMBEDDING_STATUS_FAILED: &str = "failed";
 
+const LANCEDB_DEGRADED_SOFT_FORGET_MARKER: &str = "__LANCEDB_DEGRADED_SOFT_FORGET_MARKER__";
+const LANCEDB_DEGRADED_TOMBSTONE_MARKER: &str = "__LANCEDB_DEGRADED_TOMBSTONE_MARKER__";
+const LANCEDB_DEGRADED_SOFT_FORGET_PROVENANCE: &str = "lancedb:degraded:soft_forget_marker_rewrite";
+const LANCEDB_DEGRADED_TOMBSTONE_PROVENANCE: &str = "lancedb:degraded:tombstone_marker_rewrite";
+
 const LANCE_SCORE_COL: &str = "_score";
 const LANCE_DISTANCE_COL: &str = "_distance";
 
@@ -52,9 +59,33 @@ struct StoredRow {
     key: String,
     content: String,
     category: String,
+    source: String,
+    confidence: f64,
+    importance: f64,
+    privacy_level: String,
+    occurred_at: String,
+    layer: String,
+    provenance_source_class: Option<String>,
+    provenance_reference: Option<String>,
+    provenance_evidence_uri: Option<String>,
     created_at: String,
     updated_at: String,
     embedding_status: String,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectionEntry {
+    id: String,
+    key: String,
+    content: String,
+    category: MemoryCategory,
+    timestamp: String,
+    source: MemorySource,
+    confidence: f64,
+    importance: f64,
+    privacy_level: PrivacyLevel,
+    occurred_at: String,
+    score: Option<f64>,
 }
 
 struct LanceDbInner {
@@ -113,7 +144,11 @@ pub struct LanceDbMemory {
     backfill_worker: JoinHandle<()>,
 }
 
-#[allow(clippy::unused_self, clippy::unused_async)]
+#[allow(
+    clippy::unused_self,
+    clippy::unused_async,
+    clippy::trivially_copy_pass_by_ref
+)]
 impl LanceDbMemory {
     pub fn with_embedder(
         workspace_dir: &Path,
@@ -142,6 +177,15 @@ impl LanceDbMemory {
             Field::new("key", DataType::Utf8, false),
             Field::new("content", DataType::Utf8, false),
             Field::new("category", DataType::Utf8, false),
+            Field::new("source", DataType::Utf8, false),
+            Field::new("confidence", DataType::Float64, false),
+            Field::new("importance", DataType::Float64, false),
+            Field::new("privacy_level", DataType::Utf8, false),
+            Field::new("occurred_at", DataType::Utf8, false),
+            Field::new("layer", DataType::Utf8, false),
+            Field::new("provenance_source_class", DataType::Utf8, true),
+            Field::new("provenance_reference", DataType::Utf8, true),
+            Field::new("provenance_evidence_uri", DataType::Utf8, true),
             Field::new("created_at", DataType::Utf8, false),
             Field::new("updated_at", DataType::Utf8, false),
             Field::new("embedding", embedding_dt, true),
@@ -202,6 +246,50 @@ impl LanceDbMemory {
         }
     }
 
+    fn source_to_str(source: &MemorySource) -> &'static str {
+        match source {
+            MemorySource::ExplicitUser => "explicit_user",
+            MemorySource::ToolVerified => "tool_verified",
+            MemorySource::System => "system",
+            MemorySource::Inferred => "inferred",
+        }
+    }
+
+    fn str_to_source(source: &str) -> MemorySource {
+        match source {
+            "explicit_user" => MemorySource::ExplicitUser,
+            "tool_verified" => MemorySource::ToolVerified,
+            "inferred" => MemorySource::Inferred,
+            _ => MemorySource::System,
+        }
+    }
+
+    fn privacy_to_str(level: &PrivacyLevel) -> &'static str {
+        match level {
+            PrivacyLevel::Public => "public",
+            PrivacyLevel::Private => "private",
+            PrivacyLevel::Secret => "secret",
+        }
+    }
+
+    fn str_to_privacy(level: &str) -> PrivacyLevel {
+        match level {
+            "public" => PrivacyLevel::Public,
+            "secret" => PrivacyLevel::Secret,
+            _ => PrivacyLevel::Private,
+        }
+    }
+
+    fn layer_to_str(layer: &MemoryLayer) -> &'static str {
+        match layer {
+            MemoryLayer::Working => "working",
+            MemoryLayer::Episodic => "episodic",
+            MemoryLayer::Semantic => "semantic",
+            MemoryLayer::Procedural => "procedural",
+            MemoryLayer::Identity => "identity",
+        }
+    }
+
     fn category_from_source(source: &MemorySource) -> MemoryCategory {
         match source {
             MemorySource::ExplicitUser | MemorySource::ToolVerified => MemoryCategory::Core,
@@ -222,6 +310,15 @@ impl LanceDbMemory {
                 "key",
                 "content",
                 "category",
+                "source",
+                "confidence",
+                "importance",
+                "privacy_level",
+                "occurred_at",
+                "layer",
+                "provenance_source_class",
+                "provenance_reference",
+                "provenance_evidence_uri",
                 "created_at",
                 "updated_at",
                 "embedding_status",
@@ -271,7 +368,7 @@ impl LanceDbMemory {
         &self,
         query: &str,
         limit: usize,
-        entries: &mut HashMap<String, MemoryEntry>,
+        entries: &mut HashMap<String, ProjectionEntry>,
     ) -> anyhow::Result<Vec<(String, f32)>> {
         use lancedb::index::scalar::FullTextSearchQuery;
 
@@ -285,6 +382,11 @@ impl LanceDbMemory {
                 "key",
                 "content",
                 "category",
+                "source",
+                "confidence",
+                "importance",
+                "privacy_level",
+                "occurred_at",
                 "created_at",
                 LANCE_SCORE_COL,
             ]))
@@ -310,7 +412,7 @@ impl LanceDbMemory {
         &self,
         query_embedding: &[f32],
         limit: usize,
-        entries: &mut HashMap<String, MemoryEntry>,
+        entries: &mut HashMap<String, ProjectionEntry>,
     ) -> anyhow::Result<Vec<(String, f32)>> {
         let table = self.inner.table().await?;
         let mut stream = table
@@ -325,6 +427,11 @@ impl LanceDbMemory {
                 "key",
                 "content",
                 "category",
+                "source",
+                "confidence",
+                "importance",
+                "privacy_level",
+                "occurred_at",
                 "created_at",
                 LANCE_DISTANCE_COL,
             ]))
@@ -360,14 +467,36 @@ impl LanceDbMemory {
         "lancedb"
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn upsert_projection_entry(
         &self,
         key: &str,
         content: &str,
         category: MemoryCategory,
+        source: MemorySource,
+        confidence: f64,
+        importance: f64,
+        privacy_level: PrivacyLevel,
+        occurred_at: &str,
+        layer: MemoryLayer,
+        provenance: Option<MemoryProvenance>,
     ) -> anyhow::Result<()> {
         let now = Local::now().to_rfc3339();
         let cat = Self::category_to_str(&category);
+        let source = Self::source_to_str(&source).to_string();
+        let privacy_level = Self::privacy_to_str(&privacy_level).to_string();
+        let layer = Self::layer_to_str(&layer).to_string();
+
+        let (provenance_source_class, provenance_reference, provenance_evidence_uri) =
+            if let Some(provenance) = provenance {
+                (
+                    Some(Self::source_to_str(&provenance.source_class).to_string()),
+                    Some(provenance.reference),
+                    provenance.evidence_uri,
+                )
+            } else {
+                (None, None, None)
+            };
 
         let existing = self.get_row_by_key(key).await?;
         let (id, created_at) = if let Some(ref row) = existing {
@@ -389,9 +518,18 @@ impl LanceDbMemory {
                     id,
                     key: key.to_string(),
                     content: content.to_string(),
-                    category: cat,
-                    created_at,
-                    updated_at: now,
+                    category: cat.clone(),
+                    source: source.clone(),
+                    confidence,
+                    importance,
+                    privacy_level: privacy_level.clone(),
+                    occurred_at: occurred_at.to_string(),
+                    layer: layer.clone(),
+                    provenance_source_class: provenance_source_class.clone(),
+                    provenance_reference: provenance_reference.clone(),
+                    provenance_evidence_uri: provenance_evidence_uri.clone(),
+                    created_at: created_at.clone(),
+                    updated_at: now.clone(),
                     embedding_status: EMBEDDING_STATUS_READY.to_string(),
                 };
                 self.upsert_row(&row, Some(&embedding)).await
@@ -402,6 +540,15 @@ impl LanceDbMemory {
                     key: key.to_string(),
                     content: content.to_string(),
                     category: cat,
+                    source,
+                    confidence,
+                    importance,
+                    privacy_level,
+                    occurred_at: occurred_at.to_string(),
+                    layer,
+                    provenance_source_class,
+                    provenance_reference,
+                    provenance_evidence_uri,
                     created_at,
                     updated_at: now,
                     embedding_status: EMBEDDING_STATUS_PENDING.to_string(),
@@ -417,12 +564,12 @@ impl LanceDbMemory {
         &self,
         query: &str,
         limit: usize,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> anyhow::Result<Vec<ProjectionEntry>> {
         if limit == 0 || query.trim().is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut entries: HashMap<String, MemoryEntry> = HashMap::new();
+        let mut entries: HashMap<String, ProjectionEntry> = HashMap::new();
 
         let keyword = self
             .fts_search(query, limit.saturating_mul(2), &mut entries)
@@ -485,15 +632,19 @@ impl LanceDbMemory {
         Ok(results)
     }
 
-    async fn fetch_projection_entry(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+    async fn fetch_projection_entry(&self, key: &str) -> anyhow::Result<Option<ProjectionEntry>> {
         let row = self.get_row_by_key(key).await?;
-        Ok(row.map(|r| MemoryEntry {
+        Ok(row.map(|r| ProjectionEntry {
             id: r.id,
             key: r.key,
             content: r.content,
             category: Self::str_to_category(&r.category),
-            timestamp: r.created_at,
-            session_id: None,
+            timestamp: r.updated_at,
+            source: Self::str_to_source(&r.source),
+            confidence: r.confidence,
+            importance: r.importance,
+            privacy_level: Self::str_to_privacy(&r.privacy_level),
+            occurred_at: r.occurred_at,
             score: None,
         }))
     }
@@ -501,13 +652,18 @@ impl LanceDbMemory {
     async fn list_projection_entries(
         &self,
         category: Option<&MemoryCategory>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> anyhow::Result<Vec<ProjectionEntry>> {
         let table = self.inner.table().await?;
         let mut q = table.query().select(Select::columns(&[
             "id",
             "key",
             "content",
             "category",
+            "source",
+            "confidence",
+            "importance",
+            "privacy_level",
+            "occurred_at",
             "created_at",
         ]));
         if let Some(cat) = category {
@@ -548,11 +704,19 @@ impl LanceDbMemory {
     }
 
     async fn append_event(&self, input: MemoryEventInput) -> anyhow::Result<MemoryEvent> {
+        let input = input.normalize_for_ingress()?;
         let key = format!("{}:{}", input.entity_id, input.slot_key);
         self.upsert_projection_entry(
             &key,
             &input.value,
             Self::category_from_source(&input.source),
+            input.source,
+            input.confidence,
+            input.importance,
+            input.privacy_level.clone(),
+            &input.occurred_at,
+            input.layer,
+            input.provenance.clone(),
         )
         .await?;
 
@@ -565,6 +729,7 @@ impl LanceDbMemory {
             source: input.source,
             confidence: input.confidence,
             importance: input.importance,
+            provenance: input.provenance,
             privacy_level: input.privacy_level,
             occurred_at: input.occurred_at,
             ingested_at: Local::now().to_rfc3339(),
@@ -593,12 +758,12 @@ impl LanceDbMemory {
                     entity_id: entity.to_string(),
                     slot_key: slot.to_string(),
                     value: entry.content,
-                    source: Self::source_from_category(&entry.category),
-                    confidence: 0.8,
-                    importance: 0.5,
-                    privacy_level: PrivacyLevel::Private,
+                    source: entry.source,
+                    confidence: entry.confidence,
+                    importance: entry.importance,
+                    privacy_level: entry.privacy_level,
                     score: final_score,
-                    occurred_at: entry.timestamp,
+                    occurred_at: entry.occurred_at,
                 })
             })
             .collect())
@@ -615,10 +780,10 @@ impl LanceDbMemory {
             entity_id: entity_id.to_string(),
             slot_key: slot_key.to_string(),
             value: entry.content,
-            source: Self::source_from_category(&entry.category),
-            confidence: 0.8,
-            importance: 0.5,
-            privacy_level: PrivacyLevel::Private,
+            source: entry.source,
+            confidence: entry.confidence,
+            importance: entry.importance,
+            privacy_level: entry.privacy_level,
             updated_at: entry.timestamp,
         }))
     }
@@ -631,13 +796,24 @@ impl LanceDbMemory {
         _reason: &str,
     ) -> anyhow::Result<ForgetOutcome> {
         let key = format!("{entity_id}:{slot_key}");
+        let degraded = matches!(mode, ForgetMode::Soft | ForgetMode::Tombstone);
         let applied = match mode {
             ForgetMode::Hard => self.delete_projection_entry(&key).await?,
             ForgetMode::Soft => {
                 self.upsert_projection_entry(
                     &key,
-                    "__SOFT_DELETED__",
-                    MemoryCategory::Custom("soft_deleted".to_string()),
+                    LANCEDB_DEGRADED_SOFT_FORGET_MARKER,
+                    MemoryCategory::Custom("degraded_soft_deleted".to_string()),
+                    MemorySource::System,
+                    0.0,
+                    0.0,
+                    PrivacyLevel::Private,
+                    &Local::now().to_rfc3339(),
+                    MemoryLayer::Working,
+                    Some(MemoryProvenance::source_reference(
+                        MemorySource::System,
+                        LANCEDB_DEGRADED_SOFT_FORGET_PROVENANCE,
+                    )),
                 )
                 .await?;
                 true
@@ -645,20 +821,82 @@ impl LanceDbMemory {
             ForgetMode::Tombstone => {
                 self.upsert_projection_entry(
                     &key,
-                    "__TOMBSTONE__",
-                    MemoryCategory::Custom("tombstoned".to_string()),
+                    LANCEDB_DEGRADED_TOMBSTONE_MARKER,
+                    MemoryCategory::Custom("degraded_tombstoned".to_string()),
+                    MemorySource::System,
+                    0.0,
+                    0.0,
+                    PrivacyLevel::Private,
+                    &Local::now().to_rfc3339(),
+                    MemoryLayer::Working,
+                    Some(MemoryProvenance::source_reference(
+                        MemorySource::System,
+                        LANCEDB_DEGRADED_TOMBSTONE_PROVENANCE,
+                    )),
                 )
                 .await?;
                 true
             }
         };
 
-        Ok(ForgetOutcome {
-            entity_id: entity_id.to_string(),
-            slot_key: slot_key.to_string(),
+        let slot_observed = if self.resolve_slot(entity_id, slot_key).await?.is_some() {
+            ForgetArtifactObservation::PresentRetrievable
+        } else {
+            ForgetArtifactObservation::Absent
+        };
+
+        let projection_observed = if self.fetch_projection_entry(&key).await?.is_some() {
+            ForgetArtifactObservation::PresentRetrievable
+        } else {
+            ForgetArtifactObservation::Absent
+        };
+
+        let slot_requirement = match mode {
+            ForgetMode::Hard => ForgetArtifactRequirement::MustBeAbsent,
+            ForgetMode::Soft | ForgetMode::Tombstone => {
+                ForgetArtifactRequirement::MustBeNonRetrievable
+            }
+        };
+
+        let projection_requirement = match mode {
+            ForgetMode::Hard => ForgetArtifactRequirement::MustBeAbsent,
+            ForgetMode::Soft | ForgetMode::Tombstone => {
+                ForgetArtifactRequirement::MustBeNonRetrievable
+            }
+        };
+
+        let artifact_checks = vec![
+            ForgetArtifactCheck::new(ForgetArtifact::Slot, slot_requirement, slot_observed),
+            ForgetArtifactCheck::new(
+                ForgetArtifact::RetrievalDocs,
+                ForgetArtifactRequirement::NotGoverned,
+                ForgetArtifactObservation::Absent,
+            ),
+            ForgetArtifactCheck::new(
+                ForgetArtifact::ProjectionDocs,
+                projection_requirement,
+                projection_observed,
+            ),
+            ForgetArtifactCheck::new(
+                ForgetArtifact::Caches,
+                ForgetArtifactRequirement::NotGoverned,
+                ForgetArtifactObservation::Absent,
+            ),
+            ForgetArtifactCheck::new(
+                ForgetArtifact::Ledger,
+                ForgetArtifactRequirement::NotGoverned,
+                ForgetArtifactObservation::Absent,
+            ),
+        ];
+
+        Ok(ForgetOutcome::from_checks(
+            entity_id,
+            slot_key,
             mode,
             applied,
-        })
+            degraded,
+            artifact_checks,
+        ))
     }
 
     async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
@@ -696,6 +934,15 @@ async fn backfill_one(inner: &LanceDbInner, key: &str) -> anyhow::Result<()> {
             "key",
             "content",
             "category",
+            "source",
+            "confidence",
+            "importance",
+            "privacy_level",
+            "occurred_at",
+            "layer",
+            "provenance_source_class",
+            "provenance_reference",
+            "provenance_evidence_uri",
             "created_at",
             "updated_at",
             "embedding_status",
@@ -774,6 +1021,20 @@ fn build_row_batch(
     let key = Arc::new(StringArray::from(vec![Some(row.key.as_str())]));
     let content = Arc::new(StringArray::from(vec![Some(row.content.as_str())]));
     let category = Arc::new(StringArray::from(vec![Some(row.category.as_str())]));
+    let source = Arc::new(StringArray::from(vec![Some(row.source.as_str())]));
+    let confidence = Arc::new(Float64Array::from(vec![row.confidence]));
+    let importance = Arc::new(Float64Array::from(vec![row.importance]));
+    let privacy_level = Arc::new(StringArray::from(vec![Some(row.privacy_level.as_str())]));
+    let occurred_at = Arc::new(StringArray::from(vec![Some(row.occurred_at.as_str())]));
+    let layer = Arc::new(StringArray::from(vec![Some(row.layer.as_str())]));
+    let provenance_source_class = Arc::new(StringArray::from(vec![row
+        .provenance_source_class
+        .as_deref()]));
+    let provenance_reference =
+        Arc::new(StringArray::from(vec![row.provenance_reference.as_deref()]));
+    let provenance_evidence_uri = Arc::new(StringArray::from(vec![row
+        .provenance_evidence_uri
+        .as_deref()]));
     let created_at = Arc::new(StringArray::from(vec![Some(row.created_at.as_str())]));
     let updated_at = Arc::new(StringArray::from(vec![Some(row.updated_at.as_str())]));
     let status = Arc::new(StringArray::from(vec![Some(row.embedding_status.as_str())]));
@@ -810,6 +1071,15 @@ fn build_row_batch(
         key,
         content,
         category,
+        source,
+        confidence,
+        importance,
+        privacy_level,
+        occurred_at,
+        layer,
+        provenance_source_class,
+        provenance_reference,
+        provenance_evidence_uri,
         created_at,
         updated_at,
         embedding_arr,
@@ -818,6 +1088,7 @@ fn build_row_batch(
     Ok(RecordBatch::try_new(schema, cols)?)
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_rows(batch: &RecordBatch) -> Vec<StoredRow> {
     let id = batch
         .column_by_name("id")
@@ -830,6 +1101,33 @@ fn parse_rows(batch: &RecordBatch) -> Vec<StoredRow> {
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
     let category = batch
         .column_by_name("category")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let source = batch
+        .column_by_name("source")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let confidence = batch
+        .column_by_name("confidence")
+        .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+    let importance = batch
+        .column_by_name("importance")
+        .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+    let privacy_level = batch
+        .column_by_name("privacy_level")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let occurred_at = batch
+        .column_by_name("occurred_at")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let layer = batch
+        .column_by_name("layer")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let provenance_source_class = batch
+        .column_by_name("provenance_source_class")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let provenance_reference = batch
+        .column_by_name("provenance_reference")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let provenance_evidence_uri = batch
+        .column_by_name("provenance_evidence_uri")
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
     let created_at = batch
         .column_by_name("created_at")
@@ -880,6 +1178,31 @@ fn parse_rows(batch: &RecordBatch) -> Vec<StoredRow> {
             key: key.value(i).to_string(),
             content: content.value(i).to_string(),
             category: category.value(i).to_string(),
+            source: source
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string()))
+                .unwrap_or_else(|| {
+                    LanceDbMemory::source_to_str(&LanceDbMemory::source_from_category(
+                        &LanceDbMemory::str_to_category(category.value(i)),
+                    ))
+                    .to_string()
+                }),
+            confidence: confidence.map_or(0.0, |col| col.value(i)),
+            importance: importance.map_or(0.0, |col| col.value(i)),
+            privacy_level: privacy_level
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string()))
+                .unwrap_or_else(|| "private".to_string()),
+            occurred_at: occurred_at
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string()))
+                .unwrap_or_else(|| created_at.value(i).to_string()),
+            layer: layer
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string()))
+                .unwrap_or_else(|| "working".to_string()),
+            provenance_source_class: provenance_source_class
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string())),
+            provenance_reference: provenance_reference
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string())),
+            provenance_evidence_uri: provenance_evidence_uri
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string())),
             created_at: created_at.value(i).to_string(),
             updated_at: updated_at.value(i).to_string(),
             embedding_status: embedding_status.value(i).to_string(),
@@ -888,7 +1211,7 @@ fn parse_rows(batch: &RecordBatch) -> Vec<StoredRow> {
     out
 }
 
-fn parse_entries(batch: &RecordBatch) -> Vec<MemoryEntry> {
+fn parse_entries(batch: &RecordBatch) -> Vec<ProjectionEntry> {
     let id = batch
         .column_by_name("id")
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
@@ -900,6 +1223,21 @@ fn parse_entries(batch: &RecordBatch) -> Vec<MemoryEntry> {
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
     let category = batch
         .column_by_name("category")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let source = batch
+        .column_by_name("source")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let confidence = batch
+        .column_by_name("confidence")
+        .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+    let importance = batch
+        .column_by_name("importance")
+        .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+    let privacy_level = batch
+        .column_by_name("privacy_level")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let occurred_at = batch
+        .column_by_name("occurred_at")
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
     let created_at = batch
         .column_by_name("created_at")
@@ -922,13 +1260,28 @@ fn parse_entries(batch: &RecordBatch) -> Vec<MemoryEntry> {
             continue;
         }
 
-        out.push(MemoryEntry {
+        let parsed_category = LanceDbMemory::str_to_category(category.value(i));
+        let parsed_source = source
+            .and_then(|col| (!col.is_null(i)).then(|| LanceDbMemory::str_to_source(col.value(i))))
+            .unwrap_or_else(|| LanceDbMemory::source_from_category(&parsed_category));
+
+        out.push(ProjectionEntry {
             id: id.value(i).to_string(),
             key: key.value(i).to_string(),
             content: content.value(i).to_string(),
-            category: LanceDbMemory::str_to_category(category.value(i)),
+            category: parsed_category,
             timestamp: created_at.value(i).to_string(),
-            session_id: None,
+            source: parsed_source,
+            confidence: confidence.map_or(0.0, |col| col.value(i)),
+            importance: importance.map_or(0.0, |col| col.value(i)),
+            privacy_level: privacy_level
+                .and_then(|col| {
+                    (!col.is_null(i)).then(|| LanceDbMemory::str_to_privacy(col.value(i)))
+                })
+                .unwrap_or(PrivacyLevel::Private),
+            occurred_at: occurred_at
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string()))
+                .unwrap_or_else(|| created_at.value(i).to_string()),
             score: None,
         });
     }
@@ -936,7 +1289,10 @@ fn parse_entries(batch: &RecordBatch) -> Vec<MemoryEntry> {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn parse_entries_and_score(batch: &RecordBatch, score_col: &str) -> (Vec<MemoryEntry>, Vec<f32>) {
+fn parse_entries_and_score(
+    batch: &RecordBatch,
+    score_col: &str,
+) -> (Vec<ProjectionEntry>, Vec<f32>) {
     let id = batch
         .column_by_name("id")
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
@@ -948,6 +1304,21 @@ fn parse_entries_and_score(batch: &RecordBatch, score_col: &str) -> (Vec<MemoryE
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
     let category = batch
         .column_by_name("category")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let source = batch
+        .column_by_name("source")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let confidence = batch
+        .column_by_name("confidence")
+        .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+    let importance = batch
+        .column_by_name("importance")
+        .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+    let privacy_level = batch
+        .column_by_name("privacy_level")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let occurred_at = batch
+        .column_by_name("occurred_at")
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
     let created_at = batch
         .column_by_name("created_at")
@@ -984,13 +1355,28 @@ fn parse_entries_and_score(batch: &RecordBatch, score_col: &str) -> (Vec<MemoryE
             0.0
         };
 
-        entries_out.push(MemoryEntry {
+        let parsed_category = LanceDbMemory::str_to_category(category.value(i));
+        let parsed_source = source
+            .and_then(|col| (!col.is_null(i)).then(|| LanceDbMemory::str_to_source(col.value(i))))
+            .unwrap_or_else(|| LanceDbMemory::source_from_category(&parsed_category));
+
+        entries_out.push(ProjectionEntry {
             id: id.value(i).to_string(),
             key: key.value(i).to_string(),
             content: content.value(i).to_string(),
-            category: LanceDbMemory::str_to_category(category.value(i)),
+            category: parsed_category,
             timestamp: created_at.value(i).to_string(),
-            session_id: None,
+            source: parsed_source,
+            confidence: confidence.map_or(0.0, |col| col.value(i)),
+            importance: importance.map_or(0.0, |col| col.value(i)),
+            privacy_level: privacy_level
+                .and_then(|col| {
+                    (!col.is_null(i)).then(|| LanceDbMemory::str_to_privacy(col.value(i)))
+                })
+                .unwrap_or(PrivacyLevel::Private),
+            occurred_at: occurred_at
+                .and_then(|col| (!col.is_null(i)).then(|| col.value(i).to_string()))
+                .unwrap_or_else(|| created_at.value(i).to_string()),
             score: None,
         });
         scores_out.push(score);
@@ -1045,6 +1431,23 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    async fn test_upsert(mem: &LanceDbMemory, key: &str, content: &str, category: MemoryCategory) {
+        mem.upsert_projection_entry(
+            key,
+            content,
+            category,
+            MemorySource::ExplicitUser,
+            0.95,
+            0.5,
+            PrivacyLevel::Private,
+            "2026-01-01T00:00:00Z",
+            MemoryLayer::Working,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn lancedb_name_and_health() {
         let tmp = TempDir::new().unwrap();
@@ -1060,12 +1463,14 @@ mod tests {
         let embedder = Arc::new(super::super::embeddings::DeterministicEmbedding::new(8));
         let mem = LanceDbMemory::with_embedder(tmp.path(), embedder, 0.7, 0.3).unwrap();
 
-        mem.upsert_projection_entry("core_k", "Rust is fast", MemoryCategory::Core)
-            .await
-            .unwrap();
-        mem.upsert_projection_entry("daily_k", "Daily note about Rust", MemoryCategory::Daily)
-            .await
-            .unwrap();
+        test_upsert(&mem, "core_k", "Rust is fast", MemoryCategory::Core).await;
+        test_upsert(
+            &mem,
+            "daily_k",
+            "Daily note about Rust",
+            MemoryCategory::Daily,
+        )
+        .await;
 
         let core_row = mem.get_row_by_key("core_k").await.unwrap().unwrap();
         assert_eq!(core_row.embedding_status, EMBEDDING_STATUS_READY);
@@ -1089,9 +1494,7 @@ mod tests {
         assert_eq!(core.content, "Rust is fast");
         assert_eq!(core.category, MemoryCategory::Core);
 
-        mem.upsert_projection_entry("core_k", "Rust is very fast", MemoryCategory::Core)
-            .await
-            .unwrap();
+        test_upsert(&mem, "core_k", "Rust is very fast", MemoryCategory::Core).await;
         let core2 = mem.fetch_projection_entry("core_k").await.unwrap().unwrap();
         assert_eq!(core2.content, "Rust is very fast");
 
@@ -1109,13 +1512,13 @@ mod tests {
         let mem = LanceDbMemory::with_embedder(tmp.path(), embedder, 0.7, 0.3).unwrap();
 
         for i in 0..20 {
-            mem.upsert_projection_entry(
+            test_upsert(
+                &mem,
                 &format!("k{i}"),
                 &format!("Rust item {i}"),
                 MemoryCategory::Core,
             )
-            .await
-            .unwrap();
+            .await;
         }
 
         let results = mem.search_projection("Rust", 3).await.unwrap();
@@ -1129,12 +1532,8 @@ mod tests {
         let mem = LanceDbMemory::with_embedder(tmp.path(), embedder, 0.7, 0.3).unwrap();
 
         assert_eq!(mem.count_projection_entries().await.unwrap(), 0);
-        mem.upsert_projection_entry("a", "one", MemoryCategory::Core)
-            .await
-            .unwrap();
-        mem.upsert_projection_entry("b", "two", MemoryCategory::Core)
-            .await
-            .unwrap();
+        test_upsert(&mem, "a", "one", MemoryCategory::Core).await;
+        test_upsert(&mem, "b", "two", MemoryCategory::Core).await;
         assert_eq!(mem.count_projection_entries().await.unwrap(), 2);
 
         assert!(mem.delete_projection_entry("a").await.unwrap());

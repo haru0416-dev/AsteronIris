@@ -294,6 +294,18 @@ pub struct MemoryConfig {
     /// For sqlite backend: prune conversation rows older than this many days
     #[serde(default = "default_conversation_retention_days")]
     pub conversation_retention_days: u32,
+    #[serde(default)]
+    pub layer_retention_working_days: Option<u32>,
+    #[serde(default)]
+    pub layer_retention_episodic_days: Option<u32>,
+    #[serde(default)]
+    pub layer_retention_semantic_days: Option<u32>,
+    #[serde(default)]
+    pub layer_retention_procedural_days: Option<u32>,
+    #[serde(default)]
+    pub layer_retention_identity_days: Option<u32>,
+    #[serde(default)]
+    pub ledger_retention_days: Option<u32>,
     /// Embedding provider: "none" | "openai" | "custom:URL"
     #[serde(default = "default_embedding_provider")]
     pub embedding_provider: String,
@@ -351,6 +363,34 @@ fn default_chunk_size() -> usize {
     512
 }
 
+impl MemoryConfig {
+    pub fn layer_retention_days(&self, layer: &str) -> u32 {
+        match layer {
+            "working" => self
+                .layer_retention_working_days
+                .unwrap_or(self.conversation_retention_days),
+            "episodic" => self
+                .layer_retention_episodic_days
+                .unwrap_or(self.conversation_retention_days),
+            "semantic" => self
+                .layer_retention_semantic_days
+                .unwrap_or(self.conversation_retention_days),
+            "procedural" => self
+                .layer_retention_procedural_days
+                .unwrap_or(self.conversation_retention_days),
+            "identity" => self
+                .layer_retention_identity_days
+                .unwrap_or(self.conversation_retention_days),
+            _ => self.conversation_retention_days,
+        }
+    }
+
+    pub fn ledger_retention_or_default(&self) -> u32 {
+        self.ledger_retention_days
+            .unwrap_or(self.conversation_retention_days)
+    }
+}
+
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -360,6 +400,12 @@ impl Default for MemoryConfig {
             archive_after_days: default_archive_after_days(),
             purge_after_days: default_purge_after_days(),
             conversation_retention_days: default_conversation_retention_days(),
+            layer_retention_working_days: None,
+            layer_retention_episodic_days: None,
+            layer_retention_semantic_days: None,
+            layer_retention_procedural_days: None,
+            layer_retention_identity_days: None,
+            ledger_retention_days: None,
             embedding_provider: default_embedding_provider(),
             embedding_model: default_embedding_model(),
             embedding_dimensions: default_embedding_dims(),
@@ -1310,6 +1356,26 @@ mod tests {
         assert_eq!(m.archive_after_days, 7);
         assert_eq!(m.purge_after_days, 30);
         assert_eq!(m.conversation_retention_days, 30);
+        assert!(m.layer_retention_working_days.is_none());
+        assert!(m.layer_retention_episodic_days.is_none());
+        assert!(m.layer_retention_semantic_days.is_none());
+        assert!(m.layer_retention_procedural_days.is_none());
+        assert!(m.layer_retention_identity_days.is_none());
+        assert!(m.ledger_retention_days.is_none());
+    }
+
+    #[test]
+    fn memory_layer_retention_helpers() {
+        let mut m = MemoryConfig::default();
+        m.conversation_retention_days = 30;
+        m.layer_retention_working_days = Some(7);
+        m.layer_retention_episodic_days = Some(2);
+        m.ledger_retention_days = Some(9);
+
+        assert_eq!(m.layer_retention_days("working"), 7);
+        assert_eq!(m.layer_retention_days("episodic"), 2);
+        assert_eq!(m.layer_retention_days("semantic"), 30);
+        assert_eq!(m.ledger_retention_or_default(), 9);
     }
 
     #[test]
@@ -1468,6 +1534,12 @@ default_temperature = 0.7
         assert_eq!(parsed.memory.archive_after_days, 7);
         assert_eq!(parsed.memory.purge_after_days, 30);
         assert_eq!(parsed.memory.conversation_retention_days, 30);
+        assert!(parsed.memory.layer_retention_working_days.is_none());
+        assert!(parsed.memory.layer_retention_episodic_days.is_none());
+        assert!(parsed.memory.layer_retention_semantic_days.is_none());
+        assert!(parsed.memory.layer_retention_procedural_days.is_none());
+        assert!(parsed.memory.layer_retention_identity_days.is_none());
+        assert!(parsed.memory.ledger_retention_days.is_none());
         assert_eq!(parsed.persona.state_mirror_filename, "STATE.md");
         assert!(!parsed.persona.enabled_main_session);
     }
