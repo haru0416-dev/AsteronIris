@@ -3,7 +3,7 @@ use crate::memory::traits::MemoryLayer;
 use crate::memory::{MemoryCategory, MemorySource, PrivacyLevel};
 
 impl SqliteMemory {
-    fn category_to_str(cat: &MemoryCategory) -> String {
+    pub(super) fn category_to_str(cat: &MemoryCategory) -> String {
         match cat {
             MemoryCategory::Core => "core".into(),
             MemoryCategory::Daily => "daily".into(),
@@ -12,7 +12,7 @@ impl SqliteMemory {
         }
     }
 
-    fn str_to_category(s: &str) -> MemoryCategory {
+    pub(super) fn str_to_category(s: &str) -> MemoryCategory {
         match s {
             "core" => MemoryCategory::Core,
             "daily" => MemoryCategory::Daily,
@@ -21,7 +21,7 @@ impl SqliteMemory {
         }
     }
 
-    fn source_to_str(source: &MemorySource) -> &'static str {
+    pub(super) fn source_to_str(source: &MemorySource) -> &'static str {
         match source {
             MemorySource::ExplicitUser => "explicit_user",
             MemorySource::ToolVerified => "tool_verified",
@@ -30,7 +30,7 @@ impl SqliteMemory {
         }
     }
 
-    fn layer_to_str(layer: &MemoryLayer) -> &'static str {
+    pub(super) fn layer_to_str(layer: &MemoryLayer) -> &'static str {
         match layer {
             MemoryLayer::Working => "working",
             MemoryLayer::Episodic => "episodic",
@@ -40,7 +40,7 @@ impl SqliteMemory {
         }
     }
 
-    fn retention_tier_for_layer(layer: &MemoryLayer) -> &'static str {
+    pub(super) fn retention_tier_for_layer(layer: &MemoryLayer) -> &'static str {
         match layer {
             MemoryLayer::Working => "working",
             MemoryLayer::Episodic => "episodic",
@@ -50,7 +50,10 @@ impl SqliteMemory {
         }
     }
 
-    fn retention_expiry_for_layer(layer: &MemoryLayer, occurred_at: &str) -> Option<String> {
+    pub(super) fn retention_expiry_for_layer(
+        layer: &MemoryLayer,
+        occurred_at: &str,
+    ) -> Option<String> {
         let retention_days = match layer {
             MemoryLayer::Working => Some(2),
             MemoryLayer::Episodic => Some(30),
@@ -62,7 +65,7 @@ impl SqliteMemory {
             .map(|ts| (ts + chrono::Duration::days(retention_days)).to_rfc3339())
     }
 
-    fn str_to_source(source: &str) -> MemorySource {
+    pub(super) fn str_to_source(source: &str) -> MemorySource {
         match source {
             "explicit_user" => MemorySource::ExplicitUser,
             "tool_verified" => MemorySource::ToolVerified,
@@ -71,7 +74,7 @@ impl SqliteMemory {
         }
     }
 
-    fn privacy_to_str(level: &PrivacyLevel) -> &'static str {
+    pub(super) fn privacy_to_str(level: &PrivacyLevel) -> &'static str {
         match level {
             PrivacyLevel::Public => "public",
             PrivacyLevel::Private => "private",
@@ -79,7 +82,7 @@ impl SqliteMemory {
         }
     }
 
-    fn str_to_privacy(level: &str) -> PrivacyLevel {
+    pub(super) fn str_to_privacy(level: &str) -> PrivacyLevel {
         match level {
             "public" => PrivacyLevel::Public,
             "secret" => PrivacyLevel::Secret,

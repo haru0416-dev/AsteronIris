@@ -147,32 +147,25 @@ fn autonomy_governance_lines(config: &Config) -> Vec<String> {
     ));
 
     let rollout_stage = match config.autonomy.rollout.stage {
-        crate::config::schema::AutonomyRolloutStage::Off => "off",
-        crate::config::schema::AutonomyRolloutStage::AuditOnly => "audit-only",
-        crate::config::schema::AutonomyRolloutStage::Sanitize => "sanitize",
+        Some(crate::config::schema::AutonomyRolloutStage::ReadOnly) => "read-only",
+        Some(crate::config::schema::AutonomyRolloutStage::Supervised) => "supervised",
+        Some(crate::config::schema::AutonomyRolloutStage::Full) => "full",
+        None => "off",
     };
     lines.push(format!("rollout stage: {rollout_stage}"));
     lines.push(format!(
-        "rollout gates: verify_repair={}, contradiction_weighting={}, intent_audit_anomaly_detection={}",
-        if config.autonomy.rollout.verify_repair_enabled {
+        "rollout policy: enabled={}, read_only_days={:?}, supervised_days={:?}",
+        if config.autonomy.rollout.enabled {
             "on"
         } else {
             "off"
         },
-        if config.autonomy.rollout.contradiction_weighting_enabled {
-            "on"
-        } else {
-            "off"
-        },
-        if config
-            .autonomy
-            .rollout
-            .intent_audit_anomaly_detection_enabled
-        {
-            "on"
-        } else {
-            "off"
-        }
+        config.autonomy.rollout.read_only_days,
+        config.autonomy.rollout.supervised_days
+    ));
+    lines.push(format!(
+        "verify/repair caps: max_attempts={}, max_repair_depth={}",
+        config.autonomy.verify_repair_max_attempts, config.autonomy.verify_repair_max_repair_depth
     ));
 
     let backend = config.observability.backend.as_str();
@@ -202,7 +195,7 @@ fn memory_rollout_lines(config: &Config, snapshot: &serde_json::Value) -> Vec<St
     } else {
         "off"
     };
-    let conflict = if backend != "none" && config.autonomy.rollout.contradiction_weighting_enabled {
+    let conflict = if backend != "none" && config.autonomy.rollout.enabled {
         "on"
     } else {
         "off"
@@ -309,7 +302,7 @@ mod tests {
         let mut config = Config::default();
         config.memory.backend = "sqlite".into();
         config.memory.auto_save = true;
-        config.autonomy.rollout.contradiction_weighting_enabled = true;
+        config.autonomy.rollout.enabled = true;
 
         let snapshot = serde_json::json!({
             "memory_rollout": {

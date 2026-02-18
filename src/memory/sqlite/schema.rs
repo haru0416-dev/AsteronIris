@@ -3,7 +3,7 @@ use chrono::Local;
 use rusqlite::{params, Connection};
 
 impl SqliteMemory {
-    fn init_schema(conn: &Connection) -> anyhow::Result<()> {
+    pub(super) fn init_schema(conn: &Connection) -> anyhow::Result<()> {
         conn.execute_batch(
             "-- Core memories table
             CREATE TABLE IF NOT EXISTS memories (

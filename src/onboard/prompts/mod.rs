@@ -415,36 +415,6 @@ pub fn setup_provider() -> Result<(String, String, String)> {
     Ok((provider_name.to_string(), api_key, model))
 }
 
-/// Map provider name to its conventional env var
-fn provider_env_var(name: &str) -> &'static str {
-    match name {
-        "openrouter" => "OPENROUTER_API_KEY",
-        "anthropic" => "ANTHROPIC_API_KEY",
-        "openai" => "OPENAI_API_KEY",
-        "venice" => "VENICE_API_KEY",
-        "groq" => "GROQ_API_KEY",
-        "mistral" => "MISTRAL_API_KEY",
-        "deepseek" => "DEEPSEEK_API_KEY",
-        "xai" | "grok" => "XAI_API_KEY",
-        "together" | "together-ai" => "TOGETHER_API_KEY",
-        "fireworks" | "fireworks-ai" => "FIREWORKS_API_KEY",
-        "perplexity" => "PERPLEXITY_API_KEY",
-        "cohere" => "COHERE_API_KEY",
-        "moonshot" | "kimi" => "MOONSHOT_API_KEY",
-        "glm" | "zhipu" => "GLM_API_KEY",
-        "minimax" => "MINIMAX_API_KEY",
-        "qianfan" | "baidu" => "QIANFAN_API_KEY",
-        "zai" | "z.ai" => "ZAI_API_KEY",
-        "synthetic" => "SYNTHETIC_API_KEY",
-        "opencode" | "opencode-zen" => "OPENCODE_API_KEY",
-        "vercel" | "vercel-ai" => "VERCEL_API_KEY",
-        "cloudflare" | "cloudflare-ai" => "CLOUDFLARE_API_KEY",
-        "bedrock" | "aws-bedrock" => "AWS_ACCESS_KEY_ID",
-        "gemini" | "google" | "google-gemini" => "GEMINI_API_KEY",
-        _ => "API_KEY",
-    }
-}
-
 // ── Step 5: Tool Mode & Security ────────────────────────────────
 
 pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
