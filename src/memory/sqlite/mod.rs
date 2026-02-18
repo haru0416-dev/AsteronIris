@@ -1,6 +1,6 @@
 use super::embeddings::EmbeddingProvider;
 use super::traits::{
-    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryEvent, MemoryEventInput, MemoryLayer,
+    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryEvent, MemoryEventInput,
     MemoryRecallItem, MemorySource, RecallQuery,
 };
 use crate::memory::vector;
