@@ -4,6 +4,7 @@ use super::traits::{
     MemoryLayer, MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
 };
 use async_trait::async_trait;
+use chrono::Local;
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
