@@ -1,6 +1,7 @@
 use super::SqliteMemory;
 
 impl SqliteMemory {
+    #[allow(clippy::unused_async)]
     pub(super) async fn health_check(&self) -> bool {
         self.conn
             .lock()

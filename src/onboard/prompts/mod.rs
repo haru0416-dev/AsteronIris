@@ -1640,7 +1640,6 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
 // ── Step 6: Scaffold workspace files ─────────────────────────────
 
 #[allow(clippy::too_many_lines)]
-
 fn input_workspace_path() -> Result<String> {
     let custom: String = Input::new()
         .with_prompt("  Enter workspace path")

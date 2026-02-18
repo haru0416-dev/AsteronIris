@@ -26,7 +26,7 @@ async fn sqlite_append_recall_forget_contract() {
     .expect("append");
 
     let recalled = mem
-        .recall_scoped(asteroniris::memory::RecallQuery::new("blue"))
+        .recall_scoped(asteroniris::memory::RecallQuery::new("user-1", "blue", 10))
         .await
         .expect("recall");
     assert!(!recalled.is_empty());

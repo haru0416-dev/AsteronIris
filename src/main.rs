@@ -41,8 +41,8 @@ mod tunnel;
 mod util;
 
 pub(crate) use cli::commands::{
-    AuthCommands, ChannelCommands, Cli, Commands, CronCommands, IntegrationCommands,
-    ServiceCommands, SkillCommands,
+    AuthCommands, ChannelCommands, Cli, CronCommands, IntegrationCommands, ServiceCommands,
+    SkillCommands,
 };
 use config::Config;
 

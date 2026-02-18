@@ -21,7 +21,7 @@ impl SqliteMemory {
         }
     }
 
-    pub(super) fn source_to_str(source: &MemorySource) -> &'static str {
+    pub(super) fn source_to_str(source: MemorySource) -> &'static str {
         match source {
             MemorySource::ExplicitUser => "explicit_user",
             MemorySource::ToolVerified => "tool_verified",
@@ -30,7 +30,7 @@ impl SqliteMemory {
         }
     }
 
-    pub(super) fn layer_to_str(layer: &MemoryLayer) -> &'static str {
+    pub(super) fn layer_to_str(layer: MemoryLayer) -> &'static str {
         match layer {
             MemoryLayer::Working => "working",
             MemoryLayer::Episodic => "episodic",
@@ -40,7 +40,7 @@ impl SqliteMemory {
         }
     }
 
-    pub(super) fn retention_tier_for_layer(layer: &MemoryLayer) -> &'static str {
+    pub(super) fn retention_tier_for_layer(layer: MemoryLayer) -> &'static str {
         match layer {
             MemoryLayer::Working => "working",
             MemoryLayer::Episodic => "episodic",
@@ -51,7 +51,7 @@ impl SqliteMemory {
     }
 
     pub(super) fn retention_expiry_for_layer(
-        layer: &MemoryLayer,
+        layer: MemoryLayer,
         occurred_at: &str,
     ) -> Option<String> {
         let retention_days = match layer {

@@ -240,21 +240,21 @@ async fn collect_backend_report(
             .await?;
         let verdict = ensure_explicit_contract(backend, mode, support, preflight, &outcome)?;
 
-        if mode == ForgetMode::Hard && support == CapabilitySupport::Supported {
-            if outcome.applied != baseline.hard_forget_applied
+        if mode == ForgetMode::Hard
+            && support == CapabilitySupport::Supported
+            && (outcome.applied != baseline.hard_forget_applied
                 || outcome.complete != baseline.hard_forget_complete
-                || outcome.status != baseline.hard_forget_status
-            {
-                return Err(anyhow!(
-                    "UNEXPECTED_DRIFT backend={backend} scenario=hard_forget_parity applied={} complete={} status={} expected_applied={} expected_complete={} expected_status={}",
-                    outcome.applied,
-                    outcome.complete,
-                    status_label(outcome.status),
-                    baseline.hard_forget_applied,
-                    baseline.hard_forget_complete,
-                    status_label(baseline.hard_forget_status)
-                ));
-            }
+                || outcome.status != baseline.hard_forget_status)
+        {
+            return Err(anyhow!(
+                "UNEXPECTED_DRIFT backend={backend} scenario=hard_forget_parity applied={} complete={} status={} expected_applied={} expected_complete={} expected_status={}",
+                outcome.applied,
+                outcome.complete,
+                status_label(outcome.status),
+                baseline.hard_forget_applied,
+                baseline.hard_forget_complete,
+                status_label(baseline.hard_forget_status)
+            ));
         }
 
         rows.push(ReportRow {

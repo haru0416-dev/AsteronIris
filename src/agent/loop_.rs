@@ -1126,6 +1126,7 @@ mod tests {
         .to_string()
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     fn test_config(workspace_dir: &std::path::Path) -> Config {
         let mut config = Config::default();
         config.workspace_dir = workspace_dir.to_path_buf();

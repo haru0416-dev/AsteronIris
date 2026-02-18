@@ -3,6 +3,7 @@ use chrono::Local;
 use rusqlite::{params, Connection};
 
 impl SqliteMemory {
+    #[allow(clippy::too_many_lines)]
     pub(super) fn init_schema(conn: &Connection) -> anyhow::Result<()> {
         conn.execute_batch(
             "-- Core memories table
@@ -127,6 +128,7 @@ impl SqliteMemory {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn run_schema_migrations(conn: &Connection) -> anyhow::Result<()> {
         let version_table_exists = Self::table_exists(conn, "memory_schema_version")?;
         let memory_event_columns = Self::table_columns(conn, "memory_events")?;
@@ -366,6 +368,7 @@ impl SqliteMemory {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn migrate_v2_to_v3(conn: &Connection) -> anyhow::Result<()> {
         let memory_event_columns: Vec<String> = Self::table_columns(conn, "memory_events")?
             .into_iter()

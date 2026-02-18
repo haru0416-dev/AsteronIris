@@ -43,6 +43,7 @@ fn event_metadata(conn: &Connection, entity_id: &str, slot_key: &str) -> (String
 }
 
 #[tokio::test]
+#[allow(clippy::field_reassign_with_default)]
 async fn memory_autosave_includes_layer_provenance() {
     let temp = TempDir::new().unwrap();
     let workspace = temp.path().join("workspace");

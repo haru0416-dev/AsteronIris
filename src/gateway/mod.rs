@@ -137,6 +137,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
 }
 
 /// Run the HTTP gateway from a pre-bound listener.
+#[allow(clippy::too_many_lines)]
 pub async fn run_gateway_with_listener(
     host: &str,
     listener: tokio::net::TcpListener,

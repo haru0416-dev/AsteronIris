@@ -17,6 +17,7 @@ struct GatewayTestServer {
 }
 
 impl GatewayTestServer {
+    #[allow(clippy::field_reassign_with_default)]
     async fn start(
         require_pairing: bool,
         paired_tokens: Vec<String>,

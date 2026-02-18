@@ -50,6 +50,7 @@ impl RecallCandidate {
 }
 
 impl SqliteMemory {
+    #[allow(clippy::too_many_lines, clippy::unused_async)]
     pub(super) async fn append_event(
         &self,
         input: MemoryEventInput,
@@ -62,14 +63,14 @@ impl SqliteMemory {
 
         let event_id = Uuid::new_v4().to_string();
         let ingested_at = Local::now().to_rfc3339();
-        let source = Self::source_to_str(&input.source);
-        let layer = Self::layer_to_str(&input.layer);
+        let source = Self::source_to_str(input.source);
+        let layer = Self::layer_to_str(input.layer);
         let privacy = Self::privacy_to_str(&input.privacy_level);
         let event_type = input.event_type.to_string();
         let provenance_source_class = input
             .provenance
             .as_ref()
-            .map(|entry| Self::source_to_str(&entry.source_class));
+            .map(|entry| Self::source_to_str(entry.source_class));
         let provenance_reference = input
             .provenance
             .as_ref()
@@ -78,9 +79,9 @@ impl SqliteMemory {
             .provenance
             .as_ref()
             .and_then(|entry| entry.evidence_uri.clone());
-        let retention_tier = Self::retention_tier_for_layer(&input.layer);
+        let retention_tier = Self::retention_tier_for_layer(input.layer);
         let retention_expires_at =
-            Self::retention_expiry_for_layer(&input.layer, &input.occurred_at);
+            Self::retention_expiry_for_layer(input.layer, &input.occurred_at);
         let contradiction_penalty =
             if matches!(input.event_type, MemoryEventType::ContradictionMarked) {
                 Self::contradiction_penalty(input.confidence, input.importance)
@@ -299,6 +300,7 @@ impl SqliteMemory {
         })
     }
 
+    #[allow(clippy::unused_async)]
     pub(super) async fn recall_scoped(
         &self,
         query: RecallQuery,
@@ -425,8 +427,8 @@ impl SqliteMemory {
             .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let now = Local::now().to_rfc3339();
         let cat = Self::category_to_str(&category);
-        let layer = Self::layer_to_str(&MemoryLayer::Working);
-        let retention_tier = Self::retention_tier_for_layer(&MemoryLayer::Working);
+        let layer = Self::layer_to_str(MemoryLayer::Working);
+        let retention_tier = Self::retention_tier_for_layer(MemoryLayer::Working);
         let id = Uuid::new_v4().to_string();
 
         conn.execute(
@@ -577,6 +579,7 @@ impl SqliteMemory {
         Ok(results)
     }
 
+    #[allow(clippy::unused_async)]
     pub(super) async fn fetch_projection_entry(
         &self,
         key: &str,
@@ -608,6 +611,7 @@ impl SqliteMemory {
         }
     }
 
+    #[allow(clippy::unused_async)]
     pub(super) async fn list_projection_entries(
         &self,
         category: Option<&MemoryCategory>,
@@ -655,6 +659,7 @@ impl SqliteMemory {
         Ok(results)
     }
 
+    #[allow(clippy::unused_async)]
     pub(super) async fn delete_projection_entry(&self, key: &str) -> anyhow::Result<bool> {
         let conn = self
             .conn
@@ -664,6 +669,7 @@ impl SqliteMemory {
         Ok(affected > 0)
     }
 
+    #[allow(clippy::unused_async)]
     pub(super) async fn count_projection_entries(&self) -> anyhow::Result<usize> {
         let conn = self
             .conn

@@ -73,7 +73,7 @@ async fn markdown_tagged_memory_roundtrip() {
         .expect("stored markdown entry should exist");
 
     let tags = parse_md_tags(entry_line).expect("tag block should parse");
-    let tags: std::collections::BTreeMap<_, _> = tags.into_iter().map(|(k, v)| (k, v)).collect();
+    let tags: std::collections::BTreeMap<_, _> = tags.into_iter().collect();
 
     assert_eq!(tags.get("layer"), Some(&"identity".to_string()));
     assert_eq!(

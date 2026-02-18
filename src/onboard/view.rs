@@ -42,6 +42,7 @@ pub fn print_step(current: u8, total: u8, title: &str) {
 pub fn print_bullet(text: &str) {
     println!("  {} {}", style("›").cyan(), text);
 }
+#[allow(clippy::too_many_lines)]
 pub fn print_summary(config: &Config) {
     let has_channels = config.channels_config.telegram.is_some()
         || config.channels_config.discord.is_some()

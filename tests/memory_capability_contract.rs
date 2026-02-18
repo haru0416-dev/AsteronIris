@@ -181,7 +181,7 @@ async fn lancedb_persists_supported_memory_fields() {
         .expect("open memories table");
     let mut stream = table
         .query()
-        .only_if("key = 'entity-lancedb:profile.preference'".to_string())
+        .only_if("key = 'entity-lancedb:profile.preference'")
         .limit(1)
         .select(Select::columns(&[
             "layer",

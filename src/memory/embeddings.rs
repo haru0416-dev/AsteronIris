@@ -41,22 +41,23 @@ impl DeterministicEmbedding {
     }
 
     fn fnv1a64(seed: u64, bytes: &[u8]) -> u64 {
-        let mut hash: u64 = 0xcbf29ce484222325 ^ seed;
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325 ^ seed;
         for &b in bytes {
             hash ^= u64::from(b);
-            hash = hash.wrapping_mul(0x100000001b3);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
         }
         hash
     }
 
     fn splitmix64(mut x: u64) -> u64 {
-        x = x.wrapping_add(0x9e3779b97f4a7c15);
+        x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = x;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         z ^ (z >> 31)
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn u64_to_unit_f32(x: u64) -> f32 {
         const U24_MAX: f32 = ((1u32 << 24) - 1) as f32;
         let top_u24: u32 = (x >> 40) as u32;

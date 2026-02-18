@@ -1,5 +1,6 @@
 use crate::config::Config;
 
+#[allow(clippy::too_many_lines)]
 pub fn render_status(config: &Config) -> String {
     let mut lines = vec![
         "🦀 AsteronIris Status".to_string(),

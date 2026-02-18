@@ -6,10 +6,7 @@ mod memory;
 mod observability;
 mod tunnel;
 
-pub use autonomy::{
-    AutonomyConfig, AutonomyRolloutConfig, AutonomyRolloutStage, TemperatureBand,
-    TemperatureBandsConfig,
-};
+pub use autonomy::{AutonomyConfig, AutonomyRolloutStage};
 pub use channels::{
     ChannelsConfig, DiscordConfig, IMessageConfig, IrcConfig, MatrixConfig, SlackConfig,
     TelegramConfig, WebhookConfig, WhatsAppConfig,

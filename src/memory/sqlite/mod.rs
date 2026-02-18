@@ -1,7 +1,7 @@
 use super::embeddings::EmbeddingProvider;
 use super::traits::{
-    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryEvent, MemoryEventInput,
-    MemoryRecallItem, MemorySource, RecallQuery,
+    BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryEvent, MemoryEventInput, MemoryRecallItem,
+    MemorySource, RecallQuery,
 };
 use crate::memory::vector;
 use async_trait::async_trait;

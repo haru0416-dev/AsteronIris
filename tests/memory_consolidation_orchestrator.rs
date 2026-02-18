@@ -138,6 +138,7 @@ async fn memory_consolidation_is_idempotent() {
 }
 
 #[tokio::test]
+#[allow(clippy::field_reassign_with_default)]
 async fn memory_consolidation_runs_async_nonblocking() {
     let temp = TempDir::new().unwrap();
     let workspace = temp.path().join("workspace");
@@ -198,6 +199,7 @@ async fn memory_consolidation_runs_async_nonblocking() {
 }
 
 #[tokio::test]
+#[allow(clippy::field_reassign_with_default)]
 async fn memory_consolidation_failure_isolated() {
     let temp = TempDir::new().unwrap();
     let workspace = temp.path().join("workspace");

@@ -19,7 +19,7 @@ async fn sqlite_search_returns_keyword_hits() {
     .expect("append");
 
     let results = mem
-        .recall_scoped(RecallQuery::new("systems"))
+        .recall_scoped(RecallQuery::new("user-search", "systems", 10))
         .await
         .expect("recall");
     assert!(!results.is_empty());
@@ -29,7 +29,7 @@ async fn sqlite_search_returns_keyword_hits() {
 async fn sqlite_search_limit_zero_returns_empty() {
     let (_tmp, mem) = temp_sqlite();
     let results = mem
-        .recall_scoped(RecallQuery::new("anything").with_limit(0))
+        .recall_scoped(RecallQuery::new("any-entity", "anything", 0))
         .await
         .expect("recall");
     assert!(results.is_empty());

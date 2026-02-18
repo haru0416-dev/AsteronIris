@@ -1180,6 +1180,7 @@ fn encrypt_secret_option(value: &mut Option<String>, store: &SecretStore) -> Res
 mod tests {
     use super::*;
 
+    #[allow(clippy::field_reassign_with_default)]
     fn test_config(tmp: &tempfile::TempDir) -> Config {
         let mut config = Config::default();
         config.config_path = tmp.path().join("config.toml");

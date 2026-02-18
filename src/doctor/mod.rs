@@ -282,7 +282,7 @@ mod tests {
             .any(|line| line.contains("external actions") && line.contains("disabled")));
         assert!(lines
             .iter()
-            .any(|line| line.contains("temperature band") && line.contains("[")));
+            .any(|line| line.contains("temperature band") && line.contains('[')));
         assert!(lines
             .iter()
             .any(|line| line.contains("rollout stage") && line.contains("off")));
