@@ -168,8 +168,8 @@ cargo test-dev-tests
 Single integration test examples:
 
 ```bash
-cargo test --test memory_comparison
-BACKEND=sqlite cargo test --release --test memory_throughput -- --nocapture
+cargo test --test memory -- comparison
+BACKEND=sqlite cargo test --release --test memory -- throughput --nocapture
 ```
 
 Docker build:

@@ -84,7 +84,7 @@ jobs:
           THROUGHPUT_N_RECALL=400 \
           THROUGHPUT_CONCURRENCY=6 \
           THROUGHPUT_RECALL_LIMIT=10 \
-          cargo test --release --test memory_throughput -- --nocapture 2>&1 | tee memory_throughput.txt
+          cargo test --release --test memory -- throughput --nocapture 2>&1 | tee memory_throughput.txt
       - name: Upload throughput output
         uses: actions/upload-artifact@v4
         with:
@@ -113,7 +113,7 @@ jobs:
           set -euo pipefail
           mkdir -p .sisyphus/evidence
           printf 'backend=%s\n' "${{ matrix.backend }}" | tee .sisyphus/evidence/task-24-ci-happy.txt
-          BACKEND=${{ matrix.backend }} cargo test --test memory_backend_parity -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-happy.txt
+          BACKEND=${{ matrix.backend }} cargo test --test memory -- backend_parity --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-happy.txt
       - name: Upload lifecycle happy evidence
         uses: actions/upload-artifact@v4
         with:
