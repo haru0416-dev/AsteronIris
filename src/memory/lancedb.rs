@@ -327,14 +327,12 @@ impl LanceDbMemory {
             .await
             .context("LanceDB get query failed")?;
 
-        let mut out = Vec::new();
         while let Some(batch) = stream.try_next().await? {
-            out.extend(parse_rows(&batch));
-            if !out.is_empty() {
-                break;
+            if let Some(row) = parse_rows(&batch).into_iter().next() {
+                return Ok(Some(row));
             }
         }
-        Ok(out.into_iter().next())
+        Ok(None)
     }
 
     async fn upsert_row(&self, row: &StoredRow, embedding: Option<&[f32]>) -> anyhow::Result<()> {
@@ -398,8 +396,9 @@ impl LanceDbMemory {
         while let Some(batch) = stream.try_next().await? {
             let (rows, row_scores) = parse_entries_and_score(&batch, LANCE_SCORE_COL);
             for (row, score) in rows.into_iter().zip(row_scores.into_iter()) {
-                entries.insert(row.id.clone(), row.clone());
-                scored.push((row.id, score));
+                let id = row.id.clone();
+                entries.insert(id.clone(), row);
+                scored.push((id, score));
             }
         }
 
@@ -443,9 +442,10 @@ impl LanceDbMemory {
         while let Some(batch) = stream.try_next().await? {
             let (rows, dists) = parse_entries_and_score(&batch, LANCE_DISTANCE_COL);
             for (row, dist) in rows.into_iter().zip(dists.into_iter()) {
-                entries.insert(row.id.clone(), row.clone());
+                let id = row.id.clone();
+                entries.insert(id.clone(), row);
                 let sim = (1.0 - dist).clamp(0.0, 1.0);
-                scored.push((row.id, sim));
+                scored.push((id, sim));
             }
         }
 
@@ -902,9 +902,10 @@ impl LanceDbMemory {
     async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
         if let Some(entity) = entity_id {
             let entries = self.list_projection_entries(None).await?;
+            let prefix = format!("{entity}:");
             Ok(entries
                 .iter()
-                .filter(|entry| entry.key.starts_with(&format!("{entity}:")))
+                .filter(|entry| entry.key.starts_with(&prefix))
                 .count())
         } else {
             self.count_projection_entries().await
@@ -952,8 +953,7 @@ async fn backfill_one(inner: &LanceDbInner, key: &str) -> anyhow::Result<()> {
 
     let mut row: Option<StoredRow> = None;
     while let Some(batch) = stream.try_next().await? {
-        let mut rows = parse_rows(&batch);
-        if let Some(r) = rows.pop() {
+        if let Some(r) = parse_rows(&batch).into_iter().next() {
             row = Some(r);
             break;
         }

@@ -158,6 +158,13 @@ Test:
 cargo test
 ```
 
+Lower-CPU local test presets:
+
+```bash
+cargo test-dev
+cargo test-dev-tests
+```
+
 Single integration test examples:
 
 ```bash

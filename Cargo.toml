@@ -80,6 +80,18 @@ tower = { version = "0.5", default-features = false }
 tower-http = { version = "0.6", default-features = false, features = ["limit", "timeout"] }
 http-body-util = "0.1"
 
+[profile.dev]
+# Fast incremental compilation for development
+codegen-units = 256
+incremental = true
+debug = "line-tables-only"   # Lighter debug info, faster linking
+
+[profile.test]
+# Inherit from dev with explicit fast-link settings
+inherits = "dev"
+opt-level = 0
+codegen-units = 256
+
 [profile.release]
 opt-level = "z"      # Optimize for size
 lto = true          # Link-time optimization

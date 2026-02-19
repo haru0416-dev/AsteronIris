@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelsConfig {
+    #[serde(default = "default_cli_enabled")]
     pub cli: bool,
     pub telegram: Option<TelegramConfig>,
     pub discord: Option<DiscordConfig>,
@@ -118,4 +119,8 @@ pub struct IrcConfig {
 
 fn default_irc_port() -> u16 {
     6697
+}
+
+fn default_cli_enabled() -> bool {
+    true
 }

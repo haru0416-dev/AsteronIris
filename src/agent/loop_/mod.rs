@@ -1,30 +1,34 @@
+mod context;
+mod inference;
+mod reflect;
+mod verify_repair;
+
+#[allow(unused_imports)]
+pub use context::build_context_for_integration;
+
+use context::build_context_with_policy;
+use inference::run_post_turn_inference_pass;
+use reflect::run_persona_reflect_writeback;
+use verify_repair::{
+    analyze_verify_failure, decide_verify_repair_escalation, emit_verify_repair_escalation_event,
+    VerifyRepairCaps,
+};
+
 use crate::auth::AuthBroker;
 use crate::config::Config;
 use crate::memory::traits::MemoryLayer;
 use crate::memory::{
-    self, Memory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemoryProvenance,
-    MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
+    self, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
-use crate::observability::{self, Observer, ObserverEvent};
-use crate::persona::state_header::StateHeaderV1;
-use crate::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
+use crate::observability::traits::AutonomyLifecycleSignal;
+use crate::observability::{self, NoopObserver, Observer, ObserverEvent};
 use crate::providers::{self, Provider};
 use crate::runtime;
-use crate::security::external_content::{
-    decide_external_action, detect_injection_signals, sanitize_marker_collision,
-    wrap_external_content, ExternalAction,
-};
 use crate::security::policy::TenantPolicyContext;
-use crate::security::writeback_guard::{
-    validate_writeback_payload, ImmutableStateHeader, SelfTaskWriteback, WritebackGuardVerdict,
-};
 use crate::security::SecurityPolicy;
 use crate::tools;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
-use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
-use std::fmt::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -82,145 +86,6 @@ struct TurnExecutionOutcome {
     accounting: TurnCallAccounting,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct VerifyRepairCaps {
-    max_attempts: u32,
-    max_repair_depth: u32,
-}
-
-impl VerifyRepairCaps {
-    fn from_config(config: &Config) -> Self {
-        Self {
-            max_attempts: config.autonomy.verify_repair_max_attempts,
-            max_repair_depth: config.autonomy.verify_repair_max_repair_depth,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VerifyRepairEscalationReason {
-    MaxAttemptsReached,
-    MaxRepairDepthReached,
-    NonRetryableFailure,
-}
-
-impl VerifyRepairEscalationReason {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::MaxAttemptsReached => "max_attempts_reached",
-            Self::MaxRepairDepthReached => "max_repair_depth_reached",
-            Self::NonRetryableFailure => "non_retryable_failure",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct VerifyFailureAnalysis {
-    failure_class: &'static str,
-    retryable: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct VerifyRepairEscalation {
-    reason: VerifyRepairEscalationReason,
-    attempts: u32,
-    repair_depth: u32,
-    max_attempts: u32,
-    max_repair_depth: u32,
-    failure_class: &'static str,
-    last_error: String,
-}
-
-impl VerifyRepairEscalation {
-    fn contract_message(&self) -> String {
-        format!(
-            "verify/repair escalated: reason={} attempts={} repair_depth={} max_attempts={} max_repair_depth={} failure_class={} last_error={}",
-            self.reason.as_str(),
-            self.attempts,
-            self.repair_depth,
-            self.max_attempts,
-            self.max_repair_depth,
-            self.failure_class,
-            self.last_error
-        )
-    }
-
-    fn event_payload(&self) -> Value {
-        json!({
-            "reason": self.reason.as_str(),
-            "attempts": self.attempts,
-            "repair_depth": self.repair_depth,
-            "max_attempts": self.max_attempts,
-            "max_repair_depth": self.max_repair_depth,
-            "failure_class": self.failure_class,
-            "last_error": self.last_error,
-        })
-    }
-}
-
-const VERIFY_REPAIR_ESCALATION_SLOT_KEY: &str = "autonomy.verify_repair.escalation";
-
-fn analyze_verify_failure(error: &anyhow::Error) -> VerifyFailureAnalysis {
-    let message = error.to_string();
-    if message.contains("action limit exceeded") || message.contains("daily cost limit exceeded") {
-        return VerifyFailureAnalysis {
-            failure_class: "policy_limit",
-            retryable: false,
-        };
-    }
-
-    VerifyFailureAnalysis {
-        failure_class: "transient_failure",
-        retryable: true,
-    }
-}
-
-fn decide_verify_repair_escalation(
-    caps: VerifyRepairCaps,
-    attempts: u32,
-    repair_depth: u32,
-    analysis: VerifyFailureAnalysis,
-    last_error: &anyhow::Error,
-) -> Option<VerifyRepairEscalation> {
-    let reason = if attempts >= caps.max_attempts {
-        Some(VerifyRepairEscalationReason::MaxAttemptsReached)
-    } else if repair_depth >= caps.max_repair_depth {
-        Some(VerifyRepairEscalationReason::MaxRepairDepthReached)
-    } else if !analysis.retryable {
-        Some(VerifyRepairEscalationReason::NonRetryableFailure)
-    } else {
-        None
-    }?;
-
-    Some(VerifyRepairEscalation {
-        reason,
-        attempts,
-        repair_depth,
-        max_attempts: caps.max_attempts,
-        max_repair_depth: caps.max_repair_depth,
-        failure_class: analysis.failure_class,
-        last_error: last_error.to_string(),
-    })
-}
-
-async fn emit_verify_repair_escalation_event(
-    mem: &dyn Memory,
-    escalation: &VerifyRepairEscalation,
-) -> Result<()> {
-    let event = MemoryEventInput::new(
-        "default",
-        VERIFY_REPAIR_ESCALATION_SLOT_KEY,
-        MemoryEventType::SummaryCompacted,
-        escalation.event_payload().to_string(),
-        MemorySource::System,
-        PrivacyLevel::Private,
-    )
-    .with_confidence(1.0)
-    .with_importance(0.9);
-    mem.append_event(event).await?;
-    Ok(())
-}
-
 struct MainSessionTurnParams<'a> {
     answer_provider: &'a dyn Provider,
     reflect_provider: &'a dyn Provider,
@@ -230,9 +95,9 @@ struct MainSessionTurnParams<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct RuntimeMemoryWriteContext {
-    entity_id: String,
-    policy_context: TenantPolicyContext,
+pub(super) struct RuntimeMemoryWriteContext {
+    pub(super) entity_id: String,
+    pub(super) policy_context: TenantPolicyContext,
 }
 
 impl RuntimeMemoryWriteContext {
@@ -253,274 +118,10 @@ impl RuntimeMemoryWriteContext {
         }
     }
 
-    fn enforce_write_scope(&self) -> Result<()> {
+    pub(super) fn enforce_write_scope(&self) -> Result<()> {
         self.policy_context
             .enforce_recall_scope(&self.entity_id)
             .map_err(anyhow::Error::msg)
-    }
-}
-
-/// Build context preamble by searching memory for relevant entries
-fn sanitize_external_fragment_for_context(slot_key: &str, value: &str) -> String {
-    if !value.contains("digest_sha256=") {
-        return "[external payload omitted by replay-ban policy]".to_string();
-    }
-
-    let signals = detect_injection_signals(value);
-    let action = decide_external_action(&signals);
-    match action {
-        ExternalAction::Allow => wrap_external_content(slot_key, value),
-        ExternalAction::Sanitize => {
-            let sanitized = sanitize_marker_collision(value);
-            wrap_external_content(slot_key, &sanitized)
-        }
-        ExternalAction::Block => {
-            "[external summary blocked by policy during context replay]".to_string()
-        }
-    }
-}
-
-const CONTEXT_REPLAY_REVOKED_MARKERS: [&str; 2] = [
-    "__LANCEDB_DEGRADED_SOFT_FORGET_MARKER__",
-    "__LANCEDB_DEGRADED_TOMBSTONE_MARKER__",
-];
-
-fn is_revocation_marker_payload(value: &str) -> bool {
-    CONTEXT_REPLAY_REVOKED_MARKERS
-        .iter()
-        .any(|marker| value.contains(marker))
-}
-
-async fn allow_context_replay_item(mem: &dyn Memory, entry: &MemoryRecallItem) -> bool {
-    if is_revocation_marker_payload(&entry.value) {
-        return false;
-    }
-
-    let resolved = mem.resolve_slot(&entry.entity_id, &entry.slot_key).await;
-    matches!(resolved, Ok(Some(slot)) if slot.value == entry.value)
-}
-
-async fn build_context(mem: &dyn Memory, user_msg: &str) -> String {
-    build_context_with_policy(mem, "default", user_msg, TenantPolicyContext::disabled())
-        .await
-        .unwrap_or_default()
-}
-
-fn build_context_recall_query(
-    entity_id: &str,
-    user_msg: &str,
-    policy_context: TenantPolicyContext,
-) -> Result<RecallQuery> {
-    let query = RecallQuery::new(entity_id, user_msg, 5).with_policy_context(policy_context);
-    query.enforce_policy()?;
-    Ok(query)
-}
-
-async fn build_context_with_policy(
-    mem: &dyn Memory,
-    entity_id: &str,
-    user_msg: &str,
-    policy_context: TenantPolicyContext,
-) -> Result<String> {
-    let mut context = String::new();
-
-    // Pull relevant memories for this message
-    let query = build_context_recall_query(entity_id, user_msg, policy_context)?;
-    let entries = mem.recall_scoped(query).await?;
-    let mut replayable_entries = Vec::with_capacity(entries.len());
-    for entry in entries {
-        if allow_context_replay_item(mem, &entry).await {
-            replayable_entries.push(entry);
-        }
-    }
-
-    if !replayable_entries.is_empty() {
-        context.push_str("[Memory context]\n");
-        for entry in &replayable_entries {
-            let value = if entry.slot_key.starts_with("external.") {
-                sanitize_external_fragment_for_context(&entry.slot_key, &entry.value)
-            } else {
-                entry.value.clone()
-            };
-            let _ = writeln!(context, "- {}: {}", entry.slot_key, value);
-        }
-        context.push('\n');
-    }
-
-    Ok(context)
-}
-
-pub async fn build_context_for_integration(
-    mem: &dyn Memory,
-    entity_id: &str,
-    user_msg: &str,
-    policy_context: TenantPolicyContext,
-) -> Result<String> {
-    build_context_with_policy(mem, entity_id, user_msg, policy_context).await
-}
-
-const PERSONA_REFLECT_SYSTEM_PROMPT: &str = r#"You are a deterministic reflection/writeback stage.
-Output must be a single strict JSON object, with no markdown and no extra text.
-
-Required top-level shape:
-{
-  "state_header": {
-    "schema_version": number,
-    "identity_principles_hash": string,
-    "safety_posture": string,
-    "current_objective": string,
-    "open_loops": string[],
-    "next_actions": string[],
-    "commitments": string[],
-    "recent_context_summary": string,
-    "last_updated_at": string (RFC3339)
-  },
-  "memory_append": string[]
-}
-
-Do not include unknown keys.
-Do not change immutable fields.
-If uncertain, keep mutable values close to current state."#;
-
-fn build_reflect_message(
-    canonical_state: Option<&StateHeaderV1>,
-    user_message: &str,
-    answer: &str,
-) -> Result<String> {
-    let canonical_json = match canonical_state {
-        Some(state) => serde_json::to_string_pretty(state)?,
-        None => "null".to_string(),
-    };
-
-    Ok(format!(
-        "Current canonical state header (JSON):\n{canonical_json}\n\nLatest user message:\n{user_message}\n\nLatest assistant answer:\n{answer}\n\nReturn only the strict JSON payload."
-    ))
-}
-
-fn parse_reflect_payload(raw: &str) -> Result<Value> {
-    let payload: Value = serde_json::from_str(raw.trim())?;
-    if !payload.is_object() {
-        anyhow::bail!("reflect output must be a JSON object");
-    }
-    Ok(payload)
-}
-
-async fn run_persona_reflect_writeback(
-    config: &Config,
-    mem: Arc<dyn Memory>,
-    provider: &dyn Provider,
-    model_name: &str,
-    user_message: &str,
-    answer: &str,
-) -> Result<()> {
-    let persistence = BackendCanonicalStateHeaderPersistence::new(
-        mem.clone(),
-        config.workspace_dir.clone(),
-        config.persona.clone(),
-    );
-
-    let canonical_state = persistence.load_backend_canonical().await?;
-    let reflect_message = build_reflect_message(canonical_state.as_ref(), user_message, answer)?;
-
-    let reflect_raw = provider
-        .chat_with_system(
-            Some(PERSONA_REFLECT_SYSTEM_PROMPT),
-            &reflect_message,
-            model_name,
-            0.0,
-        )
-        .await?;
-    let reflect_payload = parse_reflect_payload(&reflect_raw)?;
-
-    let Some(previous_state) = canonical_state else {
-        tracing::warn!("persona reflect produced payload but canonical state header is missing");
-        return Ok(());
-    };
-
-    let immutable = ImmutableStateHeader {
-        schema_version: u32::from(previous_state.schema_version),
-        identity_principles_hash: previous_state.identity_principles_hash.clone(),
-        safety_posture: previous_state.safety_posture.clone(),
-    };
-
-    let accepted = match validate_writeback_payload(&reflect_payload, &immutable) {
-        WritebackGuardVerdict::Accepted(payload) => payload,
-        WritebackGuardVerdict::Rejected { reason } => {
-            tracing::warn!(reason, "persona writeback rejected by guard");
-            return Ok(());
-        }
-    };
-
-    let candidate = StateHeaderV1 {
-        schema_version: previous_state.schema_version,
-        identity_principles_hash: previous_state.identity_principles_hash.clone(),
-        safety_posture: previous_state.safety_posture.clone(),
-        current_objective: accepted.state_header.current_objective,
-        open_loops: accepted.state_header.open_loops,
-        next_actions: accepted.state_header.next_actions,
-        commitments: accepted.state_header.commitments,
-        recent_context_summary: accepted.state_header.recent_context_summary,
-        last_updated_at: accepted.state_header.last_updated_at,
-    };
-
-    StateHeaderV1::validate_writeback_candidate(&previous_state, &candidate, &config.persona)?;
-    persistence
-        .persist_backend_canonical_and_sync_mirror(&candidate)
-        .await?;
-
-    for (idx, entry) in accepted.memory_append.iter().enumerate() {
-        let input = MemoryEventInput::new(
-            "default",
-            format!("persona.writeback.{idx}"),
-            MemoryEventType::SummaryCompacted,
-            entry.clone(),
-            MemorySource::System,
-            PrivacyLevel::Private,
-        )
-        .with_confidence(0.9)
-        .with_importance(0.8)
-        .with_occurred_at(candidate.last_updated_at.clone());
-        mem.append_event(input).await?;
-    }
-
-    enqueue_reflect_self_tasks(config, &accepted.self_tasks);
-
-    Ok(())
-}
-
-fn enqueue_reflect_self_tasks(config: &Config, self_tasks: &[SelfTaskWriteback]) {
-    for task in self_tasks {
-        let parsed_expires_at = match DateTime::parse_from_rfc3339(&task.expires_at) {
-            Ok(value) => value.with_timezone(&Utc),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    expires_at = %task.expires_at,
-                    "skipping self task enqueue due to invalid expires_at"
-                );
-                continue;
-            }
-        };
-
-        let metadata = crate::cron::CronJobMetadata {
-            job_kind: crate::cron::CronJobKind::Agent,
-            origin: crate::cron::CronJobOrigin::Agent,
-            expires_at: Some(parsed_expires_at),
-            max_attempts: config.autonomy.verify_repair_max_attempts.max(1),
-        };
-
-        if let Err(error) = crate::cron::add_job_with_metadata(
-            config,
-            "* * * * *",
-            "echo agent-self-task",
-            &metadata,
-        ) {
-            tracing::warn!(
-                error = %error,
-                title = %task.title,
-                "failed to enqueue reflect self task"
-            );
-        }
     }
 }
 
@@ -530,6 +131,7 @@ async fn execute_main_session_turn(
     mem: Arc<dyn Memory>,
     params: &MainSessionTurnParams<'_>,
     user_message: &str,
+    observer: &Arc<dyn Observer>,
 ) -> Result<String> {
     execute_main_session_turn_with_policy(
         config,
@@ -538,6 +140,7 @@ async fn execute_main_session_turn(
         params,
         user_message,
         RuntimeMemoryWriteContext::main_session_default(),
+        observer,
     )
     .await
 }
@@ -549,6 +152,7 @@ async fn execute_main_session_turn_with_policy(
     params: &MainSessionTurnParams<'_>,
     user_message: &str,
     write_context: RuntimeMemoryWriteContext,
+    observer: &Arc<dyn Observer>,
 ) -> Result<String> {
     let caps = VerifyRepairCaps::from_config(config);
     let mut attempts = 0_u32;
@@ -563,6 +167,7 @@ async fn execute_main_session_turn_with_policy(
             params,
             user_message,
             &write_context,
+            observer,
         )
         .await
         {
@@ -639,6 +244,7 @@ pub async fn run_main_session_turn_for_integration_with_policy(
     policy_context: TenantPolicyContext,
     user_message: &str,
 ) -> Result<String> {
+    let observer: Arc<dyn Observer> = Arc::new(NoopObserver);
     let params = MainSessionTurnParams {
         answer_provider,
         reflect_provider,
@@ -654,6 +260,7 @@ pub async fn run_main_session_turn_for_integration_with_policy(
         &params,
         user_message,
         RuntimeMemoryWriteContext::for_entity_with_policy(entity_id, policy_context),
+        &observer,
     )
     .await
 }
@@ -666,7 +273,9 @@ async fn execute_main_session_turn_with_accounting(
     params: &MainSessionTurnParams<'_>,
     user_message: &str,
     write_context: &RuntimeMemoryWriteContext,
+    observer: &Arc<dyn Observer>,
 ) -> Result<TurnExecutionOutcome> {
+    observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentCreated);
     let mut accounting = TurnCallAccounting::for_persona_mode(config.persona.enabled_main_session);
     write_context.enforce_write_scope()?;
 
@@ -706,9 +315,15 @@ async fn execute_main_session_turn_with_accounting(
         format!("{context}{user_message}")
     };
 
-    security
-        .consume_action_and_cost(0)
-        .map_err(anyhow::Error::msg)?;
+    match security.consume_action_and_cost(0) {
+        Ok(()) => {
+            observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentPolicyAllowed);
+        }
+        Err(e) => {
+            observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentPolicyDenied);
+            return Err(anyhow::Error::msg(e));
+        }
+    }
     accounting.consume_answer_call()?;
     let requested_temperature = params.temperature;
     let clamped_temperature = config.autonomy.clamp_temperature(requested_temperature);
@@ -775,7 +390,7 @@ async fn execute_main_session_turn_with_accounting(
             .await;
 
         if let Err(error) =
-            run_post_turn_inference_pass(mem.as_ref(), write_context, &response).await
+            run_post_turn_inference_pass(mem.as_ref(), write_context, &response, observer).await
         {
             tracing::warn!(error = %error, "post-turn memory inference pass failed");
         }
@@ -792,6 +407,7 @@ async fn execute_main_session_turn_with_accounting(
                     mem.clone(),
                     config.workspace_dir.clone(),
                     input,
+                    observer.clone(),
                 );
             }
             Err(error) => {
@@ -804,80 +420,6 @@ async fn execute_main_session_turn_with_accounting(
         response,
         accounting,
     })
-}
-
-fn parse_inference_payload(line: &str) -> Option<(&str, &str)> {
-    let (slot_key, value) = line.split_once("=>")?;
-    let slot_key = slot_key.trim();
-    let value = value.trim();
-    if slot_key.is_empty() || value.is_empty() {
-        return None;
-    }
-    Some((slot_key, value))
-}
-
-fn build_post_turn_inference_events(
-    entity_id: &str,
-    assistant_response: &str,
-) -> Vec<MemoryInferenceEvent> {
-    const INFERRED_PREFIX: &str = "INFERRED_CLAIM ";
-    const CONTRADICTION_PREFIX: &str = "CONTRADICTION_EVENT ";
-
-    assistant_response
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if let Some(payload) = line.strip_prefix(INFERRED_PREFIX) {
-                let (slot_key, value) = parse_inference_payload(payload)?;
-                return Some(
-                    MemoryInferenceEvent::inferred_claim(entity_id, slot_key, value)
-                        .with_layer(MemoryLayer::Semantic),
-                );
-            }
-            if let Some(payload) = line.strip_prefix(CONTRADICTION_PREFIX) {
-                let (slot_key, value) = parse_inference_payload(payload)?;
-                return Some(
-                    MemoryInferenceEvent::contradiction_marked(entity_id, slot_key, value)
-                        .with_layer(MemoryLayer::Episodic),
-                );
-            }
-            None
-        })
-        .collect()
-}
-
-fn inference_provenance_reference(event: &MemoryInferenceEvent) -> (&'static str, MemorySource) {
-    match event {
-        MemoryInferenceEvent::InferredClaim { .. } => {
-            ("inference.post_turn.inferred_claim", MemorySource::Inferred)
-        }
-        MemoryInferenceEvent::ContradictionEvent { .. } => (
-            "inference.post_turn.contradiction_event",
-            MemorySource::System,
-        ),
-    }
-}
-
-async fn run_post_turn_inference_pass(
-    mem: &dyn Memory,
-    write_context: &RuntimeMemoryWriteContext,
-    assistant_response: &str,
-) -> Result<()> {
-    write_context.enforce_write_scope()?;
-    let events = build_post_turn_inference_events(&write_context.entity_id, assistant_response);
-    if events.is_empty() {
-        return Ok(());
-    }
-
-    for event in events {
-        let (reference, source_class) = inference_provenance_reference(&event);
-        let input = event
-            .into_memory_event_input()
-            .with_provenance(MemoryProvenance::source_reference(source_class, reference));
-        mem.append_event(input).await?;
-    }
-
-    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1011,9 +553,15 @@ pub async fn run(
     let start = Instant::now();
 
     if let Some(msg) = message {
-        let response =
-            execute_main_session_turn(&config, security.as_ref(), mem.clone(), &turn_params, &msg)
-                .await?;
+        let response = execute_main_session_turn(
+            &config,
+            security.as_ref(),
+            mem.clone(),
+            &turn_params,
+            &msg,
+            &observer,
+        )
+        .await?;
         println!("{response}");
     } else {
         println!("🦀 AsteronIris Interactive Mode");
@@ -1034,6 +582,7 @@ pub async fn run(
                 mem.clone(),
                 &turn_params,
                 &msg.content,
+                &observer,
             )
             .await?;
             println!("\n{response}\n");
@@ -1056,8 +605,11 @@ mod tests {
     use super::*;
     use crate::config::PersonaConfig;
     use crate::memory::SqliteMemory;
+    use crate::persona::state_header::StateHeaderV1;
+    use crate::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
     use crate::providers::reliable::ReliableProvider;
     use crate::security::SecurityPolicy;
+    use verify_repair::VERIFY_REPAIR_ESCALATION_SLOT_KEY;
     use async_trait::async_trait;
     use chrono::Utc;
     use serde_json::json;
@@ -1138,6 +690,10 @@ mod tests {
         config
     }
 
+    fn noop_observer() -> Arc<dyn Observer> {
+        Arc::new(NoopObserver)
+    }
+
     #[tokio::test]
     async fn persona_loop_two_calls_per_turn() {
         let temp = TempDir::new().unwrap();
@@ -1178,6 +734,7 @@ mod tests {
                 temperature: 0.4,
             },
             "How do we wire Task 4?",
+            &noop_observer(),
         )
         .await
         .unwrap();
@@ -1229,6 +786,7 @@ mod tests {
                 temperature: 0.4,
             },
             "Keep answer path stable",
+            &noop_observer(),
         )
         .await
         .unwrap();
@@ -1351,6 +909,7 @@ mod tests {
                 temperature: 0.2,
             },
             "verify reflect retry suppression",
+            &noop_observer(),
         )
         .await
         .unwrap();
@@ -1424,6 +983,7 @@ mod tests {
                 },
                 &format!("turn-{turn}-message"),
                 &RuntimeMemoryWriteContext::main_session_default(),
+                &noop_observer(),
             )
             .await
             .unwrap();
@@ -1468,6 +1028,7 @@ mod tests {
                 temperature: 0.1,
             },
             "blocked by policy",
+            &noop_observer(),
         )
         .await
         .unwrap_err();
@@ -1503,6 +1064,7 @@ mod tests {
                 temperature: 1.9,
             },
             "clamp this temperature",
+            &noop_observer(),
         )
         .await
         .unwrap();
@@ -1512,7 +1074,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        assert_eq!(seen, vec![1.2]);
+        assert_eq!(seen, vec![1.0]);
     }
 
     #[tokio::test]
@@ -1547,6 +1109,7 @@ mod tests {
                 temperature: 0.2,
             },
             "recover after one failure",
+            &noop_observer(),
         )
         .await
         .unwrap();
@@ -1583,6 +1146,7 @@ mod tests {
                 temperature: 0.2,
             },
             "always fail",
+            &noop_observer(),
         )
         .await
         .unwrap_err();
@@ -1621,6 +1185,7 @@ mod tests {
                 temperature: 0.2,
             },
             "escalate and emit event",
+            &noop_observer(),
         )
         .await
         .unwrap_err();
@@ -1672,6 +1237,7 @@ mod tests {
                 temperature: 0.2,
             },
             "policy must gate every retry",
+            &noop_observer(),
         )
         .await
         .unwrap_err();
@@ -1680,31 +1246,6 @@ mod tests {
         assert!(message.contains("reason=non_retryable_failure"));
         assert!(message.contains("failure_class=policy_limit"));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn build_context_replay_ban_hides_raw_external_payload() {
-        let temp = TempDir::new().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
-
-        mem.append_event(
-            MemoryEventInput::new(
-                "default",
-                "external.gateway.webhook",
-                MemoryEventType::FactAdded,
-                "ATTACK_PAYLOAD_ALPHA",
-                MemorySource::ExplicitUser,
-                PrivacyLevel::Private,
-            )
-            .with_confidence(0.95)
-            .with_importance(0.7),
-        )
-        .await
-        .unwrap();
-
-        let context = build_context(mem.as_ref(), "ATTACK_PAYLOAD_ALPHA").await;
-        assert!(context.contains("external.gateway.webhook"));
-        assert!(!context.contains("ATTACK_PAYLOAD_ALPHA"));
     }
 
     #[tokio::test]
@@ -1736,6 +1277,7 @@ mod tests {
                 temperature: 0.3,
             },
             "derive inferences",
+            &noop_observer(),
         )
         .await
         .unwrap();

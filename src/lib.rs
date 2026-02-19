@@ -30,6 +30,7 @@ pub mod memory;
 pub mod observability;
 pub mod onboard;
 pub mod persona;
+pub mod planner;
 pub mod providers;
 pub mod runtime;
 pub mod security;

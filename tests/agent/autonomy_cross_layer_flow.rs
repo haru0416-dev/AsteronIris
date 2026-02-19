@@ -184,7 +184,7 @@ async fn autonomy_cycle_reflect_queue_verify_and_intent_seam_stays_bounded() {
     assert!(!executed);
     assert_eq!(
         output,
-        "blocked by security policy: agent jobs cannot execute direct shell path"
+        "route=agent-no-direct-shell\nblocked by security policy: agent jobs cannot execute direct shell path"
     );
 
     let lifecycle_count = Arc::new(AtomicUsize::new(0));

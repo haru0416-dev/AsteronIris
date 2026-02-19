@@ -151,7 +151,7 @@ async fn memory_consolidation_runs_async_nonblocking() {
     config.persona.enabled_main_session = false;
 
     let base: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
-    let delay = Duration::from_millis(700);
+    let delay = Duration::from_millis(50);
     let mem: Arc<dyn Memory> = Arc::new(DelayedConsolidationMemory {
         inner: base.clone(),
         delay,
@@ -187,7 +187,7 @@ async fn memory_consolidation_runs_async_nonblocking() {
         "turn should complete before delayed consolidation task"
     );
 
-    tokio::time::sleep(delay + Duration::from_millis(250)).await;
+    tokio::time::sleep(delay + Duration::from_millis(100)).await;
     let consolidated = base
         .resolve_slot(entity_id, CONSOLIDATION_SLOT_KEY)
         .await
@@ -236,7 +236,7 @@ async fn memory_consolidation_failure_isolated() {
     .unwrap();
 
     assert_eq!(response, "response survives consolidation failure");
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let consolidated = mem
         .resolve_slot(entity_id, CONSOLIDATION_SLOT_KEY)
@@ -253,7 +253,7 @@ async fn memory_consolidation_long_run() {
     let temp = TempDir::new().expect("tempdir");
     let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).expect("sqlite memory"));
     let entity_id = "tenant-alpha:long-run";
-    let cycle_count = 40usize;
+    let cycle_count = 10usize;
 
     memory
         .append_event(

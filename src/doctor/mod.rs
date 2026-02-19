@@ -288,7 +288,7 @@ mod tests {
             .any(|line| line.contains("rollout stage") && line.contains("off")));
         assert!(lines
             .iter()
-            .any(|line| line.contains("rollout gates") && line.contains("verify_repair=off")));
+            .any(|line| line.contains("rollout policy") && line.contains("enabled=off")));
         assert!(lines
             .iter()
             .any(|line| line.contains("observability backend") && line.contains("prometheus")));

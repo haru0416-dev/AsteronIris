@@ -13,11 +13,11 @@ use asteroniris::memory::{
 };
 
 const DEFAULT_CONCURRENCY: usize = 8;
-const DEFAULT_N_STORE: usize = 1_000;
-const DEFAULT_N_RECALL: usize = 1_000;
+const DEFAULT_N_STORE: usize = 100;
+const DEFAULT_N_RECALL: usize = 100;
 const DEFAULT_RECALL_LIMIT: usize = 10;
-const DEFAULT_CHURN_OPS: usize = 600;
-const DEFAULT_CHURN_WINDOW: usize = 64;
+const DEFAULT_CHURN_OPS: usize = 60;
+const DEFAULT_CHURN_WINDOW: usize = 16;
 
 const EMBEDDING_DIMS: usize = 16;
 const EMBEDDING_SEED: u64 = 0x5EED_BA5E;

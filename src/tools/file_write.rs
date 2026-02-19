@@ -72,8 +72,30 @@ impl Tool for FileWriteTool {
             });
         };
 
-        // Ensure parent directory exists
-        tokio::fs::create_dir_all(parent).await?;
+        match tokio::fs::metadata(parent).await {
+            Ok(meta) => {
+                if !meta.is_dir() {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!(
+                            "Invalid path: parent is not a directory: {}",
+                            parent.display()
+                        )),
+                    });
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            Err(e) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to inspect parent directory: {e}")),
+                });
+            }
+        }
 
         // Resolve parent AFTER creation to block symlink escapes.
         let resolved_parent = match tokio::fs::canonicalize(parent).await {
@@ -293,8 +315,8 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
-    #[cfg(unix)]
     #[tokio::test]
+    #[cfg(unix)]
     async fn file_write_blocks_symlink_escape() {
         use std::os::unix::fs::symlink;
 

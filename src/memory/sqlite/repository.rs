@@ -8,6 +8,7 @@ use crate::memory::{
 use chrono::Local;
 use rusqlite::{params, ToSql};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 const REVOKED_PROVENANCE_MARKERS: [&str; 2] = [
@@ -477,18 +478,21 @@ impl SqliteMemory {
 
         let query_embedding = self.get_or_compute_embedding(query).await?;
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
-
         let search_limit = limit.saturating_mul(2);
-        let keyword_results = Self::fts5_search(&conn, query, search_limit).unwrap_or_default();
+        let (keyword_results, vector_results) = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
-        let vector_results = if let Some(ref qe) = query_embedding {
-            Self::vector_search(&conn, qe, search_limit).unwrap_or_default()
-        } else {
-            Vec::new()
+            let keyword_results = Self::fts5_search(&conn, query, search_limit).unwrap_or_default();
+            let vector_results = if let Some(ref qe) = query_embedding {
+                Self::vector_search(&conn, qe, search_limit).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            (keyword_results, vector_results)
         };
 
         let merged = if vector_results.is_empty() {
@@ -512,71 +516,132 @@ impl SqliteMemory {
         };
 
         let mut results = Vec::new();
-        let mut by_id_stmt = conn
-            .prepare("SELECT id, key, content, category, created_at FROM memories WHERE id = ?1")?;
+        let merged_ids = merged
+            .iter()
+            .map(|scored| scored.id.clone())
+            .collect::<Vec<_>>();
+        let mut entries_by_id = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            Self::fetch_entries_by_ids(&conn, &merged_ids)?
+        };
+
         for scored in &merged {
-            if let Ok(entry) = by_id_stmt.query_row(params![scored.id], |row| {
-                Ok(MemoryEntry {
-                    id: row.get(0)?,
-                    key: row.get(1)?,
-                    content: row.get(2)?,
-                    category: Self::str_to_category(&row.get::<_, String>(3)?),
-                    timestamp: row.get(4)?,
-                    session_id: None,
-                    score: Some(f64::from(scored.final_score)),
-                })
-            }) {
+            if let Some(mut entry) = entries_by_id.remove(&scored.id) {
+                entry.score = Some(f64::from(scored.final_score));
                 results.push(entry);
             }
         }
 
         if results.is_empty() {
-            let keywords: Vec<String> =
-                query.split_whitespace().map(|w| format!("%{w}%")).collect();
-            if !keywords.is_empty() {
-                let conditions: Vec<String> = keywords
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| {
-                        format!("(content LIKE ?{} OR key LIKE ?{})", i * 2 + 1, i * 2 + 2)
-                    })
-                    .collect();
-                let where_clause = conditions.join(" OR ");
-                let sql = format!(
-                    "SELECT id, key, content, category, created_at FROM memories
-                     WHERE {where_clause}
-                     ORDER BY updated_at DESC
-                     LIMIT ?{}",
-                    keywords.len() * 2 + 1
-                );
-                let mut stmt = conn.prepare(&sql)?;
-                let mut param_values: Vec<&dyn ToSql> = Vec::with_capacity(keywords.len() * 2 + 1);
-                for kw in &keywords {
-                    param_values.push(kw);
-                    param_values.push(kw);
-                }
-                #[allow(clippy::cast_possible_wrap)]
-                let limit_i64 = limit as i64;
-                param_values.push(&limit_i64);
-                let rows = stmt.query_map(param_values.as_slice(), |row| {
-                    Ok(MemoryEntry {
-                        id: row.get(0)?,
-                        key: row.get(1)?,
-                        content: row.get(2)?,
-                        category: Self::str_to_category(&row.get::<_, String>(3)?),
-                        timestamp: row.get(4)?,
-                        session_id: None,
-                        score: Some(1.0),
-                    })
-                })?;
-                for row in rows {
-                    results.push(row?);
-                }
-            }
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            results.extend(Self::keyword_fallback_search(&conn, query, limit)?);
         }
 
         results.truncate(limit);
         Ok(results)
+    }
+
+    fn fetch_entries_by_ids(
+        conn: &rusqlite::Connection,
+        ids: &[String],
+    ) -> anyhow::Result<HashMap<String, MemoryEntry>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, key, content, category, created_at FROM memories WHERE id IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+            Ok(MemoryEntry {
+                id: row.get(0)?,
+                key: row.get(1)?,
+                content: row.get(2)?,
+                category: Self::str_to_category(&row.get::<_, String>(3)?),
+                timestamp: row.get(4)?,
+                session_id: None,
+                score: None,
+            })
+        })?;
+
+        let mut out = HashMap::with_capacity(ids.len());
+        for row in rows {
+            let entry = row?;
+            out.insert(entry.id.clone(), entry);
+        }
+        Ok(out)
+    }
+
+    fn keyword_fallback_search(
+        conn: &rusqlite::Connection,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        let keywords = query
+            .split_whitespace()
+            .map(|word| format!("%{word}%"))
+            .collect::<Vec<_>>();
+        if keywords.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conditions = keywords
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                format!(
+                    "(content LIKE ?{} OR key LIKE ?{})",
+                    index * 2 + 1,
+                    index * 2 + 2
+                )
+            })
+            .collect::<Vec<_>>();
+        let where_clause = conditions.join(" OR ");
+        let sql = format!(
+            "SELECT id, key, content, category, created_at FROM memories
+             WHERE {where_clause}
+             ORDER BY updated_at DESC
+             LIMIT ?{}",
+            keywords.len() * 2 + 1
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut param_values: Vec<&dyn ToSql> = Vec::with_capacity(keywords.len() * 2 + 1);
+        for keyword in &keywords {
+            param_values.push(keyword);
+            param_values.push(keyword);
+        }
+        #[allow(clippy::cast_possible_wrap)]
+        let limit_i64 = limit as i64;
+        param_values.push(&limit_i64);
+
+        let rows = stmt.query_map(param_values.as_slice(), |row| {
+            Ok(MemoryEntry {
+                id: row.get(0)?,
+                key: row.get(1)?,
+                content: row.get(2)?,
+                category: Self::str_to_category(&row.get::<_, String>(3)?),
+                timestamp: row.get(4)?,
+                session_id: None,
+                score: Some(1.0),
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     #[allow(clippy::unused_async)]

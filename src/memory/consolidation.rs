@@ -2,14 +2,16 @@ use crate::memory::traits::MemoryLayer;
 use crate::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
+use crate::observability::traits::MemoryLifecycleSignal;
+use crate::observability::Observer;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 
 const STATE_FILE: &str = "memory_consolidation_state.json";
 pub const CONSOLIDATION_SLOT_KEY: &str = "consolidation.semantic.latest";
@@ -108,9 +110,16 @@ fn build_consolidation_value(input: &ConsolidationInput) -> String {
     )
 }
 
-fn consolidation_lock() -> &'static tokio::sync::Mutex<()> {
-    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+fn consolidation_lock(entity_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut guard = locks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard
+        .entry(entity_id.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 pub async fn run_consolidation_once(
@@ -126,7 +135,8 @@ pub async fn run_consolidation_once(
         });
     }
 
-    let _guard = consolidation_lock().lock().await;
+    let entity_lock = consolidation_lock(&input.entity_id);
+    let _guard = entity_lock.lock().await;
     ensure_state_parent(workspace_dir)?;
     let mut state = load_state(workspace_dir)?;
     let previous_watermark = state
@@ -180,10 +190,14 @@ pub fn enqueue_consolidation_task(
     memory: Arc<dyn Memory>,
     workspace_dir: PathBuf,
     input: ConsolidationInput,
+    observer: Arc<dyn Observer>,
 ) {
     tokio::spawn(async move {
+        observer.record_memory_lifecycle(MemoryLifecycleSignal::ConsolidationStarted);
         if let Err(error) = run_consolidation_once(memory.as_ref(), &workspace_dir, &input).await {
             tracing::warn!(error = %error, "post-turn consolidation task failed; answer path preserved");
+        } else {
+            observer.record_memory_lifecycle(MemoryLifecycleSignal::ConsolidationCompleted);
         }
     });
 }

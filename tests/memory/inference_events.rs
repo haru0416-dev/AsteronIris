@@ -1,12 +1,9 @@
-#[path = "support/memory_harness.rs"]
-mod memory_harness;
-
 use asteroniris::memory::{
     Memory, MemoryCategory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource,
     PrivacyLevel,
 };
-use memory_harness::append_test_event;
-use memory_harness::sqlite_fixture;
+use super::memory_harness::append_test_event;
+use super::memory_harness::sqlite_fixture;
 use rusqlite::Connection;
 
 #[tokio::test]

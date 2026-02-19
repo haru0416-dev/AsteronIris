@@ -9,8 +9,7 @@ use asteroniris::memory::{
     ForgetStatus, Memory, MemoryCategory,
 };
 
-#[path = "support/memory_harness.rs"]
-mod memory_harness;
+use super::memory_harness;
 
 const REPORT_PATH: &str = ".sisyphus/evidence/task-19-parity-report.csv";
 

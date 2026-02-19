@@ -1,3 +1,4 @@
+pub mod inventory;
 pub mod registry;
 
 use crate::config::Config;

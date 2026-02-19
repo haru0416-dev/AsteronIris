@@ -1,19 +1,18 @@
 //! Head-to-head comparison: SQLite vs Markdown memory backends
 //!
-//! Run with: cargo test --test memory_comparison -- --nocapture
+//! Run with: cargo test --test memory -- comparison --nocapture
 
 use std::time::Instant;
 use tempfile::TempDir;
 
-#[path = "support/memory_harness.rs"]
-mod memory_harness;
+use super::memory_harness;
 
 use asteroniris::memory::{
     capability_matrix_for_memory, ensure_forget_mode_supported, CapabilitySupport, ForgetMode,
     MarkdownMemory, Memory, MemoryCategory, MemoryRecallItem, MemorySource, PrivacyLevel,
     SqliteMemory,
 };
-use memory_harness::{
+use super::memory_harness::{
     append_test_event, assert_event_count_parity, capture_recall_items_as_csv,
     find_degraded_backends, forget_hard, format_capability_evidence, lancedb_fixture,
     markdown_memory_from_path, memory_count, recall_scoped_values, resolve_slot_value,

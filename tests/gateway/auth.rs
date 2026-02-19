@@ -76,7 +76,7 @@ async fn wait_until_gateway_ready(port: u16) {
         .build()
         .expect("reqwest client should be built");
 
-    for _ in 0..200 {
+    for _ in 0..80 {
         let health = client
             .get(format!("http://127.0.0.1:{port}/health"))
             .send()
@@ -84,7 +84,7 @@ async fn wait_until_gateway_ready(port: u16) {
         if matches!(health, Ok(resp) if resp.status() == StatusCode::OK) {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     panic!("gateway did not become ready on port {port}");

@@ -3,8 +3,7 @@ use asteroniris::memory::{
 };
 use rusqlite::Connection;
 
-#[path = "support/memory_harness.rs"]
-mod memory_harness;
+use super::memory_harness;
 
 fn check_for_artifact(
     outcome: &asteroniris::memory::ForgetOutcome,

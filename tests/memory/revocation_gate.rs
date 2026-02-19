@@ -1,5 +1,4 @@
-#[path = "support/memory_harness.rs"]
-mod memory_harness;
+use super::memory_harness;
 
 use asteroniris::agent::loop_::build_context_for_integration;
 use asteroniris::memory::{

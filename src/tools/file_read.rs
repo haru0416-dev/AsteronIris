@@ -3,6 +3,7 @@ use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
@@ -80,20 +81,20 @@ impl Tool for FileReadTool {
             });
         }
 
-        // Check file size AFTER canonicalization to prevent TOCTOU symlink bypass
-        match tokio::fs::metadata(&resolved_path).await {
-            Ok(meta) => {
-                if meta.len() > MAX_FILE_SIZE {
-                    return Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!(
-                            "File too large: {} bytes (limit: {MAX_FILE_SIZE} bytes)",
-                            meta.len()
-                        )),
-                    });
-                }
+        let mut file = match tokio::fs::File::open(&resolved_path).await {
+            Ok(file) => file,
+            Err(e) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to read file: {e}")),
+                });
             }
+        };
+
+        // Check file size AFTER canonicalization to prevent TOCTOU symlink bypass
+        let metadata = match file.metadata().await {
+            Ok(metadata) => metadata,
             Err(e) => {
                 return Ok(ToolResult {
                     success: false,
@@ -101,18 +102,38 @@ impl Tool for FileReadTool {
                     error: Some(format!("Failed to read file metadata: {e}")),
                 });
             }
+        };
+        if metadata.len() > MAX_FILE_SIZE {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "File too large: {} bytes (limit: {MAX_FILE_SIZE} bytes)",
+                    metadata.len()
+                )),
+            });
         }
 
-        match tokio::fs::read_to_string(&resolved_path).await {
+        #[allow(clippy::cast_possible_truncation)]
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        if let Err(e) = file.read_to_end(&mut bytes).await {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Failed to read file: {e}")),
+            });
+        }
+
+        match String::from_utf8(bytes) {
             Ok(contents) => Ok(ToolResult {
                 success: true,
                 output: contents,
                 error: None,
             }),
-            Err(e) => Ok(ToolResult {
+            Err(_) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Failed to read file: {e}")),
+                error: Some("Failed to read file: file is not valid UTF-8".to_string()),
             }),
         }
     }
@@ -249,8 +270,8 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
-    #[cfg(unix)]
     #[tokio::test]
+    #[cfg(unix)]
     async fn file_read_blocks_symlink_escape() {
         use std::os::unix::fs::symlink;
 

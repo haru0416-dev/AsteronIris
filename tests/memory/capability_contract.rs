@@ -10,8 +10,7 @@ use futures_util::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use tempfile::TempDir;
 
-#[path = "support/memory_harness.rs"]
-mod memory_harness;
+use super::memory_harness;
 
 #[test]
 fn memory_capability_matrix() {

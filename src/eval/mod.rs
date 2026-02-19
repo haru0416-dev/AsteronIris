@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,17 +40,40 @@ pub struct EvalReport {
     pub summary_fingerprint: u64,
 }
 
+const BASELINE_REPORT_REQUIRED_COLUMNS: [&str; 5] =
+    ["suite", "success-rate", "cost", "latency", "retries"];
+const BASELINE_REPORT_HEADER: &str = "suite,success-rate,cost,latency,retries";
+
+fn expected_baseline_columns() -> Vec<String> {
+    BASELINE_REPORT_REQUIRED_COLUMNS
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn parse_csv_columns(line: &str) -> Vec<String> {
+    line.split(',')
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .collect()
+}
+
 impl EvalReport {
+    pub fn required_csv_columns() -> &'static [&'static str; 5] {
+        &BASELINE_REPORT_REQUIRED_COLUMNS
+    }
+
     pub fn render_csv(&self) -> String {
-        let mut csv = String::from("suite,success-rate,cost,latency,retries\n");
+        let mut csv = String::from(BASELINE_REPORT_HEADER);
+        csv.push('\n');
         for suite in &self.suites {
-            let success_rate = f64::from(suite.success_rate_bps) / 100.0;
-            let cost = f64::from(suite.avg_cost_cents) / 100.0;
-            let retries = f64::from(suite.avg_retries_milli) / 1_000.0;
             let _ = writeln!(
                 csv,
-                "{},{success_rate:.2}%,${cost:.2},{}ms,{retries:.3}",
-                suite.suite, suite.avg_latency_ms
+                "{},{},{},{}ms,{}",
+                suite.suite,
+                format_rate(suite.success_rate_bps),
+                format_currency_cents(suite.avg_cost_cents),
+                suite.avg_latency_ms,
+                format_retries(suite.avg_retries_milli)
             );
         }
         csv
@@ -79,6 +103,75 @@ impl EvalReport {
 
         lines.join("\n") + "\n"
     }
+}
+
+pub fn validate_baseline_report_columns(csv: &str) -> Result<()> {
+    let header = csv
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing eval report csv header"))?;
+    let columns = parse_csv_columns(header);
+    let expected = expected_baseline_columns();
+
+    if columns.is_empty() {
+        bail!("missing eval report csv header");
+    }
+
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+    for column in &columns {
+        if !seen.insert(column.clone()) {
+            duplicates.push(column.clone());
+        }
+    }
+
+    if !duplicates.is_empty() {
+        bail!("duplicate columns: {}", duplicates.join(", "));
+    }
+
+    if columns == expected {
+        return Ok(());
+    }
+
+    let mut missing: Vec<String> = Vec::new();
+    for required in &expected {
+        if !columns.iter().any(|entry| entry == required) {
+            missing.push(required.clone());
+        }
+    }
+
+    let mut unexpected: Vec<String> = Vec::new();
+    for column in &columns {
+        if !expected.iter().any(|expected| expected == column) {
+            unexpected.push(column.clone());
+        }
+    }
+
+    if !missing.is_empty() {
+        bail!("missing required columns: {}", missing.join(", "));
+    }
+
+    if !unexpected.is_empty() {
+        bail!("unexpected report columns: {}", unexpected.join(", "));
+    }
+
+    bail!(
+        "unexpected column order: expected {} got {}",
+        expected.join(", "),
+        columns.join(", ")
+    )
+}
+
+fn format_rate(success_rate_bps: u32) -> String {
+    format!("{:.2}%", f64::from(success_rate_bps) / 100.0)
+}
+
+fn format_currency_cents(avg_cost_cents: u32) -> String {
+    format!("${:.2}", f64::from(avg_cost_cents) / 100.0)
+}
+
+fn format_retries(avg_retries_milli: u32) -> String {
+    format!("{:.3}", f64::from(avg_retries_milli) / 1_000.0)
 }
 
 #[derive(Debug, Clone)]
