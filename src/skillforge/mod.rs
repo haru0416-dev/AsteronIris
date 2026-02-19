@@ -359,7 +359,7 @@ mod tests {
                     .insert_header("content-type", "application/json")
                     .set_body_json(serde_json::json!({"message": "invalid token"})),
             )
-            .expect(2)
+            .expect(1)
             .mount(&server)
             .await;
 
