@@ -149,7 +149,8 @@ async fn autonomy_policy_blocks_bypass() {
     assert!(user_forbidden_path_output.contains("route=user-direct-shell"));
     assert!(user_forbidden_path_output.contains("forbidden path argument"));
 
-    let agent_forbidden_path = build_job("cat /etc/passwd", CronJobKind::Agent, CronJobOrigin::Agent);
+    let agent_forbidden_path =
+        build_job("cat /etc/passwd", CronJobKind::Agent, CronJobOrigin::Agent);
     let (agent_forbidden_path_success, agent_forbidden_path_output) =
         asteroniris::cron::scheduler::execute_job_once_for_integration(
             &config,

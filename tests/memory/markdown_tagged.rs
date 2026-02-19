@@ -1,11 +1,11 @@
 use super::memory_harness;
 
+use super::memory_harness::{append_test_event, memory_count};
 use asteroniris::memory::traits::MemoryLayer;
 use asteroniris::memory::ForgetMode;
 use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
-use super::memory_harness::{append_test_event, memory_count};
 
 fn decode_percent(encoded: &str) -> Option<String> {
     let mut chars = encoded.chars();

@@ -140,7 +140,7 @@ fn detect_cycle(
                     }
                     return Some(vec![neighbor.clone(), neighbor.clone()]);
                 }
-                Some(NodeState::Visited) => {},
+                Some(NodeState::Visited) => {}
                 None => {
                     if let Some(path) = detect_cycle(neighbor, adjacency, states, stack) {
                         return Some(path);

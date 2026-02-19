@@ -609,13 +609,13 @@ mod tests {
     use crate::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
     use crate::providers::reliable::ReliableProvider;
     use crate::security::SecurityPolicy;
-    use verify_repair::VERIFY_REPAIR_ESCALATION_SLOT_KEY;
     use async_trait::async_trait;
     use chrono::Utc;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     use tempfile::TempDir;
+    use verify_repair::VERIFY_REPAIR_ESCALATION_SLOT_KEY;
 
     struct MockProvider {
         calls: Arc<AtomicUsize>,

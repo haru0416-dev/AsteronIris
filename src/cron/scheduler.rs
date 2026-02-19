@@ -222,12 +222,16 @@ async fn run_user_job_command(
             );
             (output.status.success(), combined)
         }
-        Err(e) => (false, format!("{ROUTE_MARKER_USER_SHELL}\nspawn error: {e}")),
+        Err(e) => (
+            false,
+            format!("{ROUTE_MARKER_USER_SHELL}\nspawn error: {e}"),
+        ),
     }
 }
 
 fn run_agent_job_command(security: &SecurityPolicy, job: &CronJob) -> (bool, String) {
-    if let Err(output) = enforce_policy_invariants(security, &job.command, ROUTE_MARKER_AGENT_BLOCKED)
+    if let Err(output) =
+        enforce_policy_invariants(security, &job.command, ROUTE_MARKER_AGENT_BLOCKED)
     {
         return (false, output);
     }

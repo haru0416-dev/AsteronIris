@@ -164,10 +164,7 @@ impl SkillForge {
                     let scout = HuggingFaceScout::new();
                     match scout.discover().await {
                         Ok(mut found) => {
-                            info!(
-                                count = found.len(),
-                                "HuggingFace scout returned candidates"
-                            );
+                            info!(count = found.len(), "HuggingFace scout returned candidates");
                             candidates.append(&mut found);
                         }
                         Err(e) => {
@@ -420,8 +417,14 @@ mod tests {
         let forge = SkillForge::new(cfg);
         let report = forge.forge().await.unwrap();
 
-        assert_eq!(report.discovered, 1, "huggingface should return one candidate");
-        assert_eq!(report.evaluated, 1, "discovered candidate should be evaluated");
+        assert_eq!(
+            report.discovered, 1,
+            "huggingface should return one candidate"
+        );
+        assert_eq!(
+            report.evaluated, 1,
+            "discovered candidate should be evaluated"
+        );
         assert_eq!(report.results[0].candidate.source, ScoutSource::HuggingFace);
         assert_eq!(report.results[0].candidate.owner, "openai");
         assert!(report.results[0].candidate.has_license);
@@ -457,7 +460,10 @@ mod tests {
         let forge = SkillForge::new(cfg);
         let report = forge.forge().await.unwrap();
 
-        assert_eq!(report.discovered, 0, "rate-limited source should skip candidates");
+        assert_eq!(
+            report.discovered, 0,
+            "rate-limited source should skip candidates"
+        );
         assert_eq!(report.evaluated, 0, "no candidates should be evaluated");
 
         unsafe {

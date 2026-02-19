@@ -540,7 +540,11 @@ impl Scout for ClawHubScout {
                 .map_err(|e| anyhow::anyhow!("Failed to parse ClawHub response: {e}"))?;
 
             let mut items = Self::parse_items(&body);
-            debug!(count = items.len(), query = query.as_str(), "Parsed ClawHub items");
+            debug!(
+                count = items.len(),
+                query = query.as_str(),
+                "Parsed ClawHub items"
+            );
             all.append(&mut items);
         }
 

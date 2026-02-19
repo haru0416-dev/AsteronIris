@@ -108,7 +108,9 @@ pub async fn build_context_for_integration(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory};
+    use crate::memory::{
+        MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
+    };
     use std::sync::Arc;
     use tempfile::TempDir;
 

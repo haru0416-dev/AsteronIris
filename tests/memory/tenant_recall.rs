@@ -1,3 +1,5 @@
+use super::memory_harness::append_test_event;
+use super::memory_harness::sqlite_fixture;
 use asteroniris::agent::loop_::build_context_for_integration;
 use asteroniris::agent::loop_::run_main_session_turn_for_integration_with_policy;
 use asteroniris::config::Config;
@@ -11,8 +13,6 @@ use asteroniris::security::SecurityPolicy;
 use asteroniris::tools::memory_recall::MemoryRecallTool;
 use asteroniris::tools::traits::Tool;
 use async_trait::async_trait;
-use super::memory_harness::append_test_event;
-use super::memory_harness::sqlite_fixture;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::Mutex;
