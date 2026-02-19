@@ -8,6 +8,16 @@ use tokio::sync::{mpsc, Mutex};
 // Use tokio_rustls's re-export of rustls types
 use tokio_rustls::rustls;
 
+mod auth;
+mod message;
+mod parse;
+mod tls;
+
+use auth::encode_sasl_plain;
+use message::{split_message, IRC_STYLE_PREFIX, SENDER_PREFIX_RESERVE};
+use parse::IrcMessage;
+use tls::NoVerify;
+
 /// Read timeout for IRC — if no data arrives within this duration, the
 /// connection is considered dead. IRC servers typically PING every 60-120s.
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
@@ -36,189 +46,6 @@ pub struct IrcChannel {
 }
 
 type WriteHalf = tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
-
-/// Style instruction prepended to every IRC message before it reaches the LLM.
-/// IRC clients render plain text only — no markdown, no HTML, no XML.
-const IRC_STYLE_PREFIX: &str = "\
-[context: you are responding over IRC. \
-Plain text only. No markdown, no tables, no XML/HTML tags. \
-Never use triple backtick code fences. Use a single blank line to separate blocks instead. \
-Be terse and concise. \
-Use short lines. Avoid walls of text.]\n";
-
-/// Reserved bytes for the server-prepended sender prefix (`:nick!user@host `).
-const SENDER_PREFIX_RESERVE: usize = 64;
-
-/// A parsed IRC message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct IrcMessage {
-    prefix: Option<String>,
-    command: String,
-    params: Vec<String>,
-}
-
-impl IrcMessage {
-    /// Parse a raw IRC line into an `IrcMessage`.
-    ///
-    /// IRC format: `[:<prefix>] <command> [<params>] [:<trailing>]`
-    fn parse(line: &str) -> Option<Self> {
-        let line = line.trim_end_matches(['\r', '\n']);
-        if line.is_empty() {
-            return None;
-        }
-
-        let (prefix, rest) = if let Some(stripped) = line.strip_prefix(':') {
-            let space = stripped.find(' ')?;
-            (Some(stripped[..space].to_string()), &stripped[space + 1..])
-        } else {
-            (None, line)
-        };
-
-        // Split at trailing (first `:` after command/params)
-        let (params_part, trailing) = if let Some(colon_pos) = rest.find(" :") {
-            (&rest[..colon_pos], Some(&rest[colon_pos + 2..]))
-        } else {
-            (rest, None)
-        };
-
-        let mut parts: Vec<&str> = params_part.split_whitespace().collect();
-        if parts.is_empty() {
-            return None;
-        }
-
-        let command = parts.remove(0).to_uppercase();
-        let mut params: Vec<String> = parts.iter().map(std::string::ToString::to_string).collect();
-        if let Some(t) = trailing {
-            params.push(t.to_string());
-        }
-
-        Some(IrcMessage {
-            prefix,
-            command,
-            params,
-        })
-    }
-
-    /// Extract the nickname from the prefix (nick!user@host → nick).
-    fn nick(&self) -> Option<&str> {
-        self.prefix.as_ref().and_then(|p| {
-            let end = p.find('!').unwrap_or(p.len());
-            let nick = &p[..end];
-            if nick.is_empty() {
-                None
-            } else {
-                Some(nick)
-            }
-        })
-    }
-}
-
-/// Encode SASL PLAIN credentials: base64(\0nick\0password).
-fn encode_sasl_plain(nick: &str, password: &str) -> String {
-    // Simple base64 encoder — avoids adding a base64 crate dependency.
-    // The project's Discord channel uses a similar inline approach.
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    let input = format!("\0{nick}\0{password}");
-    let bytes = input.as_bytes();
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-
-    for chunk in bytes.chunks(3) {
-        let b0 = u32::from(chunk[0]);
-        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
-        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        out.push(CHARS[(triple >> 18 & 0x3F) as usize] as char);
-        out.push(CHARS[(triple >> 12 & 0x3F) as usize] as char);
-
-        if chunk.len() > 1 {
-            out.push(CHARS[(triple >> 6 & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-
-        if chunk.len() > 2 {
-            out.push(CHARS[(triple & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-
-    out
-}
-
-/// Split a message into lines safe for IRC transmission.
-///
-/// IRC is a line-based protocol — `\r\n` terminates each command, so any
-/// newline inside a PRIVMSG payload would truncate the message and turn the
-/// remainder into garbled/invalid IRC commands.
-///
-/// This function:
-/// 1. Splits on `\n` (and strips `\r`) so each logical line becomes its own PRIVMSG.
-/// 2. Splits any line that exceeds `max_bytes` at a safe UTF-8 boundary.
-/// 3. Skips empty lines to avoid sending blank PRIVMSGs.
-fn split_message(message: &str, max_bytes: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-
-    // Guard against max_bytes == 0 to prevent infinite loop
-    if max_bytes == 0 {
-        let full: String = message
-            .lines()
-            .map(|l| l.trim_end_matches('\r'))
-            .filter(|l| !l.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-        if full.is_empty() {
-            chunks.push(String::new());
-        } else {
-            chunks.push(full);
-        }
-        return chunks;
-    }
-
-    for line in message.split('\n') {
-        let line = line.trim_end_matches('\r');
-        if line.is_empty() {
-            continue;
-        }
-
-        if line.len() <= max_bytes {
-            chunks.push(line.to_string());
-            continue;
-        }
-
-        // Line exceeds max_bytes — split at safe UTF-8 boundaries
-        let mut remaining = line;
-        while !remaining.is_empty() {
-            if remaining.len() <= max_bytes {
-                chunks.push(remaining.to_string());
-                break;
-            }
-
-            let mut split_at = max_bytes;
-            while split_at > 0 && !remaining.is_char_boundary(split_at) {
-                split_at -= 1;
-            }
-            if split_at == 0 {
-                // No valid boundary found going backward — advance forward instead
-                split_at = max_bytes;
-                while split_at < remaining.len() && !remaining.is_char_boundary(split_at) {
-                    split_at += 1;
-                }
-            }
-
-            chunks.push(remaining[..split_at].to_string());
-            remaining = &remaining[split_at..];
-        }
-    }
-
-    if chunks.is_empty() {
-        chunks.push(String::new());
-    }
-
-    chunks
-}
 
 impl IrcChannel {
     #[allow(clippy::too_many_arguments)]
@@ -292,47 +119,6 @@ impl IrcChannel {
         writer.write_all(data.as_bytes()).await?;
         writer.flush().await?;
         Ok(())
-    }
-}
-
-/// Certificate verifier that accepts any certificate (for `verify_tls=false`).
-#[derive(Debug)]
-struct NoVerify;
-
-impl rustls::client::danger::ServerCertVerifier for NoVerify {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
     }
 }
 

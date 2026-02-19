@@ -7,25 +7,29 @@
 //! - Request timeouts (30s) to prevent slow-loris attacks
 //! - Header sanitization (handled by axum/hyper)
 
-use crate::auth::AuthBroker;
-use crate::channels::{Channel, WhatsAppChannel};
-use crate::config::{Config, GatewayDefenseMode};
-use crate::memory::traits::MemoryLayer;
-use crate::memory::{
-    self, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
+mod autosave;
+mod defense;
+mod handlers;
+mod signature;
+
+pub use signature::verify_whatsapp_signature;
+
+#[cfg(test)]
+use defense::apply_external_ingress_policy;
+use handlers::{
+    handle_health, handle_pair, handle_webhook, handle_whatsapp_message, handle_whatsapp_verify,
 };
+
+use crate::auth::AuthBroker;
+use crate::channels::WhatsAppChannel;
+use crate::config::{Config, GatewayDefenseMode};
+use crate::memory::{self, Memory};
 use crate::providers::{self, Provider};
-use crate::security::external_content::{prepare_external_content, ExternalAction};
-use crate::security::pairing::{constant_time_eq, is_public_bind, PairingGuard};
-use crate::security::policy::TenantPolicyContext;
+use crate::security::pairing::{is_public_bind, PairingGuard};
 use crate::security::SecurityPolicy;
-use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use axum::{
-    body::Bytes,
-    extract::{Query, State},
-    http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    http::StatusCode,
     routing::{get, post},
     Router,
 };
@@ -39,65 +43,6 @@ use tower_http::timeout::TimeoutLayer;
 pub const MAX_BODY_SIZE: usize = 65_536;
 /// Request timeout (30s) — prevents slow-loris attacks
 pub const REQUEST_TIMEOUT_SECS: u64 = 30;
-
-#[derive(Debug, Clone)]
-struct ExternalIngressPolicyOutcome {
-    model_input: String,
-    persisted_summary: String,
-    blocked: bool,
-}
-
-fn apply_external_ingress_policy(source: &str, text: &str) -> ExternalIngressPolicyOutcome {
-    let prepared = prepare_external_content(source, text);
-
-    ExternalIngressPolicyOutcome {
-        model_input: prepared.model_input,
-        persisted_summary: prepared.persisted_summary.as_memory_value(),
-        blocked: matches!(prepared.action, ExternalAction::Block),
-    }
-}
-
-const GATEWAY_AUTOSAVE_ENTITY_ID: &str = "default";
-
-fn gateway_runtime_policy_context() -> TenantPolicyContext {
-    TenantPolicyContext::disabled()
-}
-
-fn gateway_webhook_autosave_event(summary: String) -> MemoryEventInput {
-    MemoryEventInput::new(
-        GATEWAY_AUTOSAVE_ENTITY_ID,
-        "external.gateway.webhook",
-        MemoryEventType::FactAdded,
-        summary,
-        MemorySource::ExplicitUser,
-        PrivacyLevel::Private,
-    )
-    .with_layer(MemoryLayer::Working)
-    .with_confidence(0.95)
-    .with_importance(0.5)
-    .with_provenance(MemoryProvenance::source_reference(
-        MemorySource::ExplicitUser,
-        "gateway.autosave.webhook",
-    ))
-}
-
-fn gateway_whatsapp_autosave_event(sender: &str, summary: String) -> MemoryEventInput {
-    MemoryEventInput::new(
-        GATEWAY_AUTOSAVE_ENTITY_ID,
-        format!("external.whatsapp.{sender}"),
-        MemoryEventType::FactAdded,
-        summary,
-        MemorySource::ExplicitUser,
-        PrivacyLevel::Private,
-    )
-    .with_layer(MemoryLayer::Working)
-    .with_confidence(0.95)
-    .with_importance(0.6)
-    .with_provenance(MemoryProvenance::source_reference(
-        MemorySource::ExplicitUser,
-        "gateway.autosave.whatsapp",
-    ))
-}
 
 /// Shared state for all axum handlers
 #[derive(Clone)]
@@ -115,6 +60,23 @@ pub struct AppState {
     pub defense_mode: GatewayDefenseMode,
     pub defense_kill_switch: bool,
     pub security: Arc<SecurityPolicy>,
+}
+
+/// Webhook request body
+#[derive(serde::Deserialize)]
+pub struct WebhookBody {
+    pub message: String,
+}
+
+/// `WhatsApp` verification query params
+#[derive(serde::Deserialize)]
+pub struct WhatsAppVerifyQuery {
+    #[serde(rename = "hub.mode")]
+    pub mode: Option<String>,
+    #[serde(rename = "hub.verify_token")]
+    pub verify_token: Option<String>,
+    #[serde(rename = "hub.challenge")]
+    pub challenge: Option<String>,
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -299,500 +261,15 @@ pub async fn run_gateway_with_listener(
     Ok(())
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// AXUM HANDLERS
-// ══════════════════════════════════════════════════════════════════════════════
-
-/// GET /health — always public (no secrets leaked)
-async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
-    let body = serde_json::json!({
-        "status": "ok",
-        "paired": state.pairing.is_paired(),
-        "runtime": crate::health::snapshot_json(),
-    });
-    Json(body)
-}
-
-/// POST /pair — exchange one-time code for bearer token
-async fn handle_pair(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    let code = headers
-        .get("X-Pairing-Code")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    match state.pairing.try_pair(code) {
-        Ok(Some(token)) => {
-            tracing::info!("🔐 New client paired successfully");
-            let body = serde_json::json!({
-                "paired": true,
-                "token": token,
-                "message": "Save this token — use it as Authorization: Bearer <token>"
-            });
-            (StatusCode::OK, Json(body))
-        }
-        Ok(None) => {
-            tracing::warn!("🔐 Pairing attempt with invalid code");
-            let err = serde_json::json!({"error": "Invalid pairing code"});
-            (StatusCode::FORBIDDEN, Json(err))
-        }
-        Err(lockout_secs) => {
-            tracing::warn!(
-                "🔐 Pairing locked out — too many failed attempts ({lockout_secs}s remaining)"
-            );
-            let err = serde_json::json!({
-                "error": format!("Too many failed attempts. Try again in {lockout_secs}s."),
-                "retry_after": lockout_secs
-            });
-            (StatusCode::TOO_MANY_REQUESTS, Json(err))
-        }
-    }
-}
-
-/// Webhook request body
-#[derive(serde::Deserialize)]
-pub struct WebhookBody {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PolicyViolation {
-    MissingOrInvalidBearer,
-    MissingOrInvalidWebhookSecret,
-}
-
-impl PolicyViolation {
-    fn reason(self) -> &'static str {
-        match self {
-            Self::MissingOrInvalidBearer => "missing_or_invalid_bearer",
-            Self::MissingOrInvalidWebhookSecret => "missing_or_invalid_webhook_secret",
-        }
-    }
-
-    fn enforce_response(self) -> (StatusCode, Json<serde_json::Value>) {
-        match self {
-            Self::MissingOrInvalidBearer => {
-                let err = serde_json::json!({
-                    "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
-                });
-                (StatusCode::UNAUTHORIZED, Json(err))
-            }
-            Self::MissingOrInvalidWebhookSecret => {
-                let err = serde_json::json!({"error": "Unauthorized — invalid or missing X-Webhook-Secret header"});
-                (StatusCode::UNAUTHORIZED, Json(err))
-            }
-        }
-    }
-}
-
-fn effective_defense_mode(state: &AppState) -> GatewayDefenseMode {
-    if state.defense_kill_switch {
-        GatewayDefenseMode::Audit
-    } else {
-        state.defense_mode
-    }
-}
-
-fn policy_violation_response(
-    state: &AppState,
-    violation: PolicyViolation,
-) -> Option<(StatusCode, Json<serde_json::Value>)> {
-    let mode = effective_defense_mode(state);
-    let reason = violation.reason();
-    match mode {
-        GatewayDefenseMode::Audit => {
-            tracing::warn!(
-                mode = "audit",
-                violation = reason,
-                "Webhook policy violation recorded"
-            );
-            None
-        }
-        GatewayDefenseMode::Warn => {
-            tracing::warn!(
-                mode = "warn",
-                violation = reason,
-                "Webhook policy violation warning"
-            );
-            Some((
-                StatusCode::ACCEPTED,
-                Json(serde_json::json!({
-                    "mode": "warn",
-                    "warning": reason,
-                    "blocked": false
-                })),
-            ))
-        }
-        GatewayDefenseMode::Enforce => {
-            tracing::warn!(
-                mode = "enforce",
-                violation = reason,
-                "Webhook policy violation blocked"
-            );
-            Some(violation.enforce_response())
-        }
-    }
-}
-
-fn policy_accounting_response(policy_error: &'static str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::TOO_MANY_REQUESTS,
-        Json(serde_json::json!({"error": policy_error})),
-    )
-}
-
-/// POST /webhook — main webhook endpoint
-async fn handle_webhook(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Result<Json<WebhookBody>, axum::extract::rejection::JsonRejection>,
-) -> impl IntoResponse {
-    // ── Bearer token auth (pairing) ──
-    if state.pairing.require_pairing() {
-        let auth = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let token = auth.strip_prefix("Bearer ").unwrap_or("");
-        if !state.pairing.is_authenticated(token) {
-            if let Some(response) =
-                policy_violation_response(&state, PolicyViolation::MissingOrInvalidBearer)
-            {
-                return response;
-            }
-        }
-    }
-
-    // ── Webhook secret auth (optional, additional layer) ──
-    if let Some(ref secret) = state.webhook_secret {
-        let header_val = headers
-            .get("X-Webhook-Secret")
-            .and_then(|v| v.to_str().ok());
-        match header_val {
-            Some(val) if constant_time_eq(val, secret.as_ref()) => {}
-            _ => {
-                if let Some(response) = policy_violation_response(
-                    &state,
-                    PolicyViolation::MissingOrInvalidWebhookSecret,
-                ) {
-                    return response;
-                }
-            }
-        }
-    }
-
-    // ── Parse body ──
-    let Json(webhook_body) = match body {
-        Ok(b) => b,
-        Err(e) => {
-            let err = serde_json::json!({
-                "error": format!("Invalid JSON: {e}. Expected: {{\"message\": \"...\"}}")
-            });
-            return (StatusCode::BAD_REQUEST, Json(err));
-        }
-    };
-
-    let source = "gateway:webhook";
-    let ingress = apply_external_ingress_policy(source, &webhook_body.message);
-
-    if state.auto_save {
-        let policy_context = gateway_runtime_policy_context();
-        if let Err(error) = policy_context.enforce_recall_scope(GATEWAY_AUTOSAVE_ENTITY_ID) {
-            tracing::warn!(
-                error,
-                "gateway webhook autosave skipped due to policy context"
-            );
-        } else {
-            let _ = state
-                .mem
-                .append_event(gateway_webhook_autosave_event(
-                    ingress.persisted_summary.clone(),
-                ))
-                .await;
-        }
-    }
-
-    if ingress.blocked {
-        tracing::warn!(
-            source,
-            "blocked high-risk external content at gateway webhook ingress"
-        );
-        let err = serde_json::json!({"error": "External content blocked by safety policy"});
-        return (StatusCode::BAD_REQUEST, Json(err));
-    }
-
-    if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-        return policy_accounting_response(policy_error);
-    }
-
-    match state
-        .provider
-        .chat(&ingress.model_input, &state.model, state.temperature)
-        .await
-    {
-        Ok(response) => {
-            let body = serde_json::json!({"response": response, "model": state.model});
-            (StatusCode::OK, Json(body))
-        }
-        Err(e) => {
-            tracing::error!(
-                "Webhook provider error: {}",
-                providers::sanitize_api_error(&e.to_string())
-            );
-            let err = serde_json::json!({"error": "LLM request failed"});
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(err))
-        }
-    }
-}
-
-/// `WhatsApp` verification query params
-#[derive(serde::Deserialize)]
-pub struct WhatsAppVerifyQuery {
-    #[serde(rename = "hub.mode")]
-    pub mode: Option<String>,
-    #[serde(rename = "hub.verify_token")]
-    pub verify_token: Option<String>,
-    #[serde(rename = "hub.challenge")]
-    pub challenge: Option<String>,
-}
-
-/// GET /whatsapp — Meta webhook verification
-async fn handle_whatsapp_verify(
-    State(state): State<AppState>,
-    Query(params): Query<WhatsAppVerifyQuery>,
-) -> impl IntoResponse {
-    let Some(ref wa) = state.whatsapp else {
-        return (StatusCode::NOT_FOUND, "WhatsApp not configured".to_string());
-    };
-
-    // Verify the token matches (constant-time comparison to prevent timing attacks)
-    let token_matches = params
-        .verify_token
-        .as_deref()
-        .is_some_and(|t| constant_time_eq(t, wa.verify_token()));
-    if params.mode.as_deref() == Some("subscribe") && token_matches {
-        if let Some(ch) = params.challenge {
-            tracing::info!("WhatsApp webhook verified successfully");
-            return (StatusCode::OK, ch);
-        }
-        return (StatusCode::BAD_REQUEST, "Missing hub.challenge".to_string());
-    }
-
-    tracing::warn!("WhatsApp webhook verification failed — token mismatch");
-    (StatusCode::FORBIDDEN, "Forbidden".to_string())
-}
-
-/// Verify `WhatsApp` webhook signature (`X-Hub-Signature-256`).
-/// Returns true if the signature is valid, false otherwise.
-/// See: <https://developers.facebook.com/docs/graph-api/webhooks/getting-started#verification-requests>
-pub fn verify_whatsapp_signature(app_secret: &str, body: &[u8], signature_header: &str) -> bool {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-
-    // Signature format: "sha256=<hex_signature>"
-    let Some(hex_sig) = signature_header.strip_prefix("sha256=") else {
-        return false;
-    };
-
-    // Decode hex signature
-    let Ok(expected) = hex::decode(hex_sig) else {
-        return false;
-    };
-
-    // Compute HMAC-SHA256
-    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(app_secret.as_bytes()) else {
-        return false;
-    };
-    mac.update(body);
-
-    // Constant-time comparison
-    mac.verify_slice(&expected).is_ok()
-}
-
-/// POST /whatsapp — incoming message webhook
-#[allow(clippy::too_many_lines)]
-async fn handle_whatsapp_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    let Some(ref wa) = state.whatsapp else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "WhatsApp not configured"})),
-        );
-    };
-
-    // ── Security: Verify X-Hub-Signature-256 if app_secret is configured ──
-    if let Some(ref app_secret) = state.whatsapp_app_secret {
-        let signature = headers
-            .get("X-Hub-Signature-256")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        if !verify_whatsapp_signature(app_secret, &body, signature) {
-            tracing::warn!(
-                "WhatsApp webhook signature verification failed (signature: {})",
-                if signature.is_empty() {
-                    "missing"
-                } else {
-                    "invalid"
-                }
-            );
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "Invalid signature"})),
-            );
-        }
-    }
-
-    // Parse JSON body
-    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&body) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid JSON payload"})),
-        );
-    };
-
-    // Parse messages from the webhook payload
-    let messages = wa.parse_webhook_payload(&payload);
-
-    if messages.is_empty() {
-        // Acknowledge the webhook even if no messages (could be status updates)
-        return (StatusCode::OK, Json(serde_json::json!({"status": "ok"})));
-    }
-
-    // Process each message
-    for msg in &messages {
-        tracing::info!(
-            "WhatsApp message from {}: {}",
-            msg.sender,
-            truncate_with_ellipsis(&msg.content, 50)
-        );
-        let source = "gateway:whatsapp";
-
-        // Auto-save to memory
-        if state.auto_save {
-            let ingress = apply_external_ingress_policy(source, &msg.content);
-            let policy_context = gateway_runtime_policy_context();
-            if let Err(error) = policy_context.enforce_recall_scope(GATEWAY_AUTOSAVE_ENTITY_ID) {
-                tracing::warn!(
-                    error,
-                    "gateway whatsapp autosave skipped due to policy context"
-                );
-            } else {
-                let _ = state
-                    .mem
-                    .append_event(gateway_whatsapp_autosave_event(
-                        &msg.sender,
-                        ingress.persisted_summary.clone(),
-                    ))
-                    .await;
-            }
-
-            if ingress.blocked {
-                tracing::warn!(
-                    source,
-                    "blocked high-risk external content at whatsapp ingress"
-                );
-                let _ = wa
-                    .send(
-                        "I could not process that external content safely.",
-                        &msg.sender,
-                    )
-                    .await;
-                continue;
-            }
-
-            if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-                let _ = wa
-                    .send(
-                        "I cannot respond right now due to policy limits.",
-                        &msg.sender,
-                    )
-                    .await;
-                tracing::warn!("{policy_error}");
-                continue;
-            }
-
-            // Call the LLM
-            match state
-                .provider
-                .chat(&ingress.model_input, &state.model, state.temperature)
-                .await
-            {
-                Ok(response) => {
-                    // Send reply via WhatsApp
-                    if let Err(e) = wa.send(&response, &msg.sender).await {
-                        tracing::error!("Failed to send WhatsApp reply: {e}");
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("LLM error for WhatsApp message: {e:#}");
-                    let _ = wa
-                        .send(
-                            "Sorry, I couldn't process your message right now.",
-                            &msg.sender,
-                        )
-                        .await;
-                }
-            }
-
-            continue;
-        }
-
-        let ingress = apply_external_ingress_policy("gateway:whatsapp", &msg.content);
-        if ingress.blocked {
-            tracing::warn!("blocked high-risk external content at whatsapp ingress");
-            let _ = wa
-                .send(
-                    "I could not process that external content safely.",
-                    &msg.sender,
-                )
-                .await;
-            continue;
-        }
-
-        if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-            let _ = wa
-                .send(
-                    "I cannot respond right now due to policy limits.",
-                    &msg.sender,
-                )
-                .await;
-            tracing::warn!("{policy_error}");
-            continue;
-        }
-
-        match state
-            .provider
-            .chat(&ingress.model_input, &state.model, state.temperature)
-            .await
-        {
-            Ok(response) => {
-                if let Err(e) = wa.send(&response, &msg.sender).await {
-                    tracing::error!("Failed to send WhatsApp reply: {e}");
-                }
-            }
-            Err(e) => {
-                tracing::error!("LLM error for WhatsApp message: {e:#}");
-                let _ = wa
-                    .send(
-                        "Sorry, I couldn't process your message right now.",
-                        &msg.sender,
-                    )
-                    .await;
-            }
-        }
-    }
-
-    // Acknowledge the webhook
-    (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use axum::{
+        extract::State,
+        http::HeaderMap,
+        response::{IntoResponse, Json},
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
 
