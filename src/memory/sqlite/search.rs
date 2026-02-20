@@ -3,6 +3,7 @@ use crate::memory::vector;
 use rusqlite::{Connection, params};
 
 impl SqliteMemory {
+    // Used by search_projection for FTS5/BM25 keyword search — projection layer currently dormant
     #[allow(dead_code)]
     pub(super) fn fts5_search(
         conn: &Connection,
@@ -51,6 +52,7 @@ impl SqliteMemory {
     }
 
     #[allow(dead_code)]
+    // Used by search_projection for cosine-similarity vector search — projection layer currently dormant
     pub(super) fn vector_search(
         conn: &Connection,
         query_embedding: &[f32],

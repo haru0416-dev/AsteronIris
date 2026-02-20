@@ -411,6 +411,7 @@ impl SqliteMemory {
         Ok(out)
     }
 
+    // Projection layer — prepared API for direct key/value memory operations, not yet wired to Memory trait
     #[allow(dead_code)]
     pub(super) async fn upsert_projection_entry(
         &self,
@@ -469,6 +470,7 @@ impl SqliteMemory {
     }
 
     #[allow(dead_code)]
+    // Projection layer — hybrid vector+keyword search, not yet wired to Memory trait
     pub(super) async fn search_projection(
         &self,
         query: &str,
@@ -550,6 +552,7 @@ impl SqliteMemory {
     }
 
     #[allow(dead_code)]
+    // Called by search_projection — projection layer currently dormant
     fn fetch_entries_by_ids(
         conn: &rusqlite::Connection,
         ids: &[String],
@@ -586,6 +589,7 @@ impl SqliteMemory {
     }
 
     #[allow(dead_code)]
+    // Called by search_projection — projection layer currently dormant
     fn keyword_fallback_search(
         conn: &rusqlite::Connection,
         query: &str,
@@ -649,6 +653,7 @@ impl SqliteMemory {
     }
 
     #[allow(clippy::unused_async, dead_code)]
+    // Projection layer — not yet wired to Memory trait
     pub(super) async fn fetch_projection_entry(
         &self,
         key: &str,
@@ -681,6 +686,7 @@ impl SqliteMemory {
     }
 
     #[allow(clippy::unused_async, dead_code)]
+    // Projection layer — not yet wired to Memory trait
     pub(super) async fn list_projection_entries(
         &self,
         category: Option<&MemoryCategory>,
@@ -729,6 +735,7 @@ impl SqliteMemory {
     }
 
     #[allow(clippy::unused_async, dead_code)]
+    // Projection layer — not yet wired to Memory trait
     pub(super) async fn delete_projection_entry(&self, key: &str) -> anyhow::Result<bool> {
         let conn = self
             .conn
@@ -739,6 +746,7 @@ impl SqliteMemory {
     }
 
     #[allow(clippy::unused_async, dead_code)]
+    // Projection layer — not yet wired to Memory trait
     pub(super) async fn count_projection_entries(&self) -> anyhow::Result<usize> {
         let conn = self
             .conn

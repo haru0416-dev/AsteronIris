@@ -3,6 +3,7 @@ use crate::memory::traits::MemoryLayer;
 use crate::memory::{MemoryCategory, MemorySource, PrivacyLevel};
 
 impl SqliteMemory {
+    // Used by projection layer methods (upsert/list_projection_entry) — currently dormant
     #[allow(dead_code)]
     pub(super) fn category_to_str(cat: &MemoryCategory) -> String {
         match cat {
@@ -15,6 +16,7 @@ impl SqliteMemory {
 
     #[allow(dead_code)]
     pub(super) fn str_to_category(s: &str) -> MemoryCategory {
+    // Used by projection layer methods (fetch/list/keyword search) — currently dormant
         match s {
             "core" => MemoryCategory::Core,
             "daily" => MemoryCategory::Daily,

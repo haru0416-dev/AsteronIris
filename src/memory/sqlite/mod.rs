@@ -27,11 +27,14 @@ mod search;
 /// - **Safe Reindex**: temp DB → seed → sync → atomic swap → rollback
 pub struct SqliteMemory {
     conn: Mutex<Connection>,
+    // Retained for diagnostics and potential reconnection logic
     #[allow(dead_code)]
     db_path: PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
+    // Used by the projection search layer (search_projection) — currently dormant
     #[allow(dead_code)]
     vector_weight: f32,
+    // Used by the projection search layer (search_projection) — currently dormant
     #[allow(dead_code)]
     keyword_weight: f32,
     cache_max: usize,
@@ -220,7 +223,8 @@ impl SqliteMemory {
         Ok(Some(embedding))
     }
 
-    /// Safe reindex: rebuild FTS5 + embeddings with rollback on failure
+    /// Safe reindex: rebuild FTS5 + embeddings with rollback on failure.
+    /// Public maintenance API — callable externally for manual index rebuilds.
     #[allow(dead_code)]
     pub async fn reindex(&self) -> anyhow::Result<usize> {
         // Step 1: Rebuild FTS5
