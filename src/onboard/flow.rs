@@ -17,7 +17,7 @@ use super::scaffold::scaffold_workspace;
 use super::view::{print_step, print_summary, print_welcome_banner};
 
 /// Run the interactive wizard. Uses TUI if stdout is a terminal, falls back to dialoguer CLI.
-pub fn run_wizard() -> Result<Config> {
+pub fn run_wizard(install_daemon_flag: bool) -> Result<Config> {
     // Detect locale before anything else
     if let Ok(lang) = std::env::var("ASTERONIRIS_LANG")
         && !lang.is_empty()
@@ -31,6 +31,7 @@ pub fn run_wizard() -> Result<Config> {
         match super::tui::run_tui_wizard() {
             Ok(config) => {
                 print_summary(&config);
+                offer_install_daemon(install_daemon_flag, &config)?;
                 offer_launch_channels(&config)?;
                 return Ok(config);
             }
@@ -40,11 +41,11 @@ pub fn run_wizard() -> Result<Config> {
         }
     }
 
-    run_wizard_cli()
+    run_wizard_cli(install_daemon_flag)
 }
 
 /// CLI-based wizard using dialoguer (fallback for non-TTY or TUI failure).
-fn run_wizard_cli() -> Result<Config> {
+fn run_wizard_cli(install_daemon_flag: bool) -> Result<Config> {
     print_welcome_banner();
 
     print_step(1, 8, &t!("onboard.step.workspace"));
@@ -118,9 +119,34 @@ fn run_wizard_cli() -> Result<Config> {
     config.save()?;
 
     print_summary(&config);
+    offer_install_daemon(install_daemon_flag, &config)?;
     offer_launch_channels(&config)?;
 
     Ok(config)
+}
+
+fn offer_install_daemon(install_daemon_flag: bool, config: &Config) -> Result<()> {
+    if install_daemon_flag {
+        crate::service::handle_command(&crate::ServiceCommands::Install, config)?;
+        println!("  {} Daemon installed as OS service", ui::success("✓"));
+    } else {
+        let install: bool = Confirm::new()
+            .with_prompt("  › Install AsteronIris as an OS service (auto-start on boot)?")
+            .default(false)
+            .interact()?;
+
+        if install {
+            crate::service::handle_command(&crate::ServiceCommands::Install, config)?;
+            println!("  {} Daemon installed as OS service", ui::success("✓"));
+        } else {
+            println!(
+                "  {} You can install later with: asteroniris service install",
+                ui::dim("›")
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn offer_launch_channels(config: &Config) -> Result<()> {
@@ -182,6 +208,7 @@ pub fn run_quick_setup(
     api_key: Option<&str>,
     provider: Option<&str>,
     memory_backend: Option<&str>,
+    install_daemon_flag: bool,
 ) -> Result<Config> {
     print_welcome_banner();
     println!("  {}", ui::header(t!("onboard.quick.title")));
@@ -359,6 +386,8 @@ pub fn run_quick_setup(
         println!("    3. Status:   asteroniris status");
     }
     println!();
+
+    offer_install_daemon(install_daemon_flag, &config)?;
 
     Ok(config)
 }

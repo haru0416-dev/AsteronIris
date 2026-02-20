@@ -48,6 +48,10 @@ pub enum Commands {
         /// Memory backend (sqlite, markdown, none) - used in quick mode, default: sqlite
         #[arg(long)]
         memory: Option<String>,
+
+        /// Also install the daemon as an OS service (launchd/systemd)
+        #[arg(long)]
+        install_daemon: bool,
     },
 
     /// Start the AI agent loop

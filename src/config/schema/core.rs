@@ -666,6 +666,17 @@ impl Config {
         }
     }
 
+    /// Returns `true` when the config appears to be a fresh default that has
+    /// never been through onboarding (no API key, no provider explicitly chosen,
+    /// and no env var overrides).
+    pub fn needs_onboarding(&self) -> bool {
+        // If env var provides an API key, user has configured externally
+        if std::env::var("ASTERONIRIS_API_KEY").is_ok() || std::env::var("API_KEY").is_ok() {
+            return false;
+        }
+        self.api_key.is_none() && self.default_provider.is_none()
+    }
+
     pub fn save(&self) -> Result<()> {
         let persisted = self.config_for_persistence()?;
         let toml_str = toml::to_string_pretty(&persisted).context("Failed to serialize config")?;

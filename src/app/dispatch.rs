@@ -6,6 +6,7 @@ use crate::Config;
 use crate::app::status::render_status;
 use crate::cli::commands::{ChannelCommands, Cli, Commands};
 
+#[allow(clippy::too_many_lines)]
 pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
     // Onboard runs quick setup by default, or the interactive wizard with --interactive
     if let Commands::Onboard {
@@ -14,6 +15,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         api_key,
         provider,
         memory,
+        install_daemon,
     } = &cli.command
     {
         if *interactive && *channels_only {
@@ -26,12 +28,13 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         let config = if *channels_only {
             crate::onboard::run_channels_repair_wizard()?
         } else if *interactive {
-            crate::onboard::run_wizard()?
+            crate::onboard::run_wizard(*install_daemon)?
         } else {
             crate::onboard::run_quick_setup(
                 api_key.as_deref(),
                 provider.as_deref(),
                 memory.as_deref(),
+                *install_daemon,
             )?
         };
         // Auto-start channels if user said yes during wizard
@@ -40,6 +43,31 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         }
         return Ok(());
     }
+
+    // ── Auto-onboard for commands that need a configured provider ──
+    let config = if matches!(
+        &cli.command,
+        Commands::Agent { .. } | Commands::Gateway { .. } | Commands::Daemon { .. }
+    ) && config.needs_onboarding()
+    {
+        use crate::ui::style as ui;
+        println!();
+        println!(
+            "  {} {}",
+            ui::accent("◆"),
+            ui::header("Welcome to AsteronIris!")
+        );
+        println!(
+            "  {}",
+            ui::dim("No configuration found. Let's set things up first.")
+        );
+        println!();
+
+        let new_config = crate::onboard::run_wizard(false)?;
+        Arc::new(new_config)
+    } else {
+        config
+    };
 
     match cli.command {
         Commands::Onboard { .. } => unreachable!(),
