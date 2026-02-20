@@ -3,23 +3,68 @@ pub mod cli;
 pub mod discord;
 #[cfg(feature = "email")]
 pub mod email_channel;
+pub mod factory;
+// Feature-gate stub: mirrors EmailConfig when "email" feature is disabled.
+// MUST stay in sync with src/channels/email_channel.rs EmailConfig.
+// Fields: imap_host, imap_port, imap_folder, smtp_host, smtp_port, smtp_tls,
+//         username, password, from_address, poll_interval_secs, allowed_senders
 #[cfg(not(feature = "email"))]
 pub mod email_channel {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    fn default_imap_port() -> u16 {
+        993
+    }
+    fn default_smtp_port() -> u16 {
+        587
+    }
+    fn default_imap_folder() -> String {
+        "INBOX".into()
+    }
+    fn default_poll_interval() -> u64 {
+        60
+    }
+    fn default_true() -> bool {
+        true
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct EmailConfig {
         pub imap_host: String,
+        #[serde(default = "default_imap_port")]
         pub imap_port: u16,
+        #[serde(default = "default_imap_folder")]
         pub imap_folder: String,
         pub smtp_host: String,
+        #[serde(default = "default_smtp_port")]
         pub smtp_port: u16,
+        #[serde(default = "default_true")]
         pub smtp_tls: bool,
         pub username: String,
         pub password: String,
         pub from_address: String,
+        #[serde(default = "default_poll_interval")]
         pub poll_interval_secs: u64,
+        #[serde(default)]
         pub allowed_senders: Vec<String>,
+    }
+
+    impl Default for EmailConfig {
+        fn default() -> Self {
+            Self {
+                imap_host: String::new(),
+                imap_port: default_imap_port(),
+                imap_folder: default_imap_folder(),
+                smtp_host: String::new(),
+                smtp_port: default_smtp_port(),
+                smtp_tls: true,
+                username: String::new(),
+                password: String::new(),
+                from_address: String::new(),
+                poll_interval_secs: default_poll_interval(),
+                allowed_senders: Vec::new(),
+            }
+        }
     }
 }
 pub mod imessage;
@@ -122,95 +167,8 @@ fn classify_health_result(
     }
 }
 
-#[allow(clippy::too_many_lines)]
 pub async fn doctor_channels(config: Config) -> Result<()> {
-    let mut channels: Vec<(&'static str, Arc<dyn Channel>)> = Vec::with_capacity(8);
-
-    if let Some(ref tg) = config.channels_config.telegram {
-        channels.push((
-            "Telegram",
-            Arc::new(TelegramChannel::new(
-                tg.bot_token.clone(),
-                tg.allowed_users.clone(),
-            )),
-        ));
-    }
-
-    if let Some(ref dc) = config.channels_config.discord {
-        channels.push((
-            "Discord",
-            Arc::new(DiscordChannel::new(
-                dc.bot_token.clone(),
-                dc.guild_id.clone(),
-                dc.allowed_users.clone(),
-            )),
-        ));
-    }
-
-    if let Some(ref sl) = config.channels_config.slack {
-        channels.push((
-            "Slack",
-            Arc::new(SlackChannel::new(
-                sl.bot_token.clone(),
-                sl.channel_id.clone(),
-                sl.allowed_users.clone(),
-            )),
-        ));
-    }
-
-    if let Some(ref im) = config.channels_config.imessage {
-        channels.push((
-            "iMessage",
-            Arc::new(IMessageChannel::new(im.allowed_contacts.clone())),
-        ));
-    }
-
-    if let Some(ref mx) = config.channels_config.matrix {
-        channels.push((
-            "Matrix",
-            Arc::new(MatrixChannel::new(
-                mx.homeserver.clone(),
-                mx.access_token.clone(),
-                mx.room_id.clone(),
-                mx.allowed_users.clone(),
-            )),
-        ));
-    }
-
-    if let Some(ref wa) = config.channels_config.whatsapp {
-        channels.push((
-            "WhatsApp",
-            Arc::new(WhatsAppChannel::new(
-                wa.access_token.clone(),
-                wa.phone_number_id.clone(),
-                wa.verify_token.clone(),
-                wa.allowed_numbers.clone(),
-            )),
-        ));
-    }
-
-    #[cfg(feature = "email")]
-    if let Some(ref email_cfg) = config.channels_config.email {
-        channels.push(("Email", Arc::new(EmailChannel::new(email_cfg.clone()))));
-    }
-
-    if let Some(ref irc) = config.channels_config.irc {
-        channels.push((
-            "IRC",
-            Arc::new(IrcChannel::new(
-                irc.server.clone(),
-                irc.port,
-                irc.nickname.clone(),
-                irc.username.clone(),
-                irc.channels.clone(),
-                irc.allowed_users.clone(),
-                irc.server_password.clone(),
-                irc.nickserv_password.clone(),
-                irc.sasl_password.clone(),
-                irc.verify_tls.unwrap_or(true),
-            )),
-        ));
-    }
+    let channels = factory::build_channels(&config.channels_config);
 
     if channels.is_empty() {
         println!("{}", t!("channels.no_channels_doctor"));
@@ -292,39 +250,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
     let workspace = config.workspace_dir.clone();
     let skills = crate::skills::load_skills(&workspace);
 
-    let mut tool_descs: Vec<(&str, &str)> = vec![
-        (
-            "shell",
-            "Execute terminal commands. Use when: running local checks, build/test commands, diagnostics. Don't use when: a safer dedicated tool exists, or command is destructive without approval.",
-        ),
-        (
-            "file_read",
-            "Read file contents. Use when: inspecting project files, configs, logs. Don't use when: a targeted search is enough.",
-        ),
-        (
-            "file_write",
-            "Write file contents. Use when: applying focused edits, scaffolding files, updating docs/code. Don't use when: side effects are unclear or file ownership is uncertain.",
-        ),
-        (
-            "memory_store",
-            "Save to memory. Use when: preserving durable preferences, decisions, key context. Don't use when: information is transient/noisy/sensitive without need.",
-        ),
-        (
-            "memory_recall",
-            "Search memory. Use when: retrieving prior decisions, user preferences, historical context. Don't use when: answer is already in current context.",
-        ),
-        (
-            "memory_forget",
-            "Delete a memory entry. Use when: memory is incorrect/stale or explicitly requested for removal. Don't use when: impact is uncertain.",
-        ),
-    ];
-
-    if config.browser.enabled {
-        tool_descs.push((
-            "browser_open",
-            "Open approved HTTPS URLs in Brave Browser (allowlist-only, no scraping)",
-        ));
-    }
+    let tool_descs = crate::tools::tool_descriptions(config.browser.enabled, false);
 
     let system_prompt = build_system_prompt(&workspace, &model, &tool_descs, &skills);
 
@@ -340,72 +266,10 @@ pub async fn start_channels(config: Config) -> Result<()> {
         );
     }
 
-    let mut channels: Vec<Arc<dyn Channel>> = Vec::with_capacity(8);
-
-    if let Some(ref tg) = config.channels_config.telegram {
-        channels.push(Arc::new(TelegramChannel::new(
-            tg.bot_token.clone(),
-            tg.allowed_users.clone(),
-        )));
-    }
-
-    if let Some(ref dc) = config.channels_config.discord {
-        channels.push(Arc::new(DiscordChannel::new(
-            dc.bot_token.clone(),
-            dc.guild_id.clone(),
-            dc.allowed_users.clone(),
-        )));
-    }
-
-    if let Some(ref sl) = config.channels_config.slack {
-        channels.push(Arc::new(SlackChannel::new(
-            sl.bot_token.clone(),
-            sl.channel_id.clone(),
-            sl.allowed_users.clone(),
-        )));
-    }
-
-    if let Some(ref im) = config.channels_config.imessage {
-        channels.push(Arc::new(IMessageChannel::new(im.allowed_contacts.clone())));
-    }
-
-    if let Some(ref mx) = config.channels_config.matrix {
-        channels.push(Arc::new(MatrixChannel::new(
-            mx.homeserver.clone(),
-            mx.access_token.clone(),
-            mx.room_id.clone(),
-            mx.allowed_users.clone(),
-        )));
-    }
-
-    if let Some(ref wa) = config.channels_config.whatsapp {
-        channels.push(Arc::new(WhatsAppChannel::new(
-            wa.access_token.clone(),
-            wa.phone_number_id.clone(),
-            wa.verify_token.clone(),
-            wa.allowed_numbers.clone(),
-        )));
-    }
-
-    #[cfg(feature = "email")]
-    if let Some(ref email_cfg) = config.channels_config.email {
-        channels.push(Arc::new(EmailChannel::new(email_cfg.clone())));
-    }
-
-    if let Some(ref irc) = config.channels_config.irc {
-        channels.push(Arc::new(IrcChannel::new(
-            irc.server.clone(),
-            irc.port,
-            irc.nickname.clone(),
-            irc.username.clone(),
-            irc.channels.clone(),
-            irc.allowed_users.clone(),
-            irc.server_password.clone(),
-            irc.nickserv_password.clone(),
-            irc.sasl_password.clone(),
-            irc.verify_tls.unwrap_or(true),
-        )));
-    }
+    let channels: Vec<Arc<dyn Channel>> = factory::build_channels(&config.channels_config)
+        .into_iter()
+        .map(|(_, ch)| ch)
+        .collect();
 
     if channels.is_empty() {
         println!("{}", t!("channels.no_channels"));

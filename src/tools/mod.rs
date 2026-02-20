@@ -41,6 +41,59 @@ pub fn default_action_operator(security: Arc<SecurityPolicy>) -> Arc<dyn ActionO
     Arc::new(NoopOperator::new(security))
 }
 
+/// Generate tool descriptions for system prompts
+///
+/// Returns a vector of (`tool_name`, description) tuples.
+/// Includes `browser_open` if `browser_enabled` is true.
+/// Includes `composio` if `composio_enabled` is true.
+pub fn tool_descriptions(
+    browser_enabled: bool,
+    composio_enabled: bool,
+) -> Vec<(&'static str, &'static str)> {
+    let mut descs: Vec<(&str, &str)> = vec![
+        (
+            "shell",
+            "Execute terminal commands. Use when: running local checks, build/test commands, diagnostics. Don't use when: a safer dedicated tool exists, or command is destructive without approval.",
+        ),
+        (
+            "file_read",
+            "Read file contents. Use when: inspecting project files, configs, logs. Don't use when: a targeted search is enough.",
+        ),
+        (
+            "file_write",
+            "Write file contents. Use when: applying focused edits, scaffolding files, updating docs/code. Don't use when: side effects are unclear or file ownership is uncertain.",
+        ),
+        (
+            "memory_store",
+            "Save to memory. Use when: preserving durable preferences, decisions, key context. Don't use when: information is transient/noisy/sensitive without need.",
+        ),
+        (
+            "memory_recall",
+            "Search memory. Use when: retrieving prior decisions, user preferences, historical context. Don't use when: answer is already in current context.",
+        ),
+        (
+            "memory_forget",
+            "Delete a memory entry. Use when: memory is incorrect/stale or explicitly requested for removal. Don't use when: impact is uncertain.",
+        ),
+    ];
+
+    if browser_enabled {
+        descs.push((
+            "browser_open",
+            "Open approved HTTPS URLs in Brave Browser (allowlist-only, no scraping)",
+        ));
+    }
+
+    if composio_enabled {
+        descs.push((
+            "composio",
+            "Execute actions on 1000+ apps via Composio (Gmail, Notion, GitHub, Slack, etc.). Use action='list' to discover, 'execute' to run, 'connect' to OAuth.",
+        ));
+    }
+
+    descs
+}
+
 /// Create full tool registry including memory tools and optional Composio
 pub fn all_tools(
     security: &Arc<SecurityPolicy>,
