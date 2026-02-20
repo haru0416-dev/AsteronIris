@@ -178,7 +178,7 @@ async fn execute_main_session_turn_with_policy_outcome(
         match execute_main_session_turn_with_accounting(
             config,
             security,
-            mem.clone(),
+            Arc::clone(&mem),
             params,
             user_message,
             &write_context,
@@ -394,7 +394,7 @@ async fn execute_main_session_turn_with_accounting(
         accounting.consume_reflect_call()?;
         if let Err(error) = run_persona_reflect_writeback(
             config,
-            mem.clone(),
+            Arc::clone(&mem),
             params.reflect_provider,
             params.model_name,
             user_message,
@@ -443,7 +443,7 @@ async fn execute_main_session_turn_with_accounting(
                     &response,
                 );
                 memory::enqueue_consolidation_task(
-                    mem.clone(),
+                    Arc::clone(&mem),
                     config.workspace_dir.clone(),
                     input,
                     observer.clone(),
@@ -464,7 +464,7 @@ async fn execute_main_session_turn_with_accounting(
 
 #[allow(clippy::too_many_lines)]
 pub async fn run(
-    config: Config,
+    config: Arc<Config>,
     message: Option<String>,
     provider_override: Option<String>,
     model_override: Option<String>,
@@ -495,7 +495,7 @@ pub async fn run(
     } else {
         None
     };
-    let _tools = tools::all_tools(&security, mem.clone(), composio_key, &config.browser);
+    let _tools = tools::all_tools(&security, Arc::clone(&mem), composio_key, &config.browser);
 
     // ── Resolve provider ─────────────────────────────────────────
     let provider_name = provider_override
@@ -562,7 +562,7 @@ pub async fn run(
         let outcome = execute_main_session_turn_with_metrics(
             &config,
             security.as_ref(),
-            mem.clone(),
+            Arc::clone(&mem),
             &turn_params,
             &msg,
             &observer,
@@ -589,7 +589,7 @@ pub async fn run(
             let outcome = execute_main_session_turn_with_metrics(
                 &config,
                 security.as_ref(),
-                mem.clone(),
+                Arc::clone(&mem),
                 &turn_params,
                 &msg.content,
                 &observer,

@@ -49,7 +49,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             provider,
             model,
             temperature,
-        } => crate::agent::run((*config).clone(), message, provider, model, temperature).await,
+        } => crate::agent::run(Arc::clone(&config), message, provider, model, temperature).await,
 
         Commands::Gateway { port, host } => {
             if port == 0 {
@@ -66,7 +66,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             } else {
                 info!("🧠 Starting AsteronIris Daemon on {host}:{port}");
             }
-            crate::daemon::run((*config).clone(), host, port).await
+            crate::daemon::run(Arc::clone(&config), host, port).await
         }
 
         Commands::Status => {

@@ -9,8 +9,7 @@ use tokio::time::Duration;
 
 const STATUS_FLUSH_SECONDS: u64 = 5;
 
-pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
-    let config = Arc::new(config);
+pub async fn run(config: Arc<Config>, host: String, port: u16) -> Result<()> {
     let initial_backoff = config.reliability.channel_initial_backoff_secs.max(1);
     let max_backoff = config
         .reliability
@@ -81,7 +80,7 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
             max_backoff,
             move || {
                 let cfg = Arc::clone(&scheduler_cfg);
-                async move { crate::cron::scheduler::run((*cfg).clone()).await }
+                async move { crate::cron::scheduler::run(cfg).await }
             },
         ));
     }
@@ -196,7 +195,7 @@ async fn run_heartbeat_worker(config: Arc<Config>) -> Result<()> {
             let prompt = format!("[Heartbeat Task] {task}");
             let temp = config.default_temperature;
             if let Err(e) =
-                crate::agent::run((*config).clone(), Some(prompt), None, None, temp).await
+                crate::agent::run(Arc::clone(&config), Some(prompt), None, None, temp).await
             {
                 crate::health::mark_component_error("heartbeat", e.to_string());
                 tracing::warn!("Heartbeat task failed: {e}");

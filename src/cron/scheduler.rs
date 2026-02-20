@@ -3,6 +3,7 @@ use crate::cron::{CronJob, due_jobs, reschedule_after_run};
 use crate::security::SecurityPolicy;
 use anyhow::Result;
 use chrono::Utc;
+use std::sync::Arc;
 use tokio::process::Command;
 use tokio::time::{self, Duration};
 
@@ -10,7 +11,7 @@ const MIN_POLL_SECONDS: u64 = 5;
 const ROUTE_MARKER_USER_SHELL: &str = "route=user-direct-shell";
 const ROUTE_MARKER_AGENT_BLOCKED: &str = "route=agent-no-direct-shell";
 
-pub async fn run(config: Config) -> Result<()> {
+pub async fn run(config: Arc<Config>) -> Result<()> {
     let poll_secs = config.reliability.scheduler_poll_secs.max(MIN_POLL_SECONDS);
     let mut interval = time::interval(Duration::from_secs(poll_secs));
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
