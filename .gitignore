@@ -46,4 +46,4 @@ flamegraph.svg
 
 # Git worktrees (created by EnterWorktree)
 .wt-*/
-sample/openclaw
+sample/
