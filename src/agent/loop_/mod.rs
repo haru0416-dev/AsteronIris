@@ -446,7 +446,7 @@ async fn execute_main_session_turn_with_accounting(
                     Arc::clone(&mem),
                     config.workspace_dir.clone(),
                     input,
-                    observer.clone(),
+                    Arc::clone(observer),
                 );
             }
             Err(error) => {

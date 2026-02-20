@@ -31,8 +31,8 @@ use std::sync::Arc;
 /// Create the default tool registry
 pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
     vec![
-        Box::new(ShellTool::new(security.clone())),
-        Box::new(FileReadTool::new(security.clone())),
+        Box::new(ShellTool::new(Arc::clone(&security))),
+        Box::new(FileReadTool::new(Arc::clone(&security))),
         Box::new(FileWriteTool::new(security)),
     ]
 }
@@ -102,24 +102,24 @@ pub fn all_tools(
     browser_config: &crate::config::BrowserConfig,
 ) -> Vec<Box<dyn Tool>> {
     let mut tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(ShellTool::new(security.clone())),
-        Box::new(FileReadTool::new(security.clone())),
-        Box::new(FileWriteTool::new(security.clone())),
-        Box::new(MemoryStoreTool::new(memory.clone())),
-        Box::new(MemoryRecallTool::new(memory.clone())),
-        Box::new(MemoryForgetTool::new(memory.clone())),
-        Box::new(MemoryGovernanceTool::new(memory, security.clone())),
+        Box::new(ShellTool::new(Arc::clone(security))),
+        Box::new(FileReadTool::new(Arc::clone(security))),
+        Box::new(FileWriteTool::new(Arc::clone(security))),
+        Box::new(MemoryStoreTool::new(Arc::clone(&memory))),
+        Box::new(MemoryRecallTool::new(Arc::clone(&memory))),
+        Box::new(MemoryForgetTool::new(Arc::clone(&memory))),
+        Box::new(MemoryGovernanceTool::new(memory, Arc::clone(security))),
     ];
 
     if browser_config.enabled {
         // Add legacy browser_open tool for simple URL opening
         tools.push(Box::new(BrowserOpenTool::new(
-            security.clone(),
+            Arc::clone(security),
             browser_config.allowed_domains.clone(),
         )));
         // Add full browser automation tool (agent-browser)
         tools.push(Box::new(BrowserTool::new(
-            security.clone(),
+            Arc::clone(security),
             browser_config.allowed_domains.clone(),
             browser_config.session_name.clone(),
         )));
