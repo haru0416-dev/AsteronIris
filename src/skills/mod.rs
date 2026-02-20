@@ -546,12 +546,18 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
                             .arg(&src)
                             .output();
 
-                        if junction_result.is_ok() && junction_result.unwrap().status.success() {
-                            println!(
-                                "  {} Skill linked (junction): {}",
-                                ui::success("✓"),
-                                dest.display()
-                            );
+                        if let Ok(output) = junction_result {
+                            if output.status.success() {
+                                println!(
+                                    "  {} Skill linked (junction): {}",
+                                    ui::success("✓"),
+                                    dest.display()
+                                );
+                            } else {
+                                // Final fallback: copy the directory
+                                copy_dir_recursive(&src, &dest)?;
+                                println!("  {} Skill copied: {}", ui::success("✓"), dest.display());
+                            }
                         } else {
                             // Final fallback: copy the directory
                             copy_dir_recursive(&src, &dest)?;

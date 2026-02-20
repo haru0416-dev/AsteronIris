@@ -429,7 +429,9 @@ impl Channel for EmailChannel {
                         }
 
                         {
-                            let mut seen = self.seen_messages.lock().unwrap();
+                            // Recover from mutex poisoning — prefer stale data over panic
+                            let mut seen =
+                                self.seen_messages.lock().unwrap_or_else(|e| e.into_inner());
                             if !seen.insert(id.clone()) {
                                 continue;
                             }
