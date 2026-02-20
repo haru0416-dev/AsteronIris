@@ -4,8 +4,10 @@
 //! - Google Cloud ADC (`GOOGLE_APPLICATION_CREDENTIALS`)
 
 use crate::providers::{
-    ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason,
-    scrub_secret_patterns, traits::Provider,
+    ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
+    scrub_secret_patterns,
+    streaming::{ProviderChatRequest, ProviderStream},
+    traits::Provider,
 };
 use async_trait::async_trait;
 use directories::UserDirs;
@@ -51,6 +53,25 @@ struct Part {
     function_call: Option<GeminiFunctionCall>,
     #[serde(rename = "functionResponse", skip_serializing_if = "Option::is_none")]
     function_response: Option<GeminiFunctionResponse>,
+    #[serde(rename = "inlineData", skip_serializing_if = "Option::is_none")]
+    inline_data: Option<GeminiInlineData>,
+    #[serde(rename = "fileData", skip_serializing_if = "Option::is_none")]
+    file_data: Option<GeminiFileData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiInlineData {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    data: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiFileData {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    #[serde(rename = "fileUri")]
+    file_uri: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,6 +371,18 @@ impl GeminiProvider {
                         }),
                     })
                 }
+                ContentBlock::Image { source } => match source {
+                    ImageSource::Base64 { media_type, data } => {
+                        Part::inline_data(GeminiInlineData {
+                            mime_type: media_type.clone(),
+                            data: data.clone(),
+                        })
+                    }
+                    ImageSource::Url { url } => Part::file_data(GeminiFileData {
+                        mime_type: String::new(),
+                        file_uri: url.clone(),
+                    }),
+                },
             })
             .collect();
 
@@ -370,7 +403,9 @@ impl GeminiProvider {
             .flat_map(|message| message.content.iter())
             .filter_map(|block| match block {
                 ContentBlock::ToolUse { id, name, .. } => Some((id.clone(), name.clone())),
-                ContentBlock::Text { .. } | ContentBlock::ToolResult { .. } => None,
+                ContentBlock::Text { .. }
+                | ContentBlock::ToolResult { .. }
+                | ContentBlock::Image { .. } => None,
             })
             .collect::<HashMap<_, _>>();
 
@@ -482,6 +517,149 @@ impl GeminiProvider {
         Ok(result)
     }
 
+    async fn call_api_streaming(
+        &self,
+        model: &str,
+        request: &GenerateContentRequest,
+    ) -> anyhow::Result<reqwest::Response> {
+        let api_key = self.api_key.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Gemini API key not found. Options:\n\
+                 1. Set GEMINI_API_KEY env var\n\
+                 2. Run `gemini` CLI to authenticate (tokens will be reused)\n\
+                 3. Get an API key from https://aistudio.google.com/app/apikey\n\
+             4. Run `asteroniris onboard` to configure"
+            )
+        })?;
+
+        let model_name = Self::model_name(model);
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/{model_name}:streamGenerateContent?key={api_key}&alt=sse"
+        );
+
+        let response = self.client.post(&url).json(request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Gemini API error ({status}): {error_text}");
+        }
+
+        Ok(response)
+    }
+
+    fn parse_sse_data_lines(chunk: &str) -> Vec<&str> {
+        chunk
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .collect()
+    }
+
+    async fn chat_with_tools_stream_impl(
+        &self,
+        req: ProviderChatRequest,
+    ) -> anyhow::Result<ProviderStream> {
+        use crate::providers::streaming::StreamEvent;
+        use futures_util::StreamExt;
+
+        let request = Self::build_tools_request(
+            req.system_prompt.as_deref(),
+            &req.messages,
+            &req.tools,
+            req.temperature,
+        );
+
+        let response = self.call_api_streaming(&req.model, &request).await?;
+        let mut byte_stream = response.bytes_stream();
+
+        let stream = async_stream::try_stream! {
+            let mut buffer = String::new();
+            let mut sent_start = false;
+            let mut tool_call_index = 1usize;
+
+            while let Some(chunk_result) = byte_stream.next().await {
+                let chunk = chunk_result?;
+                let text = String::from_utf8_lossy(&chunk);
+                buffer.push_str(&text);
+
+                while let Some(boundary) = buffer.find("\n\n") {
+                    let remaining = buffer.split_off(boundary + 2);
+                    let event_block = std::mem::take(&mut buffer);
+                    buffer = remaining;
+
+                    for data in Self::parse_sse_data_lines(&event_block) {
+                        let Ok(gen_response) = serde_json::from_str::<GenerateContentResponse>(data) else {
+                            continue;
+                        };
+
+                        if let Some(err) = gen_response.error.as_ref() {
+                            Err(anyhow::anyhow!("Gemini API error: {}", err.message))?;
+                        }
+
+                        if !sent_start {
+                            yield StreamEvent::ResponseStart { model: None };
+                            sent_start = true;
+                        }
+
+                        if let Some(candidates) = &gen_response.candidates {
+                            for candidate in candidates {
+                                for part in &candidate.content.parts {
+                                    if let Some(delta_text) = &part.text
+                                        && !delta_text.is_empty()
+                                    {
+                                        yield StreamEvent::TextDelta {
+                                            text: delta_text.clone(),
+                                        };
+                                    }
+
+                                    if let Some(fc) = &part.function_call {
+                                        let id = fc.id.clone().unwrap_or_else(|| {
+                                            let generated = format!("gemini_call_{tool_call_index}");
+                                            tool_call_index += 1;
+                                            generated
+                                        });
+                                        let input = if fc.args.is_object() {
+                                            fc.args.clone()
+                                        } else {
+                                            serde_json::json!({"input": fc.args})
+                                        };
+
+                                        yield StreamEvent::ToolCallComplete {
+                                            id,
+                                            name: fc.name.clone(),
+                                            input,
+                                        };
+                                    }
+                                }
+
+                                if candidate.finish_reason.is_some() {
+                                    let stop_reason = Self::map_stop_reason(candidate);
+                                    let (input_tokens, output_tokens) = gen_response
+                                        .usage_metadata
+                                        .as_ref()
+                                        .map_or((None, None), |usage| {
+                                            (
+                                                Some(usage.prompt_token_count),
+                                                Some(usage.candidates_token_count),
+                                            )
+                                        });
+
+                                    yield StreamEvent::Done {
+                                        stop_reason: Some(stop_reason),
+                                        input_tokens,
+                                        output_tokens,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
+
     async fn call_api(
         &self,
         system_prompt: Option<&str>,
@@ -500,6 +678,8 @@ impl Part {
             text: Some(text),
             function_call: None,
             function_response: None,
+            inline_data: None,
+            file_data: None,
         }
     }
 
@@ -508,6 +688,8 @@ impl Part {
             text: None,
             function_call: Some(function_call),
             function_response: None,
+            inline_data: None,
+            file_data: None,
         }
     }
 
@@ -516,6 +698,28 @@ impl Part {
             text: None,
             function_call: None,
             function_response: Some(function_response),
+            inline_data: None,
+            file_data: None,
+        }
+    }
+
+    fn inline_data(data: GeminiInlineData) -> Self {
+        Self {
+            text: None,
+            function_call: None,
+            function_response: None,
+            inline_data: Some(data),
+            file_data: None,
+        }
+    }
+
+    fn file_data(data: GeminiFileData) -> Self {
+        Self {
+            text: None,
+            function_call: None,
+            function_response: None,
+            inline_data: None,
+            file_data: Some(data),
         }
     }
 }
@@ -583,7 +787,9 @@ impl Provider for GeminiProvider {
             .iter()
             .filter_map(|block| match block {
                 ContentBlock::Text { text } => Some(text.as_str()),
-                ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => None,
+                ContentBlock::ToolUse { .. }
+                | ContentBlock::ToolResult { .. }
+                | ContentBlock::Image { .. } => None,
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -610,6 +816,21 @@ impl Provider for GeminiProvider {
 
     fn supports_tool_calling(&self) -> bool {
         true
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn supports_vision(&self) -> bool {
+        true
+    }
+
+    async fn chat_with_tools_stream(
+        &self,
+        req: ProviderChatRequest,
+    ) -> anyhow::Result<ProviderStream> {
+        self.chat_with_tools_stream_impl(req).await
     }
 }
 
@@ -813,9 +1034,67 @@ mod tests {
     }
 
     #[test]
+    fn map_provider_message_handles_image_block() {
+        let msg = ProviderMessage {
+            role: MessageRole::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "Describe this".to_string(),
+                },
+                ContentBlock::Image {
+                    source: ImageSource::base64("image/png", "iVBOR"),
+                },
+            ],
+        };
+        let tool_map = std::collections::HashMap::new();
+        let content = GeminiProvider::map_provider_message(&msg, &tool_map);
+        assert_eq!(content.role.as_deref(), Some("user"));
+        assert_eq!(content.parts.len(), 2);
+        let json = serde_json::to_value(&content).unwrap();
+        assert!(json["parts"][0]["text"].is_string());
+        assert_eq!(json["parts"][1]["inlineData"]["mimeType"], "image/png");
+    }
+
+    #[test]
     fn supports_tool_calling_returns_true() {
         let provider = GeminiProvider::new(Some("test-api-key"));
         assert!(provider.supports_tool_calling());
+    }
+
+    #[test]
+    fn supports_vision_returns_true() {
+        let provider = GeminiProvider::new(Some("test-key"));
+        assert!(provider.supports_vision());
+    }
+
+    #[test]
+    fn supports_streaming_returns_true() {
+        let provider = GeminiProvider::new(Some("test-api-key"));
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn parse_sse_data_lines_basic() {
+        let chunk = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" world\"}]}}]}\n\n"
+        );
+        let lines = GeminiProvider::parse_sse_data_lines(chunk);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0],
+            "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}]}}]}"
+        );
+        assert_eq!(
+            lines[1],
+            "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" world\"}]}}]}"
+        );
+    }
+
+    #[test]
+    fn parse_sse_data_lines_empty() {
+        let lines = GeminiProvider::parse_sse_data_lines("");
+        assert!(lines.is_empty());
     }
 
     #[test]

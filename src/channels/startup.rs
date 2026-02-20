@@ -2,6 +2,7 @@ use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::auth::AuthBroker;
 use crate::config::Config;
 use crate::memory::{self, Memory};
+use crate::providers::response::ContentBlock;
 use crate::providers::{self, Provider};
 use crate::security::policy::EntityRateLimiter;
 use crate::security::{PermissionStore, SecurityPolicy};
@@ -24,6 +25,49 @@ use super::policy::{ChannelPolicy, min_autonomy};
 use super::prompt_builder::build_system_prompt;
 use super::runtime::{channel_backoff_settings, spawn_supervised_listener};
 use super::traits::{Channel, ChannelMessage};
+
+fn convert_attachments_to_images(
+    attachments: &[crate::channels::traits::MediaAttachment],
+) -> Vec<ContentBlock> {
+    use crate::channels::traits::MediaData;
+    use crate::providers::response::ImageSource;
+
+    attachments
+        .iter()
+        .filter(|a| a.mime_type.starts_with("image/"))
+        .map(|a| {
+            let source = match &a.data {
+                MediaData::Url(url) => ImageSource::url(url),
+                MediaData::Bytes(bytes) => ImageSource::base64(&a.mime_type, encode_base64(bytes)),
+            };
+            ContentBlock::Image { source }
+        })
+        .collect()
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(CHARS[(triple >> 18 & 0x3F) as usize] as char);
+        out.push(CHARS[(triple >> 12 & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(CHARS[(triple >> 6 & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
 
 struct ChannelRuntime {
     config: Arc<Config>,
@@ -294,12 +338,14 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
         Arc::clone(&rt.registry),
         rt.config.autonomy.max_tool_loop_iterations,
     );
+    let image_blocks = convert_attachments_to_images(&msg.attachments);
 
     match tool_loop
         .run(
             rt.provider.as_ref(),
             &rt.system_prompt,
             &ingress.model_input,
+            &image_blocks,
             &rt.model,
             rt.temperature,
             &ctx,
@@ -414,4 +460,87 @@ pub async fn start_channels(config: Arc<Config>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::channels::traits::{MediaAttachment, MediaData};
+
+    #[test]
+    fn encode_base64_empty() {
+        assert_eq!(encode_base64(&[]), "");
+    }
+
+    #[test]
+    fn encode_base64_hello() {
+        assert_eq!(encode_base64(b"Hello"), "SGVsbG8=");
+    }
+
+    #[test]
+    fn encode_base64_three_byte_aligned() {
+        assert_eq!(encode_base64(b"abc"), "YWJj");
+    }
+
+    #[test]
+    fn convert_attachments_filters_non_images() {
+        let attachments = vec![
+            MediaAttachment {
+                mime_type: "image/png".to_string(),
+                data: MediaData::Url("https://example.com/img.png".to_string()),
+                filename: Some("img.png".to_string()),
+            },
+            MediaAttachment {
+                mime_type: "audio/mpeg".to_string(),
+                data: MediaData::Url("https://example.com/audio.mp3".to_string()),
+                filename: Some("audio.mp3".to_string()),
+            },
+        ];
+        let blocks = convert_attachments_to_images(&attachments);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0], ContentBlock::Image { .. }));
+    }
+
+    #[test]
+    fn convert_attachments_url_source() {
+        let attachments = vec![MediaAttachment {
+            mime_type: "image/jpeg".to_string(),
+            data: MediaData::Url("https://example.com/photo.jpg".to_string()),
+            filename: None,
+        }];
+        let blocks = convert_attachments_to_images(&attachments);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Image { source } = &blocks[0] {
+            let json = serde_json::to_value(source).unwrap();
+            assert_eq!(json["type"], "url");
+            assert_eq!(json["url"], "https://example.com/photo.jpg");
+        } else {
+            panic!("expected Image block");
+        }
+    }
+
+    #[test]
+    fn convert_attachments_bytes_source() {
+        let attachments = vec![MediaAttachment {
+            mime_type: "image/png".to_string(),
+            data: MediaData::Bytes(vec![0x89, 0x50, 0x4E, 0x47]),
+            filename: Some("test.png".to_string()),
+        }];
+        let blocks = convert_attachments_to_images(&attachments);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Image { source } = &blocks[0] {
+            let json = serde_json::to_value(source).unwrap();
+            assert_eq!(json["type"], "base64");
+            assert_eq!(json["media_type"], "image/png");
+            assert!(!json["data"].as_str().unwrap().is_empty());
+        } else {
+            panic!("expected Image block");
+        }
+    }
+
+    #[test]
+    fn convert_attachments_empty() {
+        let blocks = convert_attachments_to_images(&[]);
+        assert!(blocks.is_empty());
+    }
 }

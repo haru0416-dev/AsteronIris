@@ -76,6 +76,7 @@ async fn run_gateway_tool_loop(
             state.provider.as_ref(),
             full_prompt,
             user_message,
+            &[],
             model,
             temperature,
             &ctx,

@@ -299,6 +299,7 @@ pub(super) async fn execute_main_session_turn_with_accounting(
             params.answer_provider,
             params.system_prompt,
             &enriched,
+            &[],
             params.model_name,
             clamped_temperature,
             &ctx,

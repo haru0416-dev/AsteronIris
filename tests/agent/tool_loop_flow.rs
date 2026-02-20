@@ -163,7 +163,7 @@ async fn tool_loop_single_call() {
     ]);
 
     let result = ToolLoop::new(registry, 8)
-        .run(&provider, "system", "read it", "test-model", 0.0, &ctx)
+        .run(&provider, "system", "read it", &[], "test-model", 0.0, &ctx)
         .await
         .expect("tool loop should run");
 
@@ -196,7 +196,15 @@ async fn tool_loop_chain() {
     ]);
 
     let result = ToolLoop::new(registry, 8)
-        .run(&provider, "system", "chain tools", "test-model", 0.0, &ctx)
+        .run(
+            &provider,
+            "system",
+            "chain tools",
+            &[],
+            "test-model",
+            0.0,
+            &ctx,
+        )
         .await
         .expect("tool loop should run");
 
@@ -221,7 +229,15 @@ async fn tool_loop_max_iterations() {
     ]);
 
     let result = ToolLoop::new(registry, 2)
-        .run(&provider, "system", "keep calling", "test-model", 0.0, &ctx)
+        .run(
+            &provider,
+            "system",
+            "keep calling",
+            &[],
+            "test-model",
+            0.0,
+            &ctx,
+        )
         .await
         .expect("tool loop should run");
 
@@ -246,7 +262,15 @@ async fn tool_loop_hard_cap() {
     let provider = MockProvider::new(responses);
 
     let result = ToolLoop::new(registry, 100)
-        .run(&provider, "system", "hard cap", "test-model", 0.0, &ctx)
+        .run(
+            &provider,
+            "system",
+            "hard cap",
+            &[],
+            "test-model",
+            0.0,
+            &ctx,
+        )
         .await
         .expect("tool loop should run");
 
@@ -266,7 +290,7 @@ async fn tool_loop_error_recovery() {
     ]);
 
     let result = ToolLoop::new(registry, 8)
-        .run(&provider, "system", "recover", "test-model", 0.0, &ctx)
+        .run(&provider, "system", "recover", &[], "test-model", 0.0, &ctx)
         .await
         .expect("tool loop should run");
 
@@ -297,7 +321,15 @@ async fn tool_loop_no_tools() {
     let provider = MockProvider::new(vec![end_turn_text("plain")]);
 
     let result = ToolLoop::new(Arc::new(ToolRegistry::new(default_middleware_chain())), 8)
-        .run(&provider, "system", "just text", "test-model", 0.0, &ctx)
+        .run(
+            &provider,
+            "system",
+            "just text",
+            &[],
+            "test-model",
+            0.0,
+            &ctx,
+        )
         .await
         .expect("tool loop should run");
 

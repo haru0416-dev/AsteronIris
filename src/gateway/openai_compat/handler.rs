@@ -50,6 +50,7 @@ pub async fn handle_chat_completions(
             state.provider.as_ref(),
             system_prompt.as_deref().unwrap_or_default(),
             &user_message,
+            &[],
             &model,
             temperature,
             &ctx,

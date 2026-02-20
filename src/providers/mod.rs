@@ -10,6 +10,7 @@ pub mod openrouter;
 pub mod reliable;
 pub mod response;
 pub mod scrub;
+pub mod streaming;
 pub mod traits;
 
 #[allow(unused_imports)]
@@ -18,9 +19,15 @@ pub use factory::{
     create_resilient_provider_with_oauth_recovery, create_resilient_provider_with_resolver,
 };
 #[allow(unused_imports)]
-pub use response::{ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason};
+pub use response::{
+    ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
+};
 #[allow(unused_imports)]
 pub use scrub::{api_error, sanitize_api_error, scrub_secret_patterns};
+#[allow(unused_imports)]
+pub use streaming::{
+    ProviderChatRequest, ProviderStream, StreamCollector, StreamEvent, StreamingSecretScrubber,
+};
 pub use traits::Provider;
 
 #[cfg(test)]

@@ -1,6 +1,8 @@
 use crate::providers::{
-    ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason,
-    scrub_secret_patterns, traits::Provider,
+    ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
+    scrub_secret_patterns,
+    streaming::{ProviderChatRequest, ProviderStream},
+    traits::Provider,
 };
 use crate::tools::traits::ToolSpec;
 use async_trait::async_trait;
@@ -24,6 +26,8 @@ struct ChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicToolDef>>,
     temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +60,16 @@ enum InputContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
     },
+    Image {
+        source: AnthropicImageSource,
+    },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicImageSource {
+    Base64 { media_type: String, data: String },
+    Url { url: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +106,72 @@ enum ResponseContentBlock {
     },
     #[serde(other)]
     Unsupported,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamMessageStart {
+    message: StreamMessageInfo,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamMessageInfo {
+    model: Option<String>,
+    usage: Option<Usage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamContentBlockStart {
+    index: u32,
+    content_block: StreamContentBlockType,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum StreamContentBlockType {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamContentBlockDelta {
+    index: u32,
+    delta: StreamDelta,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum StreamDelta {
+    TextDelta {
+        text: String,
+    },
+    InputJsonDelta {
+        partial_json: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamMessageDelta {
+    delta: StreamMessageDeltaBody,
+    usage: Option<StreamDeltaUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamMessageDeltaBody {
+    stop_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamDeltaUsage {
+    output_tokens: u64,
 }
 
 impl AnthropicProvider {
@@ -145,6 +225,7 @@ impl AnthropicProvider {
             }],
             tools: None,
             temperature,
+            stream: None,
         }
     }
 
@@ -182,6 +263,18 @@ impl AnthropicProvider {
                     content: scrub_secret_patterns(content).into_owned(),
                     is_error: if *is_error { Some(true) } else { None },
                 },
+                ContentBlock::Image { source } => {
+                    let anthropic_source = match source {
+                        ImageSource::Base64 { media_type, data } => AnthropicImageSource::Base64 {
+                            media_type: media_type.clone(),
+                            data: data.clone(),
+                        },
+                        ImageSource::Url { url } => AnthropicImageSource::Url { url: url.clone() },
+                    };
+                    InputContentBlock::Image {
+                        source: anthropic_source,
+                    }
+                }
             })
             .collect();
 
@@ -222,7 +315,9 @@ impl AnthropicProvider {
             .iter()
             .filter_map(|block| match block {
                 ContentBlock::Text { text } => Some(text.as_str()),
-                ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => None,
+                ContentBlock::ToolUse { .. }
+                | ContentBlock::ToolResult { .. }
+                | ContentBlock::Image { .. } => None,
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -268,6 +363,196 @@ impl AnthropicProvider {
         }
 
         response.json().await.map_err(anyhow::Error::msg)
+    }
+
+    async fn call_api_streaming(&self, request: &ChatRequest) -> anyhow::Result<reqwest::Response> {
+        let (auth_name, auth_value) = self.cached_auth.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Anthropic credentials not set. Set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN (setup-token)."
+            )
+        })?;
+
+        let response = self
+            .client
+            .post(&self.cached_messages_url)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .header(*auth_name, auth_value)
+            .json(request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(super::api_error("Anthropic", response).await);
+        }
+
+        Ok(response)
+    }
+
+    fn parse_sse_events(chunk: &str) -> Vec<(&str, &str)> {
+        let mut events = Vec::new();
+        let mut current_event = None;
+
+        for line in chunk.lines() {
+            if let Some(event_type) = line.strip_prefix("event: ") {
+                current_event = Some(event_type.trim());
+            } else if let Some(data) = line.strip_prefix("data: ")
+                && let Some(event_type) = current_event.take()
+            {
+                events.push((event_type, data.trim()));
+            }
+        }
+
+        events
+    }
+
+    fn stream_events_from_sse(
+        event_type: &str,
+        data: &str,
+        input_tokens: &mut Option<u64>,
+        output_tokens: &mut Option<u64>,
+    ) -> Vec<crate::providers::streaming::StreamEvent> {
+        use crate::providers::streaming::StreamEvent;
+
+        let mut events = Vec::new();
+        match event_type {
+            "message_start" => {
+                if let Ok(msg) = serde_json::from_str::<StreamMessageStart>(data) {
+                    if let Some(usage) = msg.message.usage {
+                        *input_tokens = Some(usage.input_tokens);
+                    }
+                    events.push(StreamEvent::ResponseStart {
+                        model: msg.message.model,
+                    });
+                }
+            }
+            "content_block_start" => {
+                if let Ok(block) = serde_json::from_str::<StreamContentBlockStart>(data) {
+                    match block.content_block {
+                        StreamContentBlockType::ToolUse { id, name } => {
+                            events.push(StreamEvent::ToolCallDelta {
+                                index: block.index,
+                                id: Some(id),
+                                name: Some(name),
+                                input_json_delta: String::new(),
+                            });
+                        }
+                        StreamContentBlockType::Text { text } => {
+                            if !text.is_empty() {
+                                events.push(StreamEvent::TextDelta { text });
+                            }
+                        }
+                        StreamContentBlockType::Unknown => {}
+                    }
+                }
+            }
+            "content_block_delta" => {
+                if let Ok(delta) = serde_json::from_str::<StreamContentBlockDelta>(data) {
+                    match delta.delta {
+                        StreamDelta::TextDelta { text } => {
+                            events.push(StreamEvent::TextDelta { text });
+                        }
+                        StreamDelta::InputJsonDelta { partial_json } => {
+                            events.push(StreamEvent::ToolCallDelta {
+                                index: delta.index,
+                                id: None,
+                                name: None,
+                                input_json_delta: partial_json,
+                            });
+                        }
+                        StreamDelta::Unknown => {}
+                    }
+                }
+            }
+            "message_delta" => {
+                if let Ok(msg_delta) = serde_json::from_str::<StreamMessageDelta>(data) {
+                    if let Some(usage) = msg_delta.usage {
+                        *output_tokens = Some(usage.output_tokens);
+                    }
+                    let stop = Self::map_stop_reason(msg_delta.delta.stop_reason.as_deref());
+                    events.push(StreamEvent::Done {
+                        stop_reason: stop,
+                        input_tokens: *input_tokens,
+                        output_tokens: *output_tokens,
+                    });
+                }
+            }
+            _ => {}
+        }
+        events
+    }
+
+    async fn chat_with_tools_stream_impl(
+        &self,
+        req: ProviderChatRequest,
+    ) -> anyhow::Result<ProviderStream> {
+        use futures_util::StreamExt;
+
+        let anthropic_messages: Vec<Message> = req
+            .messages
+            .iter()
+            .map(Self::provider_message_to_message)
+            .collect();
+        let anthropic_tools = if req.tools.is_empty() {
+            None
+        } else {
+            Some(
+                req.tools
+                    .iter()
+                    .map(|tool| AnthropicToolDef {
+                        name: tool.name.clone(),
+                        description: scrub_secret_patterns(&tool.description).into_owned(),
+                        input_schema: tool.parameters.clone(),
+                    })
+                    .collect(),
+            )
+        };
+
+        let request = ChatRequest {
+            model: req.model,
+            max_tokens: 4096,
+            system: req
+                .system_prompt
+                .map(|system| scrub_secret_patterns(&system).into_owned()),
+            messages: anthropic_messages,
+            tools: anthropic_tools,
+            temperature: req.temperature,
+            stream: Some(true),
+        };
+
+        let response = self.call_api_streaming(&request).await?;
+        let mut byte_stream = response.bytes_stream();
+
+        let stream = async_stream::try_stream! {
+            let mut buffer = String::new();
+            let mut input_tokens: Option<u64> = None;
+            let mut output_tokens: Option<u64> = None;
+
+            while let Some(chunk_result) = byte_stream.next().await {
+                let chunk = chunk_result?;
+                let text = String::from_utf8_lossy(&chunk);
+                buffer.push_str(&text);
+
+                while let Some(boundary) = buffer.find("\n\n") {
+                    let remaining = buffer.split_off(boundary + 2);
+                    let event_block = std::mem::take(&mut buffer);
+                    buffer = remaining;
+
+                    for (event_type, data) in Self::parse_sse_events(&event_block) {
+                        for event in Self::stream_events_from_sse(
+                            event_type,
+                            data,
+                            &mut input_tokens,
+                            &mut output_tokens,
+                        ) {
+                            yield event;
+                        }
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
     }
 }
 
@@ -342,6 +627,7 @@ impl Provider for AnthropicProvider {
             messages: anthropic_messages,
             tools: anthropic_tools,
             temperature,
+            stream: None,
         };
         let chat_response = self.call_api_with_request(&request).await?;
 
@@ -365,6 +651,21 @@ impl Provider for AnthropicProvider {
 
     fn supports_tool_calling(&self) -> bool {
         true
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn supports_vision(&self) -> bool {
+        true
+    }
+
+    async fn chat_with_tools_stream(
+        &self,
+        req: ProviderChatRequest,
+    ) -> anyhow::Result<ProviderStream> {
+        self.chat_with_tools_stream_impl(req).await
     }
 }
 
@@ -484,6 +785,7 @@ mod tests {
             }],
             tools: None,
             temperature: 0.7,
+            stream: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(
@@ -507,6 +809,7 @@ mod tests {
             }],
             tools: None,
             temperature: 0.7,
+            stream: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"system\":\"You are AsteronIris\""));
@@ -534,6 +837,7 @@ mod tests {
                 }),
             }]),
             temperature: 0.7,
+            stream: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -641,9 +945,77 @@ mod tests {
     }
 
     #[test]
+    fn provider_message_to_message_maps_image_block() {
+        let msg = ProviderMessage {
+            role: MessageRole::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "Describe this".to_string(),
+                },
+                ContentBlock::Image {
+                    source: ImageSource::base64("image/png", "iVBOR"),
+                },
+            ],
+        };
+        let mapped = AnthropicProvider::provider_message_to_message(&msg);
+        assert_eq!(mapped.role, "user");
+
+        let json = serde_json::to_value(&mapped.content).unwrap();
+        let blocks = json.as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+    }
+
+    #[test]
     fn supports_tool_calling_returns_true() {
         let provider = AnthropicProvider::new(Some("sk-ant-test123"));
         assert!(provider.supports_tool_calling());
+    }
+
+    #[test]
+    fn supports_streaming_returns_true() {
+        let provider = AnthropicProvider::new(Some("sk-ant-test123"));
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn supports_vision_returns_true() {
+        let provider = AnthropicProvider::new(Some("test-key"));
+        assert!(provider.supports_vision());
+    }
+
+    #[test]
+    fn parse_sse_events_basic() {
+        let chunk = "event: message_start\ndata: {\"message\":{}}\n\n";
+        let events = AnthropicProvider::parse_sse_events(chunk);
+        assert_eq!(events, vec![("message_start", "{\"message\":{}}")]);
+    }
+
+    #[test]
+    fn parse_sse_events_multiple() {
+        let chunk = concat!(
+            "event: message_start\n",
+            "data: {\"message\":{}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"delta\":{}}\n\n"
+        );
+        let events = AnthropicProvider::parse_sse_events(chunk);
+        assert_eq!(
+            events,
+            vec![
+                ("message_start", "{\"message\":{}}"),
+                ("content_block_delta", "{\"delta\":{}}")
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_sse_events_empty() {
+        let events = AnthropicProvider::parse_sse_events("");
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -656,6 +1028,7 @@ mod tests {
                 messages: vec![],
                 tools: None,
                 temperature: temp,
+                stream: None,
             };
             let json = serde_json::to_string(&req).unwrap();
             assert!(json.contains(&format!("{temp}")));

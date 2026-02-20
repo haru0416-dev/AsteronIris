@@ -1,12 +1,9 @@
 use super::response::{ContentBlock, ProviderMessage, ProviderResponse};
+use crate::providers::streaming::{ProviderChatRequest, ProviderStream, resp_to_events};
 use crate::tools::traits::ToolSpec;
 use async_trait::async_trait;
+use futures_util::stream;
 
-/// Concatenate `ProviderMessages` into a single text string for providers
-/// that don't support structured messages.
-///
-/// Extracts text from `ContentBlock::Text` variants only, skipping `ToolUse` and `ToolResult` blocks.
-/// Messages are prefixed with role labels ("User:", "Assistant:", "System:") and joined with newlines.
 pub fn messages_to_text(messages: &[ProviderMessage]) -> String {
     messages
         .iter()
@@ -22,7 +19,9 @@ pub fn messages_to_text(messages: &[ProviderMessage]) -> String {
                 .iter()
                 .filter_map(|block| match block {
                     ContentBlock::Text { text } => Some(text.clone()),
-                    ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => None,
+                    ContentBlock::ToolUse { .. }
+                    | ContentBlock::ToolResult { .. }
+                    | ContentBlock::Image { .. } => None,
                 })
                 .collect();
 
@@ -88,6 +87,33 @@ pub trait Provider: Send + Sync {
     /// Whether this provider supports native structured tool calling.
     fn supports_tool_calling(&self) -> bool {
         false
+    }
+
+    /// Whether this provider supports streaming responses.
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
+    fn supports_vision(&self) -> bool {
+        false
+    }
+
+    /// Chat with tools and return a stream of events.
+    /// Default: converts response to events and returns as a stream.
+    async fn chat_with_tools_stream(
+        &self,
+        req: ProviderChatRequest,
+    ) -> anyhow::Result<ProviderStream> {
+        let resp = self
+            .chat_with_tools(
+                req.system_prompt.as_deref(),
+                &req.messages,
+                &req.tools,
+                &req.model,
+                req.temperature,
+            )
+            .await?;
+        Ok(Box::pin(stream::iter(resp_to_events(resp))))
     }
 }
 
@@ -202,6 +228,24 @@ mod tests {
         let result = messages_to_text(&messages);
 
         assert_eq!(result, "User: Part 1 Part 2");
+    }
+
+    #[test]
+    fn messages_to_text_skips_image_blocks() {
+        let messages = vec![ProviderMessage {
+            role: MessageRole::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "Describe this".to_string(),
+                },
+                ContentBlock::Image {
+                    source: crate::providers::response::ImageSource::base64("image/png", "data"),
+                },
+            ],
+        }];
+
+        let result = messages_to_text(&messages);
+        assert_eq!(result, "User: Describe this");
     }
 
     #[test]

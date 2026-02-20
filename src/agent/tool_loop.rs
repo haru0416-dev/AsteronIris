@@ -1,10 +1,12 @@
 use crate::providers::response::{
     ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason,
 };
+use crate::providers::streaming::{ProviderChatRequest, StreamCollector};
 use crate::providers::traits::Provider;
 use crate::tools::middleware::ExecutionContext;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::traits::{ToolResult, ToolSpec};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -58,18 +60,32 @@ impl ToolLoop {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
         provider: &dyn Provider,
         system_prompt: &str,
         user_message: &str,
+        image_content: &[ContentBlock],
         model: &str,
         temperature: f64,
         ctx: &ExecutionContext,
     ) -> anyhow::Result<ToolLoopResult> {
         let tool_specs: Vec<ToolSpec> = self.registry.specs_for_context(ctx);
         let prompt = augment_prompt_with_trust_boundary(system_prompt, !tool_specs.is_empty());
-        let mut messages = vec![ProviderMessage::user(user_message)];
+        let initial_message = if image_content.is_empty() {
+            ProviderMessage::user(user_message)
+        } else {
+            let mut content = vec![ContentBlock::Text {
+                text: user_message.to_string(),
+            }];
+            content.extend(image_content.iter().cloned());
+            ProviderMessage {
+                role: MessageRole::User,
+                content,
+            }
+        };
+        let mut messages = vec![initial_message];
         let mut tool_calls = Vec::new();
         let mut iterations = 0_u32;
         let mut token_sum = 0_u64;
@@ -163,9 +179,26 @@ impl ToolLoop {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<ProviderResponse> {
-        provider
-            .chat_with_tools(system_prompt, messages, tool_specs, model, temperature)
-            .await
+        if provider.supports_streaming() {
+            let req = ProviderChatRequest {
+                system_prompt: system_prompt.map(String::from),
+                messages: messages.to_vec(),
+                tools: tool_specs.to_vec(),
+                model: model.to_string(),
+                temperature,
+            };
+            let mut stream = provider.chat_with_tools_stream(req).await?;
+            let mut collector = StreamCollector::new();
+            while let Some(event_result) = stream.next().await {
+                let event = event_result?;
+                collector.feed(&event);
+            }
+            Ok(collector.finish())
+        } else {
+            provider
+                .chat_with_tools(system_prompt, messages, tool_specs, model, temperature)
+                .await
+        }
     }
 
     async fn execute_tool_uses(
@@ -306,7 +339,9 @@ fn extract_last_text(messages: &[ProviderMessage]) -> String {
                 .iter()
                 .filter_map(|block| match block {
                     ContentBlock::Text { text } => Some(text.as_str()),
-                    ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => None,
+                    ContentBlock::ToolUse { .. }
+                    | ContentBlock::ToolResult { .. }
+                    | ContentBlock::Image { .. } => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -483,7 +518,15 @@ mod tests {
         };
 
         let result = loop_
-            .run(&provider, "system", "hello", "test-model", 0.2, &test_ctx())
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+            )
             .await
             .unwrap();
 
@@ -541,7 +584,15 @@ mod tests {
         };
 
         let result = loop_
-            .run(&provider, "system", "hello", "test-model", 0.2, &test_ctx())
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+            )
             .await
             .unwrap();
 
@@ -592,7 +643,15 @@ mod tests {
         };
 
         let _ = loop_
-            .run(&provider, "system", "hello", "test-model", 0.2, &test_ctx())
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+            )
             .await
             .unwrap();
 
@@ -620,7 +679,15 @@ mod tests {
         };
 
         let result = loop_
-            .run(&provider, "system", "hello", "test-model", 0.2, &test_ctx())
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+            )
             .await
             .unwrap();
 
@@ -643,7 +710,15 @@ mod tests {
         };
 
         let result = loop_
-            .run(&provider, "system", "hello", "test-model", 0.2, &test_ctx())
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+            )
             .await
             .unwrap();
 

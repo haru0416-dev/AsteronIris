@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+pub enum ImageSource {
+    Base64 { media_type: String, data: String },
+    Url { url: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text {
         text: String,
@@ -15,6 +22,9 @@ pub enum ContentBlock {
         tool_use_id: String,
         content: String,
         is_error: bool,
+    },
+    Image {
+        source: ImageSource,
     },
 }
 
@@ -138,11 +148,43 @@ impl ProviderMessage {
             }],
         }
     }
+
+    pub fn user_with_image(text: impl Into<String>, source: ImageSource) -> Self {
+        Self {
+            role: MessageRole::User,
+            content: vec![
+                ContentBlock::Text { text: text.into() },
+                ContentBlock::Image { source },
+            ],
+        }
+    }
+
+    pub fn user_image(source: ImageSource) -> Self {
+        Self {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Image { source }],
+        }
+    }
+}
+
+impl ImageSource {
+    pub fn base64(media_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self::Base64 {
+            media_type: media_type.into(),
+            data: data.into(),
+        }
+    }
+
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::Url { url: url.into() }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason};
+    use super::{
+        ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
+    };
 
     #[test]
     fn content_block_serde_round_trip() {
@@ -189,6 +231,90 @@ mod tests {
             }
             _ => panic!("expected tool_result content block"),
         }
+    }
+
+    #[test]
+    fn image_source_base64_constructor() {
+        let source = ImageSource::base64("image/png", "iVBOR...");
+        match &source {
+            ImageSource::Base64 { media_type, data } => {
+                assert_eq!(media_type, "image/png");
+                assert_eq!(data, "iVBOR...");
+            }
+            _ => panic!("expected Base64 variant"),
+        }
+    }
+
+    #[test]
+    fn image_source_url_constructor() {
+        let source = ImageSource::url("https://example.com/img.png");
+        match &source {
+            ImageSource::Url { url } => assert_eq!(url, "https://example.com/img.png"),
+            _ => panic!("expected Url variant"),
+        }
+    }
+
+    #[test]
+    fn image_source_serde_roundtrip_base64() {
+        let source = ImageSource::base64("image/jpeg", "abc123");
+        let json = serde_json::to_value(&source).unwrap();
+        assert_eq!(json["type"], "base64");
+        assert_eq!(json["media_type"], "image/jpeg");
+        assert_eq!(json["data"], "abc123");
+        let decoded: ImageSource = serde_json::from_value(json).unwrap();
+        match decoded {
+            ImageSource::Base64 { media_type, data } => {
+                assert_eq!(media_type, "image/jpeg");
+                assert_eq!(data, "abc123");
+            }
+            _ => panic!("expected Base64"),
+        }
+    }
+
+    #[test]
+    fn image_source_serde_roundtrip_url() {
+        let source = ImageSource::url("https://example.com/img.png");
+        let json = serde_json::to_value(&source).unwrap();
+        assert_eq!(json["type"], "url");
+        assert_eq!(json["url"], "https://example.com/img.png");
+        let decoded: ImageSource = serde_json::from_value(json).unwrap();
+        match decoded {
+            ImageSource::Url { url } => assert_eq!(url, "https://example.com/img.png"),
+            _ => panic!("expected Url"),
+        }
+    }
+
+    #[test]
+    fn content_block_image_serde_roundtrip() {
+        let block = ContentBlock::Image {
+            source: ImageSource::base64("image/png", "data123"),
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "image");
+        let decoded: ContentBlock = serde_json::from_value(json).unwrap();
+        assert!(matches!(decoded, ContentBlock::Image { .. }));
+    }
+
+    #[test]
+    fn provider_message_user_with_image_constructor() {
+        let msg = ProviderMessage::user_with_image(
+            "What's in this image?",
+            ImageSource::base64("image/png", "data"),
+        );
+        assert_eq!(msg.role, MessageRole::User);
+        assert_eq!(msg.content.len(), 2);
+        assert!(
+            matches!(&msg.content[0], ContentBlock::Text { text } if text == "What's in this image?")
+        );
+        assert!(matches!(&msg.content[1], ContentBlock::Image { .. }));
+    }
+
+    #[test]
+    fn provider_message_user_image_constructor() {
+        let msg = ProviderMessage::user_image(ImageSource::url("https://example.com/img.png"));
+        assert_eq!(msg.role, MessageRole::User);
+        assert_eq!(msg.content.len(), 1);
+        assert!(matches!(&msg.content[0], ContentBlock::Image { .. }));
     }
 
     #[test]

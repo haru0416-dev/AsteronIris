@@ -88,6 +88,7 @@ async fn handle_client_message(
                     state.provider.as_ref(),
                     "",
                     &message,
+                    &[],
                     &state.model,
                     state.temperature,
                     &ctx,
