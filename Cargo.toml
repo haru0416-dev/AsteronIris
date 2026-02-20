@@ -45,7 +45,7 @@ thiserror = "2"
 
 # URL / HTML parsing (link understanding)
 url     = "2"
-scraper = "0.22"
+scraper = "0.25"
 
 # MIME detection (media pipeline)
 infer = { version = "0.16", optional = true }
