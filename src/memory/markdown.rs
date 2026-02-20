@@ -23,7 +23,11 @@ pub struct MarkdownMemory {
 struct ParsedMarkdownLine {
     key: String,
     content: String,
+    // Populated during [md:...] tag parsing — retained for future layer-aware recall
+    #[allow(dead_code)]
     layer: Option<MemoryLayer>,
+    // Populated during [md:...] tag parsing — retained for future layer-aware recall
+    #[allow(dead_code)]
     provenance: Option<MemoryProvenance>,
 }
 
@@ -288,7 +292,6 @@ impl MarkdownMemory {
 
         None
     }
-
 
     async fn read_all_entries(&self) -> anyhow::Result<Vec<MemoryEntry>> {
         let mut entries = Vec::new();

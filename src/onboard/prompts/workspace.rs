@@ -48,7 +48,6 @@ pub fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
     Ok((workspace_dir, config_path))
 }
 
-#[allow(clippy::too_many_lines)]
 fn input_workspace_path() -> Result<String> {
     let custom: String = Input::new()
         .with_prompt(format!("  {}", t!("onboard.workspace.enter_path")))

@@ -204,7 +204,6 @@ fn keybinding_text(state: &WizardState) -> String {
     keys.join("  ")
 }
 
-#[allow(clippy::too_many_lines)]
 fn handle_key(state: &mut WizardState, key: KeyCode) {
     match state.current_step {
         WizardStep::Workspace => handle_workspace_key(state, key),
