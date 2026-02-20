@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Guidance for AI coding agents operating in the AsteronIris repository.
-Rust 2024 edition, stable toolchain, clippy pedantic, anyhow errors.
+Rust 2024 edition, stable toolchain, clippy pedantic, anyhow/thiserror errors.
 
 ## Commands
 
@@ -27,6 +27,7 @@ cargo audit
 cargo deny check advisories licenses sources
 ```
 
+Aliases (`test-dev`, etc.) are defined in `.cargo/config.toml`.
 Pre-push hook (`.githooks/pre-push`) enforces fmt + clippy + test.
 Install: `git config core.hooksPath .githooks`
 
@@ -60,17 +61,17 @@ Extract logic into focused sub-modules: `handlers.rs`, `autosave.rs`, `defense.r
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(
     clippy::missing_errors_doc, clippy::missing_panics_doc,
+    clippy::unnecessary_literal_bound,
     clippy::module_name_repetitions, clippy::struct_field_names,
     clippy::must_use_candidate, clippy::new_without_default,
-    clippy::return_self_not_must_use, dead_code,
-    clippy::unnecessary_literal_bound,
+    clippy::return_self_not_must_use,
 )]
 ```
 
 ### Formatting
 
 No `rustfmt.toml` — default rustfmt settings apply. Run `cargo fmt` before committing.
-Indentation: 4 spaces for `.rs`, 2 spaces for `.toml`/`.yml`/`.yaml`/`.json`.
+Indentation: 4 spaces for `.rs`/`.sh`/`Dockerfile`, 2 spaces for `.toml`/`.yml`/`.yaml`/`.json`.
 LF line endings, UTF-8, trailing newline required (see `.editorconfig`).
 
 ### Imports
@@ -95,18 +96,18 @@ Use braced imports to merge from the same crate: `use serde::{Deserialize, Seria
 
 ### Error Handling
 
-- `anyhow::Result<T>` for all fallible functions.
+- `anyhow::Result<T>` for all fallible public functions.
 - `anyhow::bail!("message")` for early-exit errors.
-- `anyhow::Error::msg(e)` to convert non-anyhow errors.
+- `thiserror::Error` for structured error enums at library boundaries.
 - **No** `unwrap()` or `expect()` in production code. Tests and setup are OK.
-- **No** `as any`, `@ts-ignore` equivalents — no suppressing type errors.
-- Empty `catch` blocks are forbidden.
+- Empty catch blocks are forbidden.
 
 ### Async Patterns
 
 - `#[async_trait]` from the `async_trait` crate for async trait methods.
 - `Arc<dyn Trait>` for shared trait objects across async boundaries.
 - Tokio runtime with `rt-multi-thread`.
+- Rust 2024 edition: `if let` chains are used (e.g. `if let Some(x) = opt && cond`).
 
 ### Constructor & Builder Patterns
 
@@ -117,8 +118,8 @@ Use braced imports to merge from the same crate: `use serde::{Deserialize, Seria
 ### Feature Gates
 
 - `#[cfg(feature = "...")]` for optional modules/code.
-- Default features: `email`, `vector-search`, `tui`.
-- Feature-gated modules: `lancedb` (vector-search), `ratatui`/`crossterm` (tui), `lettre` (email).
+- Default features: `email`, `vector-search`, `tui`, `bundled-sqlite`.
+- Feature-gated modules: `lancedb` (vector-search), `ratatui`/`crossterm` (tui), `lettre`/`mail-parser` (email), `infer`/`mime` (media).
 
 ## Test Structure
 
@@ -168,7 +169,7 @@ These layers must never be bypassed or weakened:
 
 Release profile: `opt-level = "z"`, LTO, `codegen-units = 1`, `panic = "abort"`, strip symbols.
 Before adding a dependency: justify it, minimise features, disable default features.
-Allowed licenses: MIT, Apache-2.0, BSD-2/3-Clause, ISC, MPL-2.0 (see `deny.toml`).
+Allowed licenses: MIT, Apache-2.0, BSD-2/3-Clause, ISC, MPL-2.0, Zlib, BSL-1.0, 0BSD, CC0-1.0 (see `deny.toml`).
 
 ## Commits
 

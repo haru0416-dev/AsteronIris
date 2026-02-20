@@ -1,5 +1,5 @@
 use crate::config::MemoryConfig;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{Duration, Local};
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -14,22 +14,27 @@ pub(super) fn prune_conversation_rows(workspace_dir: &Path, retention_days: u32)
         return Ok(0);
     }
 
-    let conn = Connection::open(db_path)?;
+    let conn = Connection::open(db_path).context("open memory database for pruning")?;
     let cutoff = (Local::now() - Duration::days(i64::from(retention_days))).to_rfc3339();
 
     let mut stale_keys = Vec::new();
     let mut key_stmt = conn
-        .prepare("SELECT key FROM memories WHERE category = 'conversation' AND updated_at < ?1")?;
-    let key_rows = key_stmt.query_map(params![cutoff], |row| row.get::<_, String>(0))?;
+        .prepare("SELECT key FROM memories WHERE category = 'conversation' AND updated_at < ?1")
+        .context("prepare conversation pruning query")?;
+    let key_rows = key_stmt
+        .query_map(params![cutoff], |row| row.get::<_, String>(0))
+        .context("query stale conversation keys")?;
     for key_row in key_rows {
-        stale_keys.push(key_row?);
+        stale_keys.push(key_row.context("read stale conversation key row")?);
     }
     drop(key_stmt);
 
-    let affected = conn.execute(
-        "DELETE FROM memories WHERE category = 'conversation' AND updated_at < ?1",
-        params![cutoff],
-    )?;
+    let affected = conn
+        .execute(
+            "DELETE FROM memories WHERE category = 'conversation' AND updated_at < ?1",
+            params![cutoff],
+        )
+        .context("delete stale conversation rows")?;
 
     for key in &stale_keys {
         if let Some((entity_id, slot_key)) = key.split_once(':') {
@@ -80,7 +85,7 @@ pub(super) fn prune_v2_lifecycle_rows(workspace_dir: &Path, config: &MemoryConfi
         return Ok(0);
     }
 
-    let conn = Connection::open(db_path)?;
+    let conn = Connection::open(db_path).context("open memory database for lifecycle pruning")?;
     let mut affected_total = 0_u64;
 
     let layer_purge_ops = [

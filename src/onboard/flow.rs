@@ -17,7 +17,7 @@ use super::scaffold::scaffold_workspace;
 use super::view::{print_step, print_summary, print_welcome_banner};
 
 /// Run the interactive wizard. Uses TUI if stdout is a terminal, falls back to dialoguer CLI.
-pub fn run_wizard(install_daemon_flag: bool) -> Result<Config> {
+pub fn run_wizard(install_daemon_flag: bool) -> Result<(Config, bool)> {
     // Detect locale before anything else
     if let Ok(lang) = std::env::var("ASTERONIRIS_LANG")
         && !lang.is_empty()
@@ -32,8 +32,8 @@ pub fn run_wizard(install_daemon_flag: bool) -> Result<Config> {
             Ok(config) => {
                 print_summary(&config);
                 offer_install_daemon(install_daemon_flag, &config)?;
-                offer_launch_channels(&config)?;
-                return Ok(config);
+                let autostart = offer_launch_channels(&config)?;
+                return Ok((config, autostart));
             }
             Err(e) => {
                 tracing::warn!("TUI wizard failed, falling back to CLI: {e}");
@@ -45,7 +45,7 @@ pub fn run_wizard(install_daemon_flag: bool) -> Result<Config> {
 }
 
 /// CLI-based wizard using dialoguer (fallback for non-TTY or TUI failure).
-fn run_wizard_cli(install_daemon_flag: bool) -> Result<Config> {
+fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
     print_welcome_banner();
 
     print_step(1, 8, &t!("onboard.step.workspace"));
@@ -121,9 +121,9 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<Config> {
 
     print_summary(&config);
     offer_install_daemon(install_daemon_flag, &config)?;
-    offer_launch_channels(&config)?;
+    let autostart = offer_launch_channels(&config)?;
 
-    Ok(config)
+    Ok((config, autostart))
 }
 
 fn offer_install_daemon(install_daemon_flag: bool, config: &Config) -> Result<()> {
@@ -150,7 +150,7 @@ fn offer_install_daemon(install_daemon_flag: bool, config: &Config) -> Result<()
     Ok(())
 }
 
-fn offer_launch_channels(config: &Config) -> Result<()> {
+fn offer_launch_channels(config: &Config) -> Result<bool> {
     let has_channels = config.channels_config.telegram.is_some()
         || config.channels_config.discord.is_some()
         || config.channels_config.slack.is_some()
@@ -168,17 +168,15 @@ fn offer_launch_channels(config: &Config) -> Result<()> {
             println!();
             println!("  › {}", ui::header(t!("onboard.launching")));
             println!();
-            unsafe {
-                std::env::set_var("ASTERONIRIS_AUTOSTART_CHANNELS", "1");
-            }
+            return Ok(true);
         }
     }
 
-    Ok(())
+    Ok(false)
 }
 
 /// Interactive repair flow: rerun channel setup only without redoing full onboarding.
-pub fn run_channels_repair_wizard() -> Result<Config> {
+pub fn run_channels_repair_wizard() -> Result<(Config, bool)> {
     print_welcome_banner();
     println!("  {}", ui::header(t!("onboard.repair.title")));
     println!();
@@ -196,9 +194,9 @@ pub fn run_channels_repair_wizard() -> Result<Config> {
         t!("onboard.repair.saved", path = config.config_path.display())
     );
 
-    offer_launch_channels(&config)?;
+    let autostart = offer_launch_channels(&config)?;
 
-    Ok(config)
+    Ok((config, autostart))
 }
 
 // ── Quick setup (zero prompts) ───────────────────────────────────
@@ -210,7 +208,7 @@ pub fn run_quick_setup(
     provider: Option<&str>,
     memory_backend: Option<&str>,
     install_daemon_flag: bool,
-) -> Result<Config> {
+) -> Result<(Config, bool)> {
     print_welcome_banner();
     println!("  {}", ui::header(t!("onboard.quick.title")));
     println!();
@@ -391,5 +389,5 @@ pub fn run_quick_setup(
 
     offer_install_daemon(install_daemon_flag, &config)?;
 
-    Ok(config)
+    Ok((config, false))
 }

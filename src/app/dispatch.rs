@@ -25,7 +25,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             bail!("--channels-only does not accept --api-key, --provider, or --memory");
         }
 
-        let config = if *channels_only {
+        let (config, autostart) = if *channels_only {
             crate::onboard::run_channels_repair_wizard()?
         } else if *interactive {
             crate::onboard::run_wizard(*install_daemon)?
@@ -38,7 +38,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             )?
         };
         // Auto-start channels if user said yes during wizard
-        if std::env::var("ASTERONIRIS_AUTOSTART_CHANNELS").as_deref() == Ok("1") {
+        if autostart {
             crate::channels::start_channels(Arc::new(config)).await?;
         }
         return Ok(());
@@ -63,7 +63,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         );
         println!();
 
-        let new_config = crate::onboard::run_wizard(false)?;
+        let (new_config, _autostart) = crate::onboard::run_wizard(false)?;
         Arc::new(new_config)
     } else {
         config

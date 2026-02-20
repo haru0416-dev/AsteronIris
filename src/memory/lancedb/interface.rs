@@ -63,6 +63,31 @@ impl LanceDbMemory {
             (Uuid::new_v4().to_string(), now.clone())
         };
 
+        let embedding_status = if matches!(&category, MemoryCategory::Core) {
+            EMBEDDING_STATUS_READY
+        } else {
+            EMBEDDING_STATUS_PENDING
+        };
+
+        let row = StoredRow {
+            id,
+            key: key.to_string(),
+            content: content.to_string(),
+            category: cat,
+            source,
+            confidence,
+            importance,
+            privacy_level,
+            occurred_at: occurred_at.to_string(),
+            layer,
+            provenance_source_class,
+            provenance_reference,
+            provenance_evidence_uri,
+            created_at,
+            updated_at: now,
+            embedding_status: embedding_status.to_string(),
+        };
+
         match category {
             MemoryCategory::Core => {
                 let embedding = self
@@ -71,46 +96,9 @@ impl LanceDbMemory {
                     .embed_one(content)
                     .await
                     .context("embedding failed")?;
-
-                let row = StoredRow {
-                    id,
-                    key: key.to_string(),
-                    content: content.to_string(),
-                    category: cat.clone(),
-                    source: source.clone(),
-                    confidence,
-                    importance,
-                    privacy_level: privacy_level.clone(),
-                    occurred_at: occurred_at.to_string(),
-                    layer: layer.clone(),
-                    provenance_source_class: provenance_source_class.clone(),
-                    provenance_reference: provenance_reference.clone(),
-                    provenance_evidence_uri: provenance_evidence_uri.clone(),
-                    created_at: created_at.clone(),
-                    updated_at: now.clone(),
-                    embedding_status: EMBEDDING_STATUS_READY.to_string(),
-                };
                 self.upsert_row(&row, Some(&embedding)).await
             }
             MemoryCategory::Daily | MemoryCategory::Conversation | MemoryCategory::Custom(_) => {
-                let row = StoredRow {
-                    id,
-                    key: key.to_string(),
-                    content: content.to_string(),
-                    category: cat,
-                    source,
-                    confidence,
-                    importance,
-                    privacy_level,
-                    occurred_at: occurred_at.to_string(),
-                    layer,
-                    provenance_source_class,
-                    provenance_reference,
-                    provenance_evidence_uri,
-                    created_at,
-                    updated_at: now,
-                    embedding_status: EMBEDDING_STATUS_PENDING.to_string(),
-                };
                 self.upsert_row(&row, None).await?;
                 self.enqueue_backfill(key);
                 Ok(())

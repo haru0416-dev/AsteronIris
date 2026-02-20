@@ -1,4 +1,5 @@
 use crate::channels::traits::{Channel, ChannelMessage};
+use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -86,7 +87,9 @@ impl IrcChannel {
         &self,
     ) -> anyhow::Result<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
         let addr = format!("{}:{}", self.server, self.port);
-        let tcp = tokio::net::TcpStream::connect(&addr).await?;
+        let tcp = tokio::net::TcpStream::connect(&addr)
+            .await
+            .context("connect to IRC server")?;
 
         let tls_config = if self.verify_tls {
             let root_store: rustls::RootCertStore =
@@ -102,8 +105,12 @@ impl IrcChannel {
         };
 
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
-        let domain = rustls::pki_types::ServerName::try_from(self.server.clone())?;
-        let tls = connector.connect(domain, tcp).await?;
+        let domain = rustls::pki_types::ServerName::try_from(self.server.clone())
+            .context("parse IRC server name for TLS")?;
+        let tls = connector
+            .connect(domain, tcp)
+            .await
+            .context("establish TLS connection to IRC")?;
 
         Ok(tls)
     }
@@ -111,8 +118,11 @@ impl IrcChannel {
     /// Send a raw IRC line (appends \r\n).
     async fn send_raw(writer: &mut WriteHalf, line: &str) -> anyhow::Result<()> {
         let data = format!("{line}\r\n");
-        writer.write_all(data.as_bytes()).await?;
-        writer.flush().await?;
+        writer
+            .write_all(data.as_bytes())
+            .await
+            .context("write IRC message to stream")?;
+        writer.flush().await.context("flush IRC write stream")?;
         Ok(())
     }
 }
@@ -156,26 +166,33 @@ impl Channel for IrcChannel {
             current_nick
         );
 
-        let tls = self.connect().await?;
+        let tls = self.connect().await.context("connect to IRC server")?;
         let (reader, mut writer) = tokio::io::split(tls);
 
         // ── SASL negotiation ──
         if self.sasl_password.is_some() {
-            Self::send_raw(&mut writer, "CAP REQ :sasl").await?;
+            Self::send_raw(&mut writer, "CAP REQ :sasl")
+                .await
+                .context("send IRC SASL capability request")?;
         }
 
         // ── Server password ──
         if let Some(ref pass) = self.server_password {
-            Self::send_raw(&mut writer, &format!("PASS {pass}")).await?;
+            Self::send_raw(&mut writer, &format!("PASS {pass}"))
+                .await
+                .context("send IRC server password")?;
         }
 
         // ── Nick/User registration ──
-        Self::send_raw(&mut writer, &format!("NICK {current_nick}")).await?;
+        Self::send_raw(&mut writer, &format!("NICK {current_nick}"))
+            .await
+            .context("send IRC NICK command")?;
         Self::send_raw(
             &mut writer,
             &format!("USER {} 0 * :AsteronIris", self.username),
         )
-        .await?;
+        .await
+        .context("send IRC USER command")?;
 
         // Store writer for send()
         {
@@ -208,7 +225,9 @@ impl Channel for IrcChannel {
                     let token = msg.params.first().map_or("", String::as_str);
                     let mut guard = self.writer.lock().await;
                     if let Some(ref mut w) = *guard {
-                        Self::send_raw(w, &format!("PONG :{token}")).await?;
+                        Self::send_raw(w, &format!("PONG :{token}"))
+                            .await
+                            .context("send IRC PONG response")?;
                     }
                 }
 
@@ -219,7 +238,9 @@ impl Channel for IrcChannel {
                             // CAP * ACK :sasl — server accepted, start SASL auth
                             let mut guard = self.writer.lock().await;
                             if let Some(ref mut w) = *guard {
-                                Self::send_raw(w, "AUTHENTICATE PLAIN").await?;
+                                Self::send_raw(w, "AUTHENTICATE PLAIN")
+                                    .await
+                                    .context("send IRC SASL AUTHENTICATE command")?;
                             }
                         } else if msg.params.iter().any(|p| p.contains("NAK")) {
                             // CAP * NAK :sasl — server rejected SASL, proceed without it
@@ -229,7 +250,9 @@ impl Channel for IrcChannel {
                             sasl_pending = false;
                             let mut guard = self.writer.lock().await;
                             if let Some(ref mut w) = *guard {
-                                Self::send_raw(w, "CAP END").await?;
+                                Self::send_raw(w, "CAP END")
+                                    .await
+                                    .context("send IRC CAP END after SASL NAK")?;
                             }
                         }
                     }
@@ -244,7 +267,9 @@ impl Channel for IrcChannel {
                         );
                         let mut guard = self.writer.lock().await;
                         if let Some(ref mut w) = *guard {
-                            Self::send_raw(w, &format!("AUTHENTICATE {encoded}")).await?;
+                            Self::send_raw(w, &format!("AUTHENTICATE {encoded}"))
+                                .await
+                                .context("send IRC SASL credentials")?;
                         }
                     }
                 }
@@ -254,7 +279,9 @@ impl Channel for IrcChannel {
                     sasl_pending = false;
                     let mut guard = self.writer.lock().await;
                     if let Some(ref mut w) = *guard {
-                        Self::send_raw(w, "CAP END").await?;
+                        Self::send_raw(w, "CAP END")
+                            .await
+                            .context("send IRC CAP END after SASL success")?;
                     }
                 }
 
@@ -264,7 +291,9 @@ impl Channel for IrcChannel {
                     sasl_pending = false;
                     let mut guard = self.writer.lock().await;
                     if let Some(ref mut w) = *guard {
-                        Self::send_raw(w, "CAP END").await?;
+                        Self::send_raw(w, "CAP END")
+                            .await
+                            .context("send IRC CAP END after SASL failure")?;
                     }
                 }
 
@@ -278,7 +307,8 @@ impl Channel for IrcChannel {
                         let mut guard = self.writer.lock().await;
                         if let Some(ref mut w) = *guard {
                             Self::send_raw(w, &format!("PRIVMSG NickServ :IDENTIFY {pass}"))
-                                .await?;
+                                .await
+                                .context("send IRC NickServ identify")?;
                         }
                     }
 
@@ -286,7 +316,9 @@ impl Channel for IrcChannel {
                     for chan in &self.channels {
                         let mut guard = self.writer.lock().await;
                         if let Some(ref mut w) = *guard {
-                            Self::send_raw(w, &format!("JOIN {chan}")).await?;
+                            Self::send_raw(w, &format!("JOIN {chan}"))
+                                .await
+                                .context("send IRC JOIN command")?;
                         }
                     }
                 }
@@ -297,7 +329,9 @@ impl Channel for IrcChannel {
                     tracing::warn!("IRC nickname {current_nick} is in use, trying {alt}");
                     let mut guard = self.writer.lock().await;
                     if let Some(ref mut w) = *guard {
-                        Self::send_raw(w, &format!("NICK {alt}")).await?;
+                        Self::send_raw(w, &format!("NICK {alt}"))
+                            .await
+                            .context("send IRC NICK change")?;
                     }
                     current_nick = alt;
                 }

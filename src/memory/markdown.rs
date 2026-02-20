@@ -4,6 +4,7 @@ use super::traits::{
     MemoryEvent, MemoryEventInput, MemoryLayer, MemoryProvenance, MemoryRecallItem, MemorySource,
     PrivacyLevel, RecallQuery,
 };
+use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Local;
 use std::collections::HashMap;
@@ -57,7 +58,9 @@ impl MarkdownMemory {
     }
 
     async fn ensure_dirs(&self) -> anyhow::Result<()> {
-        fs::create_dir_all(self.memory_dir()).await?;
+        fs::create_dir_all(self.memory_dir())
+            .await
+            .context("create memory directory")?;
         Ok(())
     }
 
@@ -82,7 +85,9 @@ impl MarkdownMemory {
             format!("{existing}\n{content}\n")
         };
 
-        fs::write(path, updated).await?;
+        fs::write(path, updated)
+            .await
+            .context("write memory file")?;
         Ok(())
     }
 
@@ -299,7 +304,9 @@ impl MarkdownMemory {
         // Read MEMORY.md (core)
         let core_path = self.core_path();
         if core_path.exists() {
-            let content = fs::read_to_string(&core_path).await?;
+            let content = fs::read_to_string(&core_path)
+                .await
+                .context("read core memory file")?;
             entries.extend(Self::parse_entries_from_file(
                 &core_path,
                 &content,
@@ -310,11 +317,19 @@ impl MarkdownMemory {
         // Read daily logs
         let mem_dir = self.memory_dir();
         if mem_dir.exists() {
-            let mut dir = fs::read_dir(&mem_dir).await?;
-            while let Some(entry) = dir.next_entry().await? {
+            let mut dir = fs::read_dir(&mem_dir)
+                .await
+                .context("read memory directory")?;
+            while let Some(entry) = dir
+                .next_entry()
+                .await
+                .context("read memory directory entry")?
+            {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                    let content = fs::read_to_string(&path).await?;
+                    let content = fs::read_to_string(&path)
+                        .await
+                        .context("read daily memory log")?;
                     entries.extend(Self::parse_entries_from_file(
                         &path,
                         &content,

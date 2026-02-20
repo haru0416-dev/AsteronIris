@@ -5,6 +5,7 @@ use crate::memory::{
     MemoryCategory, MemoryEntry, MemoryEvent, MemoryEventInput, MemoryEventType, MemoryRecallItem,
     MemorySource, RecallQuery,
 };
+use anyhow::Context;
 use chrono::Local;
 use rusqlite::{ToSql, params};
 use std::cmp::Ordering;
@@ -92,7 +93,7 @@ impl SqliteMemory {
 
         let mut incumbent_stmt = conn.prepare_cached(
             "SELECT winner_event_id, source, confidence, updated_at FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
-        )?;
+        ).context("prepare belief slot lookup")?;
         let current: Option<(String, String, f64, String)> = incumbent_stmt
             .query_row(params![input.entity_id, input.slot_key], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
@@ -159,7 +160,7 @@ impl SqliteMemory {
                 ingested_at,
                 supersedes_event_id,
             ],
-        )?;
+        ).context("insert memory event")?;
 
         if contradiction_penalty > 0.0 {
             let doc_id = format!("{}:{}", input.entity_id, input.slot_key);
@@ -168,7 +169,8 @@ impl SqliteMemory {
                  SET contradiction_penalty = MIN(1.0, contradiction_penalty + ?2)
                  WHERE doc_id = ?1",
                 params![doc_id, contradiction_penalty],
-            )?;
+            )
+            .context("update contradiction penalty")?;
         }
 
         let shadow_id = Uuid::new_v4().to_string();
@@ -213,7 +215,8 @@ impl SqliteMemory {
                 retention_expires_at,
                 input.occurred_at,
             ],
-        )?;
+        )
+        .context("upsert memory shadow entry")?;
 
         if should_replace {
             conn.execute(
@@ -241,7 +244,8 @@ impl SqliteMemory {
                     privacy,
                     input.occurred_at,
                 ],
-            )?;
+            )
+            .context("upsert belief slot")?;
 
             let doc_id = format!("{}:{}", input.entity_id, input.slot_key);
             conn.execute(
@@ -282,7 +286,7 @@ impl SqliteMemory {
                     privacy,
                     input.occurred_at,
                 ],
-            )?;
+            ).context("upsert retrieval doc")?;
         }
 
         Ok(MemoryEvent {
@@ -301,7 +305,7 @@ impl SqliteMemory {
         })
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::too_many_lines)]
     pub(super) async fn recall_scoped(
         &self,
         query: RecallQuery,
@@ -369,41 +373,43 @@ impl SqliteMemory {
                 AND rd.text_body LIKE ?2
               ORDER BY final_score DESC, rd.updated_at DESC, rd.doc_id ASC
               LIMIT ?5",
-        )?;
+        ).context("prepare recall query")?;
 
-        let rows = stmt.query_map(
-            params![
-                query.entity_id,
-                like_query,
-                Self::TREND_TTL_DAYS,
-                Self::TREND_DECAY_WINDOW_DAYS,
-                limit_i64
-            ],
-            |row| {
-                let visibility: String = row.get(5)?;
-                Ok(RecallCandidate {
-                    item: MemoryRecallItem {
-                        entity_id: row.get(0)?,
-                        slot_key: row.get(1)?,
-                        value: row.get(2)?,
-                        source: MemorySource::System,
-                        confidence: row.get(3)?,
-                        importance: row.get(4)?,
-                        privacy_level: Self::str_to_privacy(&visibility),
-                        score: row.get(11)?,
-                        occurred_at: row.get(6)?,
-                    },
-                    provenance_source_class: row.get(7)?,
-                    provenance_reference: row.get(8)?,
-                    slot_status: row.get(9)?,
-                    denylisted_by_ledger: row.get::<_, i64>(10)? != 0,
-                })
-            },
-        )?;
+        let rows = stmt
+            .query_map(
+                params![
+                    query.entity_id,
+                    like_query,
+                    Self::TREND_TTL_DAYS,
+                    Self::TREND_DECAY_WINDOW_DAYS,
+                    limit_i64
+                ],
+                |row| {
+                    let visibility: String = row.get(5)?;
+                    Ok(RecallCandidate {
+                        item: MemoryRecallItem {
+                            entity_id: row.get(0)?,
+                            slot_key: row.get(1)?,
+                            value: row.get(2)?,
+                            source: MemorySource::System,
+                            confidence: row.get(3)?,
+                            importance: row.get(4)?,
+                            privacy_level: Self::str_to_privacy(&visibility),
+                            score: row.get(11)?,
+                            occurred_at: row.get(6)?,
+                        },
+                        provenance_source_class: row.get(7)?,
+                        provenance_reference: row.get(8)?,
+                        slot_status: row.get(9)?,
+                        denylisted_by_ledger: row.get::<_, i64>(10)? != 0,
+                    })
+                },
+            )
+            .context("execute recall query")?;
 
         let mut out = Vec::with_capacity(query.limit);
         for row in rows {
-            let candidate = row?;
+            let candidate = row.context("read recall candidate row")?;
             if candidate.allowed_for_replay() {
                 out.push(candidate.item);
             }

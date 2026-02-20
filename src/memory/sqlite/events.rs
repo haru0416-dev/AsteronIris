@@ -3,6 +3,7 @@ use crate::memory::{
     BeliefSlot, ForgetArtifact, ForgetArtifactCheck, ForgetArtifactObservation, ForgetMode,
     ForgetOutcome,
 };
+use anyhow::Context;
 use chrono::Local;
 use rusqlite::params;
 use uuid::Uuid;
@@ -19,11 +20,13 @@ impl SqliteMemory {
             .lock()
             .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
-        let mut stmt = conn.prepare(
-            "SELECT value, source, confidence, importance, privacy_level, updated_at
+        let mut stmt = conn
+            .prepare(
+                "SELECT value, source, confidence, importance, privacy_level, updated_at
              FROM belief_slots
              WHERE entity_id = ?1 AND slot_key = ?2 AND status = 'active'",
-        )?;
+            )
+            .context("prepare belief slot query")?;
 
         let row = stmt
             .query_row(params![entity_id, slot_key], |row| {
@@ -72,7 +75,8 @@ impl SqliteMemory {
                 reason,
                 now
             ],
-        )?;
+        )
+        .context("insert deletion ledger entry")?;
 
         let doc_id = format!("{entity_id}:{slot_key}");
         let projection_content: Option<String> = conn
@@ -85,11 +89,13 @@ impl SqliteMemory {
         let projection_cache_hash = projection_content.as_deref().map(Self::content_hash);
         let applied = match mode {
             ForgetMode::Soft => {
-                let affected_slot = conn.execute(
-                    "UPDATE belief_slots SET status = 'soft_deleted', updated_at = ?3
+                let affected_slot = conn
+                    .execute(
+                        "UPDATE belief_slots SET status = 'soft_deleted', updated_at = ?3
                      WHERE entity_id = ?1 AND slot_key = ?2",
-                    params![entity_id, slot_key, now],
-                )?;
+                        params![entity_id, slot_key, now],
+                    )
+                    .context("soft delete belief slot")?;
                 let _ = conn.execute(
                     "UPDATE retrieval_docs SET visibility = 'secret', updated_at = ?2 WHERE doc_id = ?1",
                     params![doc_id, now],
@@ -97,10 +103,12 @@ impl SqliteMemory {
                 affected_slot > 0
             }
             ForgetMode::Hard => {
-                let affected_slot = conn.execute(
-                    "DELETE FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
-                    params![entity_id, slot_key],
-                )?;
+                let affected_slot = conn
+                    .execute(
+                        "DELETE FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
+                        params![entity_id, slot_key],
+                    )
+                    .context("delete belief slot")?;
                 let _ = conn.execute(
                     "DELETE FROM retrieval_docs WHERE doc_id = ?1",
                     params![doc_id],
@@ -130,7 +138,8 @@ impl SqliteMemory {
                         privacy_level = excluded.privacy_level,
                         updated_at = excluded.updated_at",
                     params![entity_id, slot_key, Uuid::new_v4().to_string(), now],
-                )?;
+                )
+                .context("tombstone belief slot")?;
                 let _ = conn.execute(
                     "DELETE FROM retrieval_docs WHERE doc_id = ?1",
                     params![doc_id],
@@ -234,11 +243,14 @@ impl SqliteMemory {
         conn: &rusqlite::Connection,
         slot_key: &str,
     ) -> anyhow::Result<ForgetArtifactObservation> {
-        let exists = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM memories WHERE key = ?1)",
-            params![slot_key],
-            |row| row.get::<_, i64>(0),
-        )? == 1;
+        let exists = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM memories WHERE key = ?1)",
+                params![slot_key],
+                |row| row.get::<_, i64>(0),
+            )
+            .context("check projection entry existence")?
+            == 1;
 
         Ok(if exists {
             ForgetArtifactObservation::PresentRetrievable
@@ -255,11 +267,14 @@ impl SqliteMemory {
             return Ok(ForgetArtifactObservation::Absent);
         };
 
-        let exists = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM embedding_cache WHERE content_hash = ?1)",
-            params![cache_hash],
-            |row| row.get::<_, i64>(0),
-        )? == 1;
+        let exists = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM embedding_cache WHERE content_hash = ?1)",
+                params![cache_hash],
+                |row| row.get::<_, i64>(0),
+            )
+            .context("check embedding cache entry")?
+            == 1;
 
         Ok(if exists {
             ForgetArtifactObservation::PresentRetrievable
@@ -276,8 +291,9 @@ impl SqliteMemory {
         reason: &str,
         executed_at: &str,
     ) -> anyhow::Result<ForgetArtifactObservation> {
-        let exists = conn.query_row(
-            "SELECT EXISTS(
+        let exists = conn
+            .query_row(
+                "SELECT EXISTS(
                     SELECT 1
                     FROM deletion_ledger
                     WHERE entity_id = ?1
@@ -286,9 +302,11 @@ impl SqliteMemory {
                       AND reason = ?4
                       AND executed_at = ?5
                 )",
-            params![entity_id, slot_key, phase, reason, executed_at],
-            |row| row.get::<_, i64>(0),
-        )? == 1;
+                params![entity_id, slot_key, phase, reason, executed_at],
+                |row| row.get::<_, i64>(0),
+            )
+            .context("check deletion ledger entry")?
+            == 1;
 
         Ok(if exists {
             ForgetArtifactObservation::PresentNonRetrievable
@@ -308,9 +326,11 @@ impl SqliteMemory {
                 "SELECT COUNT(*) FROM memory_events WHERE entity_id = ?1",
                 params![entity],
                 |row| row.get(0),
-            )?
+            )
+            .context("count memory events by entity")?
         } else {
-            conn.query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))?
+            conn.query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
+                .context("count all memory events")?
         };
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]

@@ -57,3 +57,60 @@ impl Default for GatewayConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_gateway_config() {
+        let config = GatewayConfig::default();
+
+        assert_eq!(config.port, 3000);
+        assert_eq!(config.host, "127.0.0.1");
+        assert!(config.require_pairing);
+        assert!(!config.allow_public_bind);
+        assert_eq!(config.defense_mode, GatewayDefenseMode::Enforce);
+    }
+
+    #[test]
+    fn gateway_defense_mode_serde_variants() {
+        let cases = [
+            (GatewayDefenseMode::Audit, "\"audit\""),
+            (GatewayDefenseMode::Warn, "\"warn\""),
+            (GatewayDefenseMode::Enforce, "\"enforce\""),
+        ];
+
+        for (mode, expected_json) in cases {
+            let serialized = serde_json::to_string(&mode).unwrap();
+            assert_eq!(serialized, expected_json);
+
+            let deserialized: GatewayDefenseMode = serde_json::from_str(expected_json).unwrap();
+            assert_eq!(deserialized, mode);
+        }
+    }
+
+    #[test]
+    fn gateway_config_toml_round_trip() {
+        let original = GatewayConfig {
+            port: 4001,
+            host: "0.0.0.0".into(),
+            require_pairing: false,
+            allow_public_bind: true,
+            paired_tokens: vec!["alpha".into(), "beta".into()],
+            defense_mode: GatewayDefenseMode::Warn,
+            defense_kill_switch: true,
+        };
+
+        let toml = toml::to_string(&original).unwrap();
+        let decoded: GatewayConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(decoded.port, original.port);
+        assert_eq!(decoded.host, original.host);
+        assert_eq!(decoded.require_pairing, original.require_pairing);
+        assert_eq!(decoded.allow_public_bind, original.allow_public_bind);
+        assert_eq!(decoded.paired_tokens, original.paired_tokens);
+        assert_eq!(decoded.defense_mode, original.defense_mode);
+        assert_eq!(decoded.defense_kill_switch, original.defense_kill_switch);
+    }
+}

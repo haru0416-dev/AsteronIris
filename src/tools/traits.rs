@@ -152,7 +152,7 @@ impl NoopOperator {
 
         file.write_all(record.to_string().as_bytes()).await?;
         file.write_all(b"\n").await?;
-        Ok(path.to_string_lossy().to_string())
+        Ok(path.to_string_lossy().into_owned())
     }
 }
 

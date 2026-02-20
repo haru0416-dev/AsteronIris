@@ -1,5 +1,5 @@
 use crate::config::MemoryConfig;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -52,22 +52,24 @@ pub fn run_if_due(config: &MemoryConfig, workspace_dir: &Path) -> Result<()> {
     }
 
     let report = HygieneReport {
-        archived_memory_files: archive_daily_memory_files(
-            workspace_dir,
-            config.archive_after_days,
-        )?,
-        archived_session_files: archive_session_files(workspace_dir, config.archive_after_days)?,
-        purged_memory_archives: purge_memory_archives(workspace_dir, config.purge_after_days)?,
-        purged_session_archives: purge_session_archives(workspace_dir, config.purge_after_days)?,
+        archived_memory_files: archive_daily_memory_files(workspace_dir, config.archive_after_days)
+            .context("archive daily memory files")?,
+        archived_session_files: archive_session_files(workspace_dir, config.archive_after_days)
+            .context("archive session files")?,
+        purged_memory_archives: purge_memory_archives(workspace_dir, config.purge_after_days)
+            .context("purge expired memory archives")?,
+        purged_session_archives: purge_session_archives(workspace_dir, config.purge_after_days)
+            .context("purge expired session archives")?,
         pruned_conversation_rows: prune_conversation_rows(
             workspace_dir,
             config.conversation_retention_days,
-        )?,
+        )
+        .context("prune stale conversation rows")?,
     };
 
     let _ = prune_v2_lifecycle_rows(workspace_dir, config)?;
 
-    write_state(workspace_dir, &report)?;
+    write_state(workspace_dir, &report).context("save hygiene state")?;
 
     if report.total_actions() > 0 {
         tracing::info!(
@@ -89,7 +91,7 @@ fn should_run_now(workspace_dir: &Path) -> Result<bool> {
         return Ok(true);
     }
 
-    let raw = fs::read_to_string(&path)?;
+    let raw = fs::read_to_string(&path).context("read hygiene state file")?;
     let state: HygieneState = match serde_json::from_str(&raw) {
         Ok(s) => s,
         Err(_) => return Ok(true),
@@ -110,15 +112,15 @@ fn should_run_now(workspace_dir: &Path) -> Result<bool> {
 fn write_state(workspace_dir: &Path, report: &HygieneReport) -> Result<()> {
     let path = state_path(workspace_dir);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).context("create hygiene state directory")?;
     }
 
     let state = HygieneState {
         last_run_at: Some(Utc::now().to_rfc3339()),
         last_report: report.clone(),
     };
-    let json = serde_json::to_vec_pretty(&state)?;
-    fs::write(path, json)?;
+    let json = serde_json::to_vec_pretty(&state).context("serialize hygiene state")?;
+    fs::write(path, json).context("write hygiene state to disk")?;
     Ok(())
 }
 

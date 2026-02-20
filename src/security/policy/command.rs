@@ -203,3 +203,169 @@ impl SecurityPolicy {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AutonomyLevel, SecurityPolicy, has_blocked_arguments, is_git_config_injection,
+        skip_env_assignments,
+    };
+
+    fn policy_with_allowed(allowed_commands: &[&str]) -> SecurityPolicy {
+        SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            allowed_commands: allowed_commands.iter().map(ToString::to_string).collect(),
+            ..SecurityPolicy::default()
+        }
+    }
+
+    #[test]
+    fn skip_env_assignments_strips_single_assignment() {
+        assert_eq!(skip_env_assignments("VAR=value cmd"), "cmd");
+    }
+
+    #[test]
+    fn skip_env_assignments_strips_multiple_assignments() {
+        assert_eq!(
+            skip_env_assignments("VAR1=a VAR2=b cmd --flag"),
+            "cmd --flag"
+        );
+    }
+
+    #[test]
+    fn skip_env_assignments_keeps_plain_command() {
+        assert_eq!(skip_env_assignments("cmd"), "cmd");
+    }
+
+    #[test]
+    fn skip_env_assignments_handles_empty_input() {
+        assert_eq!(skip_env_assignments(""), "");
+    }
+
+    #[test]
+    fn is_git_config_injection_ignores_normal_git_commands() {
+        assert!(!is_git_config_injection("status"));
+        assert!(!is_git_config_injection("log --oneline"));
+        assert!(!is_git_config_injection("diff --name-only"));
+    }
+
+    #[test]
+    fn is_git_config_injection_handles_dash_c_patterns() {
+        assert!(!is_git_config_injection("-c user.email=evil@hack"));
+        assert!(is_git_config_injection("-c core.sshCommand=sh"));
+    }
+
+    #[test]
+    fn is_git_config_injection_detects_config_flags_in_various_positions() {
+        assert!(is_git_config_injection("clone --config core.pager=sh repo"));
+        assert!(is_git_config_injection(
+            "clone --config=core.editor=sh repo"
+        ));
+        assert!(is_git_config_injection("status -c credential.helper=!sh"));
+    }
+
+    #[test]
+    fn has_blocked_arguments_git_dangerous_subcommands_are_blocked() {
+        assert!(has_blocked_arguments("git", "git push", &[]));
+        assert!(has_blocked_arguments("git", "git send-email", &[]));
+        assert!(has_blocked_arguments("git", "git request-pull", &[]));
+        assert!(has_blocked_arguments("git", "git remote add origin x", &[]));
+        assert!(has_blocked_arguments(
+            "git",
+            "git remote set-url origin x",
+            &[]
+        ));
+        assert!(has_blocked_arguments(
+            "git",
+            "git config --global user.name x",
+            &[]
+        ));
+        assert!(has_blocked_arguments("git", "git credential fill", &[]));
+    }
+
+    #[test]
+    fn has_blocked_arguments_git_safe_subcommands_are_allowed() {
+        assert!(!has_blocked_arguments("git", "git status", &[]));
+        assert!(!has_blocked_arguments("git", "git log", &[]));
+        assert!(!has_blocked_arguments("git", "git diff", &[]));
+    }
+
+    #[test]
+    fn has_blocked_arguments_npm_rules() {
+        assert!(has_blocked_arguments("npm", "npm publish", &[]));
+        assert!(!has_blocked_arguments("npm", "npm list", &[]));
+        assert!(!has_blocked_arguments("npm", "npm run test", &[]));
+    }
+
+    #[test]
+    fn has_blocked_arguments_cargo_rules() {
+        assert!(has_blocked_arguments("cargo", "cargo publish", &[]));
+        assert!(!has_blocked_arguments("cargo", "cargo build", &[]));
+        assert!(!has_blocked_arguments("cargo", "cargo test", &[]));
+    }
+
+    #[test]
+    fn has_blocked_arguments_pip_is_unrestricted_by_this_filter() {
+        assert!(!has_blocked_arguments("pip", "pip install foo", &[]));
+        assert!(!has_blocked_arguments("pip", "pip uninstall foo", &[]));
+        assert!(!has_blocked_arguments("pip", "pip list", &[]));
+    }
+
+    #[test]
+    fn is_command_allowed_accepts_safe_allowed_commands() {
+        let policy = policy_with_allowed(&["git", "npm", "cargo", "pip"]);
+        assert!(policy.is_command_allowed("git status"));
+        assert!(policy.is_command_allowed("npm run test"));
+        assert!(policy.is_command_allowed("cargo test"));
+    }
+
+    #[test]
+    fn is_command_allowed_rejects_blocked_arguments() {
+        let policy = policy_with_allowed(&["git", "npm", "cargo"]);
+        assert!(!policy.is_command_allowed("git push"));
+        assert!(!policy.is_command_allowed("git -c core.sshCommand=sh status"));
+        assert!(!policy.is_command_allowed("npm publish"));
+        assert!(!policy.is_command_allowed("cargo publish"));
+    }
+
+    #[test]
+    fn is_command_allowed_rejects_empty_and_whitespace_only_commands() {
+        let policy = policy_with_allowed(&["git"]);
+        assert!(!policy.is_command_allowed(""));
+        assert!(!policy.is_command_allowed("   \t  \n  "));
+    }
+
+    #[test]
+    fn is_command_allowed_handles_extra_whitespace_and_env_prefixes() {
+        let policy = policy_with_allowed(&["git"]);
+        assert!(policy.is_command_allowed("  VAR=a   git   status   "));
+    }
+
+    #[test]
+    fn is_command_allowed_is_case_sensitive() {
+        let policy = policy_with_allowed(&["git"]);
+        assert!(policy.is_command_allowed("git status"));
+        assert!(!policy.is_command_allowed("Git status"));
+    }
+
+    #[test]
+    fn is_command_allowed_rejects_subshell_expansion_and_redirection() {
+        let policy = policy_with_allowed(&["echo"]);
+        assert!(!policy.is_command_allowed("echo $(whoami)"));
+        assert!(!policy.is_command_allowed("echo hi > out.txt"));
+    }
+
+    #[test]
+    fn is_command_allowed_rejects_mixed_segments_with_one_disallowed_command() {
+        let policy = policy_with_allowed(&["git", "echo"]);
+        assert!(policy.is_command_allowed("git status && echo ok"));
+        assert!(!policy.is_command_allowed("git status && curl https://example.com"));
+    }
+
+    #[test]
+    fn is_command_allowed_denies_all_in_read_only_mode() {
+        let mut policy = policy_with_allowed(&["git"]);
+        policy.autonomy = AutonomyLevel::ReadOnly;
+        assert!(!policy.is_command_allowed("git status"));
+    }
+}

@@ -92,27 +92,16 @@ fn save_state(workspace_dir: &Path, state: &ConsolidationState) -> Result<()> {
 }
 
 fn build_consolidation_value(input: &ConsolidationInput) -> String {
-    let user = input
+    let user: String = input
         .user_message
         .split_whitespace()
-        .fold(String::new(), |mut acc, w| {
-            if !acc.is_empty() {
-                acc.push(' ');
-            }
-            acc.push_str(w);
-            acc
-        });
-    let assistant =
-        input
-            .assistant_response
-            .split_whitespace()
-            .fold(String::new(), |mut acc, w| {
-                if !acc.is_empty() {
-                    acc.push(' ');
-                }
-                acc.push_str(w);
-                acc
-            });
+        .collect::<Vec<_>>()
+        .join(" ");
+    let assistant: String = input
+        .assistant_response
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let user = truncate_with_ellipsis(&user, 120);
     let assistant = truncate_with_ellipsis(&assistant, 240);
     format!(

@@ -194,8 +194,8 @@ async fn telegram_send_document_nonexistent_file() {
     let result = ch.send_document("123456", path, None).await;
 
     assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    // Should fail with file not found error
+    let err = format!("{:#}", result.unwrap_err());
+    // Should fail with file not found error (context wraps the underlying OS error)
     assert!(
         err.contains("No such file") || err.contains("not found") || err.contains("os error"),
         "Expected file not found error, got: {err}"

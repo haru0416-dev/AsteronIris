@@ -33,7 +33,7 @@ use crate::security::pairing::{PairingGuard, is_public_bind};
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
 use crate::tools;
 use crate::tools::ToolRegistry;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     Router,
     http::StatusCode,
@@ -102,41 +102,54 @@ pub async fn run_gateway(host: &str, port: u16, config: Arc<Config>) -> Result<(
         );
     }
 
-    let addr: SocketAddr = format!("{host}:{port}").parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .context("parse gateway bind address")?;
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .context("bind gateway socket")?;
 
     run_gateway_with_listener(host, listener, config).await
 }
 
 /// Run the HTTP gateway from a pre-bound listener.
+#[allow(clippy::too_many_lines)]
 pub async fn run_gateway_with_listener(
     host: &str,
     listener: tokio::net::TcpListener,
     config: Arc<Config>,
 ) -> Result<()> {
-    let actual_port = listener.local_addr()?.port();
+    let actual_port = listener
+        .local_addr()
+        .context("get gateway listener local address")?
+        .port();
     let display_addr = format!("{host}:{actual_port}");
 
-    let auth_broker = AuthBroker::load_or_init(&config)?;
+    let auth_broker = AuthBroker::load_or_init(&config).context("load auth broker for gateway")?;
 
-    let provider: Arc<dyn Provider> =
-        Arc::from(providers::create_resilient_provider_with_oauth_recovery(
+    let provider: Arc<dyn Provider> = Arc::from(
+        providers::create_resilient_provider_with_oauth_recovery(
             &config,
             config.default_provider.as_deref().unwrap_or("openrouter"),
             &config.reliability,
             |name| auth_broker.resolve_provider_api_key(name),
-        )?);
+        )
+        .context("create resilient LLM provider")?,
+    );
     let model = config
         .default_model
         .clone()
         .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
     let temperature = config.default_temperature;
     let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
-    let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
-        &config.memory,
-        &config.workspace_dir,
-        memory_api_key.as_deref(),
-    )?);
+    let mem: Arc<dyn Memory> = Arc::from(
+        memory::create_memory(
+            &config.memory,
+            &config.workspace_dir,
+            memory_api_key.as_deref(),
+        )
+        .context("create memory backend for gateway")?,
+    );
     let security = Arc::new(SecurityPolicy::from_config(
         &config.autonomy,
         &config.workspace_dir,
@@ -188,7 +201,9 @@ pub async fn run_gateway_with_listener(
         &config.gateway.paired_tokens,
     ));
 
-    let tunnel_url = start_tunnel(&config, host, actual_port).await?;
+    let tunnel_url = start_tunnel(&config, host, actual_port)
+        .await
+        .context("start gateway tunnel")?;
 
     print_gateway_banner(
         &display_addr,
@@ -221,7 +236,9 @@ pub async fn run_gateway_with_listener(
     };
 
     let app = build_app(state);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .await
+        .context("serve HTTP gateway")?;
 
     Ok(())
 }
@@ -247,7 +264,8 @@ fn resolve_whatsapp_app_secret(config: &Config) -> Option<Arc<str>> {
 }
 
 async fn start_tunnel(config: &Config, host: &str, port: u16) -> Result<Option<String>> {
-    let tunnel = crate::tunnel::create_tunnel(&config.tunnel)?;
+    let tunnel =
+        crate::tunnel::create_tunnel(&config.tunnel).context("create tunnel for gateway")?;
 
     let Some(ref tun) = tunnel else {
         return Ok(None);

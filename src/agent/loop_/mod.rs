@@ -35,7 +35,7 @@ use crate::runtime;
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
 use crate::tools;
 use crate::tools::ToolRegistry;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -54,14 +54,14 @@ pub async fn run(
 ) -> Result<()> {
     let observer: Arc<dyn Observer> =
         Arc::from(observability::create_observer(&config.observability));
-    let _runtime = runtime::create_runtime(&config.runtime)?;
+    let _runtime = runtime::create_runtime(&config.runtime).context("initialize agent runtime")?;
     let security = Arc::new(SecurityPolicy::from_config(
         &config.autonomy,
         &config.workspace_dir,
     ));
-    let auth_broker = AuthBroker::load_or_init(&config)?;
+    let auth_broker = AuthBroker::load_or_init(&config).context("load auth broker")?;
 
-    let mem = init_memory(&config, &auth_broker)?;
+    let mem = init_memory(&config, &auth_broker).context("initialize memory backend")?;
     let registry = init_tools(&config, &security, &mem);
     let rate_limiter = Arc::new(EntityRateLimiter::new(
         config.autonomy.max_actions_per_hour,
@@ -79,7 +79,7 @@ pub async fn run(
         .unwrap_or("anthropic/claude-sonnet-4-20250514");
 
     let (answer_provider, reflect_provider) =
-        resolve_providers(&config, &auth_broker, provider_name)?;
+        resolve_providers(&config, &auth_broker, provider_name).context("resolve LLM providers")?;
 
     observer.record_event(&ObserverEvent::AgentStart {
         provider: provider_name.to_string(),
@@ -100,7 +100,9 @@ pub async fn run(
     };
 
     let (token_sum, saw_token_usage) =
-        run_session(&config, &security, &mem, &turn_params, message, &observer).await?;
+        run_session(&config, &security, &mem, &turn_params, message, &observer)
+            .await
+            .context("run agent session")?;
 
     let duration = Instant::now().elapsed();
     observer.record_event(&ObserverEvent::AgentEnd {
@@ -113,11 +115,14 @@ pub async fn run(
 
 fn init_memory(config: &Config, auth_broker: &AuthBroker) -> Result<Arc<dyn Memory>> {
     let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
-    let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
-        &config.memory,
-        &config.workspace_dir,
-        memory_api_key.as_deref(),
-    )?);
+    let mem: Arc<dyn Memory> = Arc::from(
+        memory::create_memory(
+            &config.memory,
+            &config.workspace_dir,
+            memory_api_key.as_deref(),
+        )
+        .context("create memory backend")?,
+    );
     tracing::info!(backend = mem.name(), "Memory initialized");
     Ok(mem)
 }
@@ -158,13 +163,15 @@ fn resolve_providers(
             provider_name,
             &config.reliability,
             |name| auth_broker.resolve_provider_api_key(name),
-        )?;
+        )
+        .context("create resilient answer provider")?;
     let reflect_api_key = auth_broker.resolve_provider_api_key(provider_name);
     let reflect_provider: Box<dyn Provider> = providers::create_provider_with_oauth_recovery(
         config,
         provider_name,
         reflect_api_key.as_deref(),
-    )?;
+    )
+    .context("create reflect provider")?;
 
     Ok((answer_provider, reflect_provider))
 }
@@ -209,7 +216,8 @@ async fn run_session(
             &msg,
             observer,
         )
-        .await?;
+        .await
+        .context("execute agent session turn")?;
         if let Some(tokens) = outcome.tokens_used {
             token_sum = token_sum.saturating_add(tokens);
             saw_token_usage = true;
@@ -235,7 +243,8 @@ async fn run_session(
                 &msg.content,
                 observer,
             )
-            .await?;
+            .await
+            .context("execute agent session turn")?;
             if let Some(tokens) = outcome.tokens_used {
                 token_sum = token_sum.saturating_add(tokens);
                 saw_token_usage = true;

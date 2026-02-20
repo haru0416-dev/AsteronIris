@@ -142,7 +142,7 @@ pub fn build_system_prompt_with_options(
     let _ = writeln!(prompt, "## Current Date & Time\n\nTimezone: {tz}\n");
 
     let host =
-        hostname::get().map_or_else(|_| "unknown".into(), |h| h.to_string_lossy().to_string());
+        hostname::get().map_or_else(|_| "unknown".into(), |h| h.to_string_lossy().into_owned());
     let _ = writeln!(
         prompt,
         "## Runtime\n\nHost: {host} | OS: {} | Model: {model_name}\n",

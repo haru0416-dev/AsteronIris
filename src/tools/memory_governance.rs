@@ -224,7 +224,7 @@ impl MemoryGovernanceTool {
 
         file.write_all(record.to_string().as_bytes()).await?;
         file.write_all(b"\n").await?;
-        Ok(path.to_string_lossy().to_string())
+        Ok(path.to_string_lossy().into_owned())
     }
 
     async fn run_inspect(
@@ -458,5 +458,117 @@ impl Tool for MemoryGovernanceTool {
             output: output.to_string(),
             error: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_action_accepts_supported_values() {
+        let inspect = MemoryGovernanceTool::parse_action(&json!({"action": "inspect"})).unwrap();
+        assert!(matches!(inspect, GovernanceAction::Inspect));
+
+        let export = MemoryGovernanceTool::parse_action(&json!({"action": "export"})).unwrap();
+        assert!(matches!(export, GovernanceAction::Export));
+
+        let delete = MemoryGovernanceTool::parse_action(&json!({"action": "delete"})).unwrap();
+        assert!(matches!(delete, GovernanceAction::Delete));
+    }
+
+    #[test]
+    fn parse_action_rejects_invalid_empty_and_case_mismatches() {
+        let invalid = MemoryGovernanceTool::parse_action(&json!({"action": "invalid"}))
+            .err()
+            .map(|error| error.to_string())
+            .unwrap();
+        assert_eq!(
+            invalid,
+            "Invalid 'action' parameter: must be one of inspect, export, delete"
+        );
+
+        let empty = MemoryGovernanceTool::parse_action(&json!({"action": ""}))
+            .err()
+            .map(|error| error.to_string())
+            .unwrap();
+        assert_eq!(
+            empty,
+            "Invalid 'action' parameter: must be one of inspect, export, delete"
+        );
+
+        let case_mismatch = MemoryGovernanceTool::parse_action(&json!({"action": "Inspect"}))
+            .err()
+            .map(|error| error.to_string())
+            .unwrap();
+        assert_eq!(
+            case_mismatch,
+            "Invalid 'action' parameter: must be one of inspect, export, delete"
+        );
+    }
+
+    #[test]
+    fn parse_mode_maps_known_values_and_defaults_for_unknown() {
+        assert_eq!(
+            MemoryGovernanceTool::parse_mode(&json!({"mode": "soft"})),
+            ForgetMode::Soft
+        );
+        assert_eq!(
+            MemoryGovernanceTool::parse_mode(&json!({"mode": "hard"})),
+            ForgetMode::Hard
+        );
+        assert_eq!(
+            MemoryGovernanceTool::parse_mode(&json!({"mode": "tombstone"})),
+            ForgetMode::Tombstone
+        );
+        assert_eq!(
+            MemoryGovernanceTool::parse_mode(&json!({"mode": "invalid"})),
+            ForgetMode::Soft
+        );
+    }
+
+    #[test]
+    fn parse_actor_validates_presence_and_non_empty_values() {
+        let actor = MemoryGovernanceTool::parse_actor(&json!({"actor": "governance-bot"})).unwrap();
+        assert_eq!(actor, "governance-bot");
+
+        let empty = MemoryGovernanceTool::parse_actor(&json!({"actor": ""}))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(empty, "Invalid 'actor' parameter: must not be empty");
+
+        let whitespace = MemoryGovernanceTool::parse_actor(&json!({"actor": "   "}))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(whitespace, "Invalid 'actor' parameter: must not be empty");
+    }
+
+    #[test]
+    fn parse_entity_id_validates_presence_and_non_empty_values() {
+        let entity_id =
+            MemoryGovernanceTool::parse_entity_id(&json!({"entity_id": "tenant-a:user-1"}))
+                .unwrap();
+        assert_eq!(entity_id, "tenant-a:user-1");
+
+        let empty = MemoryGovernanceTool::parse_entity_id(&json!({"entity_id": ""}))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(empty, "Invalid 'entity_id' parameter: must not be empty");
+    }
+
+    #[test]
+    fn parse_policy_context_supports_tenant_scope_and_defaults() {
+        let context = MemoryGovernanceTool::parse_policy_context(&json!({
+            "policy_context": {
+                "tenant_mode_enabled": true,
+                "tenant_id": "tenant-alpha"
+            }
+        }))
+        .unwrap();
+        assert_eq!(context, TenantPolicyContext::enabled("tenant-alpha"));
+
+        let default_context = MemoryGovernanceTool::parse_policy_context(&json!({})).unwrap();
+        assert_eq!(default_context, TenantPolicyContext::disabled());
     }
 }

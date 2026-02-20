@@ -1,6 +1,7 @@
 use super::IMessageChannel;
 use super::auth::{escape_applescript, is_valid_imessage_target};
 use crate::channels::traits::{Channel, ChannelMessage};
+use anyhow::Context;
 use async_trait::async_trait;
 use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
@@ -42,7 +43,8 @@ end tell"#
             .arg("-e")
             .arg(&script)
             .output()
-            .await?;
+            .await
+            .context("run iMessage AppleScript command")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -136,12 +138,18 @@ pub(super) async fn get_max_rowid(db_path: &Path) -> anyhow::Result<i64> {
         let conn = Connection::open_with_flags(
             &path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        let mut stmt = conn.prepare("SELECT MAX(ROWID) FROM message WHERE is_from_me = 0")?;
-        let rowid: Option<i64> = stmt.query_row([], |row| row.get(0))?;
+        )
+        .context("open iMessage database")?;
+        let mut stmt = conn
+            .prepare("SELECT MAX(ROWID) FROM message WHERE is_from_me = 0")
+            .context("prepare iMessage database query")?;
+        let rowid: Option<i64> = stmt
+            .query_row([], |row| row.get(0))
+            .context("query iMessage max row ID")?;
         Ok(rowid.unwrap_or(0))
     })
-    .await??;
+    .await
+    .context("join iMessage max row ID task")??;
     Ok(result)
 }
 
@@ -158,9 +166,11 @@ pub(super) async fn fetch_new_messages(
             let conn = Connection::open_with_flags(
                 &path,
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?;
-            let mut stmt = conn.prepare(
-                "SELECT m.ROWID, h.id, m.text \
+            )
+            .context("open iMessage database")?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT m.ROWID, h.id, m.text \
              FROM message m \
              JOIN handle h ON m.handle_id = h.ROWID \
              WHERE m.ROWID > ?1 \
@@ -168,16 +178,20 @@ pub(super) async fn fetch_new_messages(
              AND m.text IS NOT NULL \
              ORDER BY m.ROWID ASC \
              LIMIT 20",
-            )?;
-            let rows = stmt.query_map([since_rowid], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
+                )
+                .context("prepare iMessage message query")?;
+            let rows = stmt
+                .query_map([since_rowid], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .context("query iMessage new messages")?;
             rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
         })
-        .await??;
+        .await
+        .context("join iMessage new messages task")??;
     Ok(results)
 }

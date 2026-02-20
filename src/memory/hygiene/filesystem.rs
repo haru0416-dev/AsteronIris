@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{Duration, Local, NaiveDate};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,13 +18,13 @@ pub(super) fn archive_daily_memory_files(
     }
 
     let archive_dir = memory_dir.join("archive");
-    fs::create_dir_all(&archive_dir)?;
+    fs::create_dir_all(&archive_dir).context("create memory archive directory")?;
 
     let cutoff = Local::now().date_naive() - Duration::days(i64::from(archive_after_days));
     let mut moved = 0_u64;
 
-    for entry in fs::read_dir(&memory_dir)? {
-        let entry = entry?;
+    for entry in fs::read_dir(&memory_dir).context("read memory directory for archiving")? {
+        let entry = entry.context("read memory directory entry")?;
         let path = entry.path();
 
         if path.is_dir() {
@@ -43,7 +43,7 @@ pub(super) fn archive_daily_memory_files(
         };
 
         if file_date < cutoff {
-            move_to_archive(&path, &archive_dir)?;
+            move_to_archive(&path, &archive_dir).context("archive daily memory file")?;
             moved += 1;
         }
     }
@@ -62,7 +62,7 @@ pub(super) fn archive_session_files(workspace_dir: &Path, archive_after_days: u3
     }
 
     let archive_dir = sessions_dir.join("archive");
-    fs::create_dir_all(&archive_dir)?;
+    fs::create_dir_all(&archive_dir).context("create session archive directory")?;
 
     let cutoff_date = Local::now().date_naive() - Duration::days(i64::from(archive_after_days));
     let cutoff_time = SystemTime::now()
@@ -72,8 +72,8 @@ pub(super) fn archive_session_files(workspace_dir: &Path, archive_after_days: u3
         .unwrap_or(SystemTime::UNIX_EPOCH);
 
     let mut moved = 0_u64;
-    for entry in fs::read_dir(&sessions_dir)? {
-        let entry = entry?;
+    for entry in fs::read_dir(&sessions_dir).context("read sessions directory for archiving")? {
+        let entry = entry.context("read session directory entry")?;
         let path = entry.path();
 
         if path.is_dir() {
@@ -91,7 +91,7 @@ pub(super) fn archive_session_files(workspace_dir: &Path, archive_after_days: u3
         };
 
         if is_old {
-            move_to_archive(&path, &archive_dir)?;
+            move_to_archive(&path, &archive_dir).context("archive session file")?;
             moved += 1;
         }
     }
@@ -112,8 +112,8 @@ pub(super) fn purge_memory_archives(workspace_dir: &Path, purge_after_days: u32)
     let cutoff = Local::now().date_naive() - Duration::days(i64::from(purge_after_days));
     let mut removed = 0_u64;
 
-    for entry in fs::read_dir(&archive_dir)? {
-        let entry = entry?;
+    for entry in fs::read_dir(&archive_dir).context("read memory archive directory")? {
+        let entry = entry.context("read memory archive entry")?;
         let path = entry.path();
 
         if path.is_dir() {
@@ -129,7 +129,7 @@ pub(super) fn purge_memory_archives(workspace_dir: &Path, purge_after_days: u32)
         };
 
         if file_date < cutoff {
-            fs::remove_file(&path)?;
+            fs::remove_file(&path).context("remove expired memory archive file")?;
             removed += 1;
         }
     }
@@ -155,8 +155,8 @@ pub(super) fn purge_session_archives(workspace_dir: &Path, purge_after_days: u32
         .unwrap_or(SystemTime::UNIX_EPOCH);
 
     let mut removed = 0_u64;
-    for entry in fs::read_dir(&archive_dir)? {
-        let entry = entry?;
+    for entry in fs::read_dir(&archive_dir).context("read session archive directory")? {
+        let entry = entry.context("read session archive entry")?;
         let path = entry.path();
 
         if path.is_dir() {
@@ -174,7 +174,7 @@ pub(super) fn purge_session_archives(workspace_dir: &Path, purge_after_days: u32
         };
 
         if is_old {
-            fs::remove_file(&path)?;
+            fs::remove_file(&path).context("remove expired session archive file")?;
             removed += 1;
         }
     }
@@ -208,7 +208,7 @@ fn move_to_archive(src: &Path, archive_dir: &Path) -> Result<()> {
     };
 
     let target = unique_archive_target(archive_dir, filename);
-    fs::rename(src, target)?;
+    fs::rename(src, target).context("move file to archive")?;
     Ok(())
 }
 

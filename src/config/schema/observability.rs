@@ -13,3 +13,26 @@ impl Default for ObservabilityConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_observability_config() {
+        let config = ObservabilityConfig::default();
+        assert_eq!(config.backend, "none");
+    }
+
+    #[test]
+    fn observability_config_toml_round_trip() {
+        let original = ObservabilityConfig {
+            backend: "prometheus".into(),
+        };
+
+        let toml = toml::to_string(&original).unwrap();
+        let decoded: ObservabilityConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(decoded.backend, original.backend);
+    }
+}

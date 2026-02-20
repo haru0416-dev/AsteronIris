@@ -1,4 +1,5 @@
 use crate::channels::traits::{Channel, ChannelMessage};
+use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
@@ -99,14 +100,15 @@ impl MatrixChannel {
             .get(&url)
             .header("Authorization", format!("Bearer {}", self.access_token))
             .send()
-            .await?;
+            .await
+            .context("send Matrix whoami request")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
             anyhow::bail!("Matrix whoami failed: {err}");
         }
 
-        let who: WhoAmIResponse = resp.json().await?;
+        let who: WhoAmIResponse = resp.json().await.context("parse Matrix whoami response")?;
         Ok(who.user_id)
     }
 }
@@ -139,7 +141,8 @@ impl Channel for MatrixChannel {
             .header("Authorization", format!("Bearer {}", self.access_token))
             .json(&body)
             .send()
-            .await?;
+            .await
+            .context("send Matrix room message")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -152,7 +155,10 @@ impl Channel for MatrixChannel {
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         tracing::info!("Matrix channel listening on room {}...", self.room_id);
 
-        let my_user_id = self.get_my_user_id().await?;
+        let my_user_id = self
+            .get_my_user_id()
+            .await
+            .context("get Matrix user identity")?;
 
         // Initial sync to get the since token
         let url = format!(
@@ -165,14 +171,18 @@ impl Channel for MatrixChannel {
             .get(&url)
             .header("Authorization", format!("Bearer {}", self.access_token))
             .send()
-            .await?;
+            .await
+            .context("send Matrix initial sync request")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
             anyhow::bail!("Matrix initial sync failed: {err}");
         }
 
-        let sync: SyncResponse = resp.json().await?;
+        let sync: SyncResponse = resp
+            .json()
+            .await
+            .context("parse Matrix initial sync response")?;
         let mut since = sync.next_batch;
 
         // Long-poll loop
@@ -203,7 +213,7 @@ impl Channel for MatrixChannel {
                 continue;
             }
 
-            let sync: SyncResponse = resp.json().await?;
+            let sync: SyncResponse = resp.json().await.context("parse Matrix sync response")?;
             since = sync.next_batch;
 
             // Process events from our room

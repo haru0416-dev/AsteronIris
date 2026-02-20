@@ -1,4 +1,5 @@
 use super::traits::{Channel, ChannelMessage};
+use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -97,7 +98,8 @@ impl Channel for DiscordChannel {
             .header("Authorization", format!("Bot {}", self.bot_token))
             .json(&body)
             .send()
-            .await?;
+            .await
+            .context("send Discord message request")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -121,9 +123,11 @@ impl Channel for DiscordChannel {
             .get("https://discord.com/api/v10/gateway/bot")
             .header("Authorization", format!("Bot {}", self.bot_token))
             .send()
-            .await?
+            .await
+            .context("fetch Discord gateway URL")?
             .json()
-            .await?;
+            .await
+            .context("parse Discord gateway response")?;
 
         let gw_url = gw_resp
             .get("url")
@@ -133,12 +137,19 @@ impl Channel for DiscordChannel {
         let ws_url = format!("{gw_url}/?v=10&encoding=json");
         tracing::info!("Discord: connecting to gateway...");
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .context("connect to Discord gateway WebSocket")?;
         let (mut write, mut read) = ws_stream.split();
 
         // Read Hello (opcode 10)
-        let hello = read.next().await.ok_or(anyhow::anyhow!("No hello"))??;
-        let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())?;
+        let hello = read
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No hello"))
+            .context("read Discord gateway hello message")??;
+        let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())
+            .context("parse Discord gateway hello event")?;
         let heartbeat_interval = hello_data
             .get("d")
             .and_then(|d| d.get("heartbeat_interval"))
@@ -160,7 +171,8 @@ impl Channel for DiscordChannel {
         });
         write
             .send(Message::Text(identify.to_string().into()))
-            .await?;
+            .await
+            .context("send Discord gateway identify")?;
 
         tracing::info!("Discord: connected and identified");
 

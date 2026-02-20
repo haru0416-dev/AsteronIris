@@ -4,6 +4,7 @@ use super::traits::{
     MemorySource, RecallQuery,
 };
 use crate::memory::vector;
+use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Local;
 use rusqlite::{Connection, params};
@@ -91,10 +92,10 @@ impl SqliteMemory {
         let db_path = workspace_dir.join("memory").join("brain.db");
 
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).context("create memory directory")?;
         }
 
-        let conn = Connection::open(&db_path)?;
+        let conn = Connection::open(&db_path).context("open SQLite database")?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -102,7 +103,8 @@ impl SqliteMemory {
              PRAGMA cache_size = -8000;
              PRAGMA mmap_size = 268435456;
              PRAGMA busy_timeout = 5000;",
-        )?;
+        )
+        .context("configure SQLite pragmas")?;
         Self::init_schema(&conn)?;
 
         Ok(Self {
@@ -180,7 +182,8 @@ impl SqliteMemory {
                 .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
             let mut stmt = conn
-                .prepare_cached("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")?;
+                .prepare_cached("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")
+                .context("prepare embedding cache lookup")?;
             let cached: Option<Vec<u8>> = stmt.query_row(params![hash], |row| row.get(0)).ok();
 
             if let Some(bytes) = cached {
@@ -188,7 +191,8 @@ impl SqliteMemory {
                 conn.execute(
                     "UPDATE embedding_cache SET accessed_at = ?1 WHERE content_hash = ?2",
                     params![now, hash],
-                )?;
+                )
+                .context("update embedding cache access time")?;
                 return Ok(Some(vector::bytes_to_vec(&bytes)));
             }
         }
@@ -208,7 +212,7 @@ impl SqliteMemory {
                 "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, created_at, accessed_at)
                  VALUES (?1, ?2, ?3, ?4)",
                 params![hash, bytes, now, now],
-            )?;
+            ).context("insert embedding into cache")?;
 
             // LRU eviction: keep only cache_max entries
             #[allow(clippy::cast_possible_wrap)]
@@ -220,7 +224,8 @@ impl SqliteMemory {
                     LIMIT MAX(0, (SELECT COUNT(*) FROM embedding_cache) - ?1)
                 )",
                 params![max],
-            )?;
+            )
+            .context("evict excess embedding cache entries")?;
         }
 
         Ok(Some(embedding))

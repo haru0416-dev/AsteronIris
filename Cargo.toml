@@ -45,10 +45,10 @@ thiserror = "2"
 
 # URL / HTML parsing (link understanding)
 url     = "2"
-scraper = "0.22"
+scraper = "0.25"
 
 # MIME detection (media pipeline)
-infer = { version = "0.16", optional = true }
+infer = { version = "0.19", optional = true }
 mime  = { version = "0.3", optional = true }
 
 # UUID generation
@@ -66,7 +66,7 @@ hex  = "0.4"
 async-trait = "0.1"
 
 # Memory / persistence
-rusqlite    = { version = "0.38", features = ["bundled"] }
+rusqlite    = { version = "0.38" }
 chrono      = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 cron        = "0.15"
 lancedb     = { version = "0.26.2", default-features = false, optional = true }
@@ -103,7 +103,8 @@ async-stream = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 [features]
-default = ["email", "vector-search", "tui"]
+default = ["email", "vector-search", "tui", "bundled-sqlite"]
+bundled-sqlite = ["rusqlite/bundled"]
 email = ["dep:lettre", "dep:mail-parser"]
 vector-search = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema"]
 tui = ["dep:ratatui", "dep:crossterm"]

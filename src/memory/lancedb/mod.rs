@@ -97,7 +97,7 @@ impl LanceDbInner {
     async fn table(&self) -> anyhow::Result<&Table> {
         self.table
             .get_or_try_init(|| async {
-                let uri = self.db_dir.to_string_lossy().to_string();
+                let uri = self.db_dir.to_string_lossy().into_owned();
                 let conn = lancedb::connect(&uri)
                     .execute()
                     .await

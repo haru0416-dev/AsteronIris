@@ -1,4 +1,5 @@
 use super::SqliteMemory;
+use anyhow::Context;
 use chrono::Local;
 use rusqlite::{Connection, params};
 
@@ -54,7 +55,8 @@ impl SqliteMemory {
                 accessed_at  TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_cache_accessed ON embedding_cache(accessed_at);",
-        )?;
+        )
+        .context("initialize core memory schema")?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS memory_events (
@@ -123,7 +125,8 @@ impl SqliteMemory {
                 requested_by TEXT NOT NULL,
                 executed_at TEXT NOT NULL
             );",
-        )?;
+        )
+        .context("initialize event schema tables")?;
         Self::run_schema_migrations(conn)?;
         Ok(())
     }
@@ -288,7 +291,8 @@ impl SqliteMemory {
              CREATE INDEX IF NOT EXISTS idx_retrieval_docs_retention_expires
                  ON retrieval_docs(retention_expires_at)
                  WHERE retention_expires_at IS NOT NULL;",
-        )?;
+        )
+        .context("create v3 schema indexes")?;
         Ok(())
     }
 
@@ -319,7 +323,8 @@ impl SqliteMemory {
             );
         }
 
-        conn.execute_batch("BEGIN IMMEDIATE")?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .context("begin schema v1 to v2 migration")?;
         let mut migration_sql = String::new();
         if !normalized_columns
             .iter()
@@ -358,7 +363,9 @@ impl SqliteMemory {
         };
 
         match migration_result {
-            Ok(()) => conn.execute_batch("COMMIT")?,
+            Ok(()) => conn
+                .execute_batch("COMMIT")
+                .context("commit schema v1 to v2 migration")?,
             Err(err) => {
                 let _ = conn.execute_batch("ROLLBACK");
                 return Err(err.into());
@@ -412,7 +419,8 @@ impl SqliteMemory {
             );
         }
 
-        conn.execute_batch("BEGIN IMMEDIATE")?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .context("begin schema v2 to v3 migration")?;
         let mut migration_sql = String::new();
         if !memory_event_columns
             .iter()
@@ -528,7 +536,9 @@ impl SqliteMemory {
         };
 
         match migration_result {
-            Ok(()) => conn.execute_batch("COMMIT")?,
+            Ok(()) => conn
+                .execute_batch("COMMIT")
+                .context("commit schema v2 to v3 migration")?,
             Err(err) => {
                 let _ = conn.execute_batch("ROLLBACK");
                 return Err(err.into());
@@ -539,20 +549,26 @@ impl SqliteMemory {
     }
 
     fn table_exists(conn: &Connection, table_name: &str) -> anyhow::Result<bool> {
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-            params![table_name],
-            |row| row.get(0),
-        )?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table_name],
+                |row| row.get(0),
+            )
+            .context("check schema table existence")?;
         Ok(count == 1)
     }
 
     fn table_columns(conn: &Connection, table_name: &str) -> anyhow::Result<Vec<String>> {
-        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table_name})"))?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table_name})"))
+            .context("prepare table info query")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .context("query table column info")?;
         let mut columns = Vec::new();
         for row in rows {
-            columns.push(row?);
+            columns.push(row.context("read column info row")?);
         }
         Ok(columns)
     }
@@ -628,7 +644,8 @@ impl SqliteMemory {
                 version INTEGER NOT NULL,
                 updated_at TEXT NOT NULL
             );",
-        )?;
+        )
+        .context("create schema version table")?;
         Ok(())
     }
 
@@ -652,10 +669,11 @@ impl SqliteMemory {
     }
 
     fn get_schema_version(conn: &Connection) -> anyhow::Result<i64> {
-        let row_count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM memory_schema_version", [], |row| {
+        let row_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_schema_version", [], |row| {
                 row.get(0)
-            })?;
+            })
+            .context("count schema version rows")?;
 
         if row_count != 1 {
             anyhow::bail!(
@@ -663,11 +681,13 @@ impl SqliteMemory {
             );
         }
 
-        let version: i64 = conn.query_row(
-            "SELECT version FROM memory_schema_version WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )?;
+        let version: i64 = conn
+            .query_row(
+                "SELECT version FROM memory_schema_version WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .context("read schema version")?;
         Ok(version)
     }
 
@@ -680,18 +700,22 @@ impl SqliteMemory {
                  version = excluded.version,
                  updated_at = excluded.updated_at",
             params![version, now],
-        )?;
+        )
+        .context("upsert schema version")?;
         Self::set_user_version(conn, version)?;
         Ok(())
     }
 
     fn get_user_version(conn: &Connection) -> anyhow::Result<i64> {
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .context("read PRAGMA user_version")?;
         Ok(version)
     }
 
     fn set_user_version(conn: &Connection, version: i64) -> anyhow::Result<()> {
-        conn.execute_batch(&format!("PRAGMA user_version = {version}"))?;
+        conn.execute_batch(&format!("PRAGMA user_version = {version}"))
+            .context("set PRAGMA user_version")?;
         Ok(())
     }
 }

@@ -19,103 +19,100 @@ fn build_policy(
     }
 }
 
-pub fn build_channels(channels_config: &ChannelsConfig) -> Vec<ChannelEntry> {
+pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
     let mut channels = Vec::with_capacity(8);
 
-    if let Some(ref tg) = channels_config.telegram {
+    if let Some(tg) = channels_config.telegram {
         channels.push(ChannelEntry {
             name: "Telegram",
-            channel: Arc::new(TelegramChannel::new(
-                tg.bot_token.clone(),
-                tg.allowed_users.clone(),
-            )),
-            policy: build_policy(tg.autonomy_level, tg.tool_allowlist.clone()),
+            channel: Arc::new(TelegramChannel::new(tg.bot_token, tg.allowed_users)),
+            policy: build_policy(tg.autonomy_level, tg.tool_allowlist),
         });
     }
 
-    if let Some(ref dc) = channels_config.discord {
+    if let Some(dc) = channels_config.discord {
         channels.push(ChannelEntry {
             name: "Discord",
             channel: Arc::new(DiscordChannel::new(
-                dc.bot_token.clone(),
-                dc.guild_id.clone(),
-                dc.allowed_users.clone(),
+                dc.bot_token,
+                dc.guild_id,
+                dc.allowed_users,
             )),
-            policy: build_policy(dc.autonomy_level, dc.tool_allowlist.clone()),
+            policy: build_policy(dc.autonomy_level, dc.tool_allowlist),
         });
     }
 
-    if let Some(ref sl) = channels_config.slack {
+    if let Some(sl) = channels_config.slack {
         channels.push(ChannelEntry {
             name: "Slack",
             channel: Arc::new(SlackChannel::new(
-                sl.bot_token.clone(),
-                sl.channel_id.clone(),
-                sl.allowed_users.clone(),
+                sl.bot_token,
+                sl.channel_id,
+                sl.allowed_users,
             )),
-            policy: build_policy(sl.autonomy_level, sl.tool_allowlist.clone()),
+            policy: build_policy(sl.autonomy_level, sl.tool_allowlist),
         });
     }
 
-    if let Some(ref im) = channels_config.imessage {
+    if let Some(im) = channels_config.imessage {
         channels.push(ChannelEntry {
             name: "iMessage",
-            channel: Arc::new(IMessageChannel::new(im.allowed_contacts.clone())),
-            policy: build_policy(im.autonomy_level, im.tool_allowlist.clone()),
+            channel: Arc::new(IMessageChannel::new(im.allowed_contacts)),
+            policy: build_policy(im.autonomy_level, im.tool_allowlist),
         });
     }
 
-    if let Some(ref mx) = channels_config.matrix {
+    if let Some(mx) = channels_config.matrix {
         channels.push(ChannelEntry {
             name: "Matrix",
             channel: Arc::new(MatrixChannel::new(
-                mx.homeserver.clone(),
-                mx.access_token.clone(),
-                mx.room_id.clone(),
-                mx.allowed_users.clone(),
+                mx.homeserver,
+                mx.access_token,
+                mx.room_id,
+                mx.allowed_users,
             )),
-            policy: build_policy(mx.autonomy_level, mx.tool_allowlist.clone()),
+            policy: build_policy(mx.autonomy_level, mx.tool_allowlist),
         });
     }
 
-    if let Some(ref wa) = channels_config.whatsapp {
+    if let Some(wa) = channels_config.whatsapp {
         channels.push(ChannelEntry {
             name: "WhatsApp",
             channel: Arc::new(WhatsAppChannel::new(
-                wa.access_token.clone(),
-                wa.phone_number_id.clone(),
-                wa.verify_token.clone(),
-                wa.allowed_numbers.clone(),
+                wa.access_token,
+                wa.phone_number_id,
+                wa.verify_token,
+                wa.allowed_numbers,
             )),
-            policy: build_policy(wa.autonomy_level, wa.tool_allowlist.clone()),
+            policy: build_policy(wa.autonomy_level, wa.tool_allowlist),
         });
     }
 
     #[cfg(feature = "email")]
-    if let Some(ref email_cfg) = channels_config.email {
+    if let Some(email_cfg) = channels_config.email {
         channels.push(ChannelEntry {
             name: "Email",
-            channel: Arc::new(EmailChannel::new(email_cfg.clone())),
+            channel: Arc::new(EmailChannel::new(email_cfg)),
             policy: build_policy(None, None),
         });
     }
 
-    if let Some(ref irc) = channels_config.irc {
+    if let Some(irc) = channels_config.irc {
         channels.push(ChannelEntry {
             name: "IRC",
             channel: Arc::new(IrcChannel::new(
-                irc.server.clone(),
+                irc.server,
                 irc.port,
-                irc.nickname.clone(),
-                irc.username.clone(),
-                irc.channels.clone(),
-                irc.allowed_users.clone(),
-                irc.server_password.clone(),
-                irc.nickserv_password.clone(),
-                irc.sasl_password.clone(),
+                irc.nickname,
+                irc.username,
+                irc.channels,
+                irc.allowed_users,
+                irc.server_password,
+                irc.nickserv_password,
+                irc.sasl_password,
                 irc.verify_tls.unwrap_or(true),
             )),
-            policy: build_policy(irc.autonomy_level, irc.tool_allowlist.clone()),
+            policy: build_policy(irc.autonomy_level, irc.tool_allowlist),
         });
     }
 

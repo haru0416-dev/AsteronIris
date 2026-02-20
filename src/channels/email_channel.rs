@@ -8,7 +8,7 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::unnecessary_map_or)]
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
@@ -201,8 +201,10 @@ impl EmailChannel {
         use tokio_rustls::rustls;
 
         // Connect TCP
-        let tcp = TcpStream::connect((&*config.imap_host, config.imap_port))?;
-        tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
+        let tcp = TcpStream::connect((&*config.imap_host, config.imap_port))
+            .context("connect to IMAP server")?;
+        tcp.set_read_timeout(Some(Duration::from_secs(30)))
+            .context("set IMAP read timeout")?;
 
         // TLS
         let mut root_store = rustls::RootCertStore::empty();
@@ -212,8 +214,10 @@ impl EmailChannel {
                 .with_root_certificates(root_store)
                 .with_no_client_auth(),
         );
-        let server_name: ServerName<'_> = ServerName::try_from(config.imap_host.clone())?;
-        let conn = rustls::ClientConnection::new(tls_config, server_name)?;
+        let server_name: ServerName<'_> = ServerName::try_from(config.imap_host.clone())
+            .context("parse IMAP server name for TLS")?;
+        let conn = rustls::ClientConnection::new(tls_config, server_name)
+            .context("create IMAP TLS connection")?;
         let mut tls = rustls::StreamOwned::new(conn, tcp);
 
         let read_line =
@@ -254,7 +258,7 @@ impl EmailChannel {
         };
 
         // Read greeting
-        let _greeting = read_line(&mut tls)?;
+        let _greeting = read_line(&mut tls).context("read IMAP server greeting")?;
 
         // Login
         let login_resp = send_cmd(
@@ -265,7 +269,8 @@ impl EmailChannel {
                 escape_imap_quoted(&config.username),
                 escape_imap_quoted(&config.password)
             ),
-        )?;
+        )
+        .context("send IMAP login command")?;
         if !login_resp.last().map_or(false, |l| l.contains("OK")) {
             return Err(anyhow!("IMAP login failed"));
         }
@@ -275,10 +280,12 @@ impl EmailChannel {
             &mut tls,
             "A2",
             &format!("SELECT \"{}\"", escape_imap_quoted(&config.imap_folder)),
-        )?;
+        )
+        .context("select IMAP folder")?;
 
         // Search unseen
-        let search_resp = send_cmd(&mut tls, "A3", "SEARCH UNSEEN")?;
+        let search_resp =
+            send_cmd(&mut tls, "A3", "SEARCH UNSEEN").context("search IMAP unseen messages")?;
         let mut uids: Vec<&str> = Vec::new();
         for line in &search_resp {
             if line.starts_with("* SEARCH") {
@@ -296,7 +303,8 @@ impl EmailChannel {
             // Fetch RFC822 with unique tag
             let fetch_tag = format!("A{}", tag_counter);
             tag_counter += 1;
-            let fetch_resp = send_cmd(&mut tls, &fetch_tag, &format!("FETCH {} RFC822", uid))?;
+            let fetch_resp = send_cmd(&mut tls, &fetch_tag, &format!("FETCH {} RFC822", uid))
+                .context("fetch IMAP message body")?;
             // Reconstruct the raw email from the response (skip first and last lines)
             let raw: String = fetch_resp
                 .iter()
@@ -362,7 +370,8 @@ impl EmailChannel {
     fn create_smtp_transport(&self) -> Result<SmtpTransport> {
         let creds = Credentials::new(self.config.username.clone(), self.config.password.clone());
         let transport = if self.config.smtp_tls {
-            SmtpTransport::relay(&self.config.smtp_host)?
+            SmtpTransport::relay(&self.config.smtp_host)
+                .context("create SMTP relay connection")?
                 .port(self.config.smtp_port)
                 .credentials(creds)
                 .build()
@@ -398,13 +407,19 @@ impl Channel for EmailChannel {
         };
 
         let email = Message::builder()
-            .from(self.config.from_address.parse()?)
-            .to(recipient.parse()?)
+            .from(
+                self.config
+                    .from_address
+                    .parse()
+                    .context("parse email from address")?,
+            )
+            .to(recipient.parse().context("parse email recipient address")?)
             .subject(subject)
-            .body(body.to_string())?;
+            .body(body.to_string())
+            .context("build email message body")?;
 
         let transport = self.create_smtp_transport()?;
-        transport.send(&email)?;
+        transport.send(&email).context("send email via SMTP")?;
         info!("Email sent to {}", recipient);
         Ok(())
     }

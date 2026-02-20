@@ -192,4 +192,110 @@ mod tests {
             "edge references unknown node: plan -> verify (known nodes: [plan])"
         );
     }
+
+    #[test]
+    fn dag_contract_accepts_valid_dag() {
+        let dag = DagContract::new(
+            vec![
+                DagNode::new("plan"),
+                DagNode::new("build"),
+                DagNode::new("verify"),
+            ],
+            vec![
+                DagEdge::new("plan", "build"),
+                DagEdge::new("build", "verify"),
+            ],
+        );
+
+        assert!(dag.validate().is_ok());
+    }
+
+    #[test]
+    fn dag_contract_rejects_three_node_cycle() {
+        let dag = DagContract::new(
+            vec![DagNode::new("A"), DagNode::new("B"), DagNode::new("C")],
+            vec![
+                DagEdge::new("A", "B"),
+                DagEdge::new("B", "C"),
+                DagEdge::new("C", "A"),
+            ],
+        );
+
+        let error = dag.validate().unwrap_err().to_string();
+        assert_eq!(error, "cycle detected: A -> B -> C -> A");
+    }
+
+    #[test]
+    fn dag_contract_rejects_self_cycle() {
+        let dag = DagContract::new(vec![DagNode::new("A")], vec![DagEdge::new("A", "A")]);
+
+        let error = dag.validate().unwrap_err().to_string();
+        assert_eq!(error, "cycle detected: A -> A");
+    }
+
+    #[test]
+    fn dag_contract_rejects_cycle_in_subgraph() {
+        let dag = DagContract::new(
+            vec![
+                DagNode::new("A"),
+                DagNode::new("B"),
+                DagNode::new("C"),
+                DagNode::new("D"),
+            ],
+            vec![
+                DagEdge::new("A", "B"),
+                DagEdge::new("B", "C"),
+                DagEdge::new("C", "D"),
+                DagEdge::new("D", "B"),
+            ],
+        );
+
+        let error = dag.validate().unwrap_err().to_string();
+        assert_eq!(error, "cycle detected: B -> C -> D -> B");
+    }
+
+    #[test]
+    fn dag_contract_accepts_empty_graph() {
+        let dag = DagContract::new(Vec::new(), Vec::new());
+
+        assert!(dag.validate().is_ok());
+    }
+
+    #[test]
+    fn dag_contract_accepts_single_node_without_edges() {
+        let dag = DagContract::new(vec![DagNode::new("plan")], Vec::new());
+
+        assert!(dag.validate().is_ok());
+    }
+
+    #[test]
+    fn dag_contract_accepts_disconnected_components() {
+        let dag = DagContract::new(
+            vec![
+                DagNode::new("plan"),
+                DagNode::new("build"),
+                DagNode::new("lint"),
+                DagNode::new("test"),
+            ],
+            vec![DagEdge::new("plan", "build"), DagEdge::new("lint", "test")],
+        );
+
+        assert!(dag.validate().is_ok());
+    }
+
+    #[test]
+    fn dag_contract_rejects_duplicate_node_ids() {
+        let dag = DagContract::new(vec![DagNode::new("plan"), DagNode::new("plan")], Vec::new());
+
+        let error = dag.validate().unwrap_err().to_string();
+        assert_eq!(error, "duplicate node id: plan");
+    }
+
+    #[test]
+    fn dag_contract_rejects_empty_node_id() {
+        let dag = DagContract::new(vec![DagNode::new("")], Vec::new());
+
+        let error = dag.validate().unwrap_err().to_string();
+        assert_eq!(error, "node id cannot be empty");
+    }
 }

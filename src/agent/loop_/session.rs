@@ -23,7 +23,7 @@ use crate::security::{PermissionStore, SecurityPolicy};
 use crate::tools;
 use crate::tools::middleware::ExecutionContext;
 use crate::util::truncate_with_ellipsis;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -266,7 +266,9 @@ pub(super) async fn execute_main_session_turn_with_accounting(
             return Err(anyhow::Error::msg(e));
         }
     }
-    accounting.consume_answer_call()?;
+    accounting
+        .consume_answer_call()
+        .context("consume answer call budget")?;
     let requested_temperature = params.temperature;
     let clamped_temperature = config.autonomy.clamp_temperature(requested_temperature);
     if (requested_temperature - clamped_temperature).abs() > f64::EPSILON {
@@ -301,7 +303,8 @@ pub(super) async fn execute_main_session_turn_with_accounting(
             clamped_temperature,
             &ctx,
         )
-        .await?;
+        .await
+        .context("run agent tool loop")?;
     tracing::debug!(
         entity_id = %ctx.entity_id,
         iterations = tool_result.iterations,
@@ -332,8 +335,11 @@ pub(super) async fn execute_main_session_turn_with_accounting(
     if config.persona.enabled_main_session {
         security
             .consume_action_and_cost(0)
-            .map_err(anyhow::Error::msg)?;
-        accounting.consume_reflect_call()?;
+            .map_err(anyhow::Error::msg)
+            .context("consume rate limit for persona reflect")?;
+        accounting
+            .consume_reflect_call()
+            .context("consume reflect call budget")?;
         if let Err(error) = run_persona_reflect_writeback(
             config,
             Arc::clone(&mem),

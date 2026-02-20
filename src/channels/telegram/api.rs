@@ -1,4 +1,5 @@
 use super::TelegramChannel;
+use anyhow::Context;
 use reqwest::multipart::{Form, Part};
 use std::path::Path;
 
@@ -15,7 +16,9 @@ impl TelegramChannel {
             .and_then(|n| n.to_str())
             .unwrap_or("file");
 
-        let file_bytes = tokio::fs::read(file_path).await?;
+        let file_bytes = tokio::fs::read(file_path)
+            .await
+            .context("read file for Telegram document")?;
         let part = Part::bytes(file_bytes).file_name(file_name.to_string());
 
         let mut form = Form::new()
@@ -31,7 +34,8 @@ impl TelegramChannel {
             .post(self.api_url("sendDocument"))
             .multipart(form)
             .send()
-            .await?;
+            .await
+            .context("send Telegram document")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -65,7 +69,8 @@ impl TelegramChannel {
             .post(self.api_url("sendDocument"))
             .multipart(form)
             .send()
-            .await?;
+            .await
+            .context("send Telegram document bytes")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -88,7 +93,9 @@ impl TelegramChannel {
             .and_then(|n| n.to_str())
             .unwrap_or("photo.jpg");
 
-        let file_bytes = tokio::fs::read(file_path).await?;
+        let file_bytes = tokio::fs::read(file_path)
+            .await
+            .context("read file for Telegram photo")?;
         let part = Part::bytes(file_bytes).file_name(file_name.to_string());
 
         let mut form = Form::new()
@@ -104,7 +111,8 @@ impl TelegramChannel {
             .post(self.api_url("sendPhoto"))
             .multipart(form)
             .send()
-            .await?;
+            .await
+            .context("send Telegram photo")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -138,7 +146,8 @@ impl TelegramChannel {
             .post(self.api_url("sendPhoto"))
             .multipart(form)
             .send()
-            .await?;
+            .await
+            .context("send Telegram photo bytes")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -161,7 +170,9 @@ impl TelegramChannel {
             .and_then(|n| n.to_str())
             .unwrap_or("video.mp4");
 
-        let file_bytes = tokio::fs::read(file_path).await?;
+        let file_bytes = tokio::fs::read(file_path)
+            .await
+            .context("read file for Telegram video")?;
         let part = Part::bytes(file_bytes).file_name(file_name.to_string());
 
         let mut form = Form::new()
@@ -177,7 +188,8 @@ impl TelegramChannel {
             .post(self.api_url("sendVideo"))
             .multipart(form)
             .send()
-            .await?;
+            .await
+            .context("send Telegram video")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -200,7 +212,9 @@ impl TelegramChannel {
             .and_then(|n| n.to_str())
             .unwrap_or("audio.mp3");
 
-        let file_bytes = tokio::fs::read(file_path).await?;
+        let file_bytes = tokio::fs::read(file_path)
+            .await
+            .context("read file for Telegram audio")?;
         let part = Part::bytes(file_bytes).file_name(file_name.to_string());
 
         let mut form = Form::new()
@@ -216,7 +230,8 @@ impl TelegramChannel {
             .post(self.api_url("sendAudio"))
             .multipart(form)
             .send()
-            .await?;
+            .await
+            .context("send Telegram audio")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -239,7 +254,9 @@ impl TelegramChannel {
             .and_then(|n| n.to_str())
             .unwrap_or("voice.ogg");
 
-        let file_bytes = tokio::fs::read(file_path).await?;
+        let file_bytes = tokio::fs::read(file_path)
+            .await
+            .context("read file for Telegram voice")?;
         let part = Part::bytes(file_bytes).file_name(file_name.to_string());
 
         let mut form = Form::new()
@@ -255,7 +272,8 @@ impl TelegramChannel {
             .post(self.api_url("sendVoice"))
             .multipart(form)
             .send()
-            .await?;
+            .await
+            .context("send Telegram voice")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -287,7 +305,8 @@ impl TelegramChannel {
             .post(self.api_url("sendDocument"))
             .json(&body)
             .send()
-            .await?;
+            .await
+            .context("send Telegram document by URL")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -319,7 +338,8 @@ impl TelegramChannel {
             .post(self.api_url("sendPhoto"))
             .json(&body)
             .send()
-            .await?;
+            .await
+            .context("send Telegram photo by URL")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;

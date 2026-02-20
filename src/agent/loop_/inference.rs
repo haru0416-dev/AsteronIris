@@ -3,7 +3,7 @@ use crate::memory::traits::MemoryLayer;
 use crate::memory::{Memory, MemoryInferenceEvent, MemoryProvenance, MemorySource};
 use crate::observability::Observer;
 use crate::observability::traits::AutonomyLifecycleSignal;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 
 fn parse_inference_payload(line: &str) -> Option<(&str, &str)> {
@@ -81,7 +81,9 @@ pub(super) async fn run_post_turn_inference_pass(
         let input = event
             .into_memory_event_input()
             .with_provenance(MemoryProvenance::source_reference(source_class, reference));
-        mem.append_event(input).await?;
+        mem.append_event(input)
+            .await
+            .context("append inferred memory event")?;
     }
 
     Ok(())

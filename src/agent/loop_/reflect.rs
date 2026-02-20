@@ -6,7 +6,7 @@ use crate::providers::Provider;
 use crate::security::writeback_guard::{
     ImmutableStateHeader, SelfTaskWriteback, WritebackGuardVerdict, validate_writeback_payload,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::sync::Arc;
@@ -40,7 +40,9 @@ fn build_reflect_message(
     answer: &str,
 ) -> Result<String> {
     let canonical_json = match canonical_state {
-        Some(state) => serde_json::to_string_pretty(state)?,
+        Some(state) => {
+            serde_json::to_string_pretty(state).context("serialize canonical state header")?
+        }
         None => "null".to_string(),
     };
 
@@ -50,7 +52,7 @@ fn build_reflect_message(
 }
 
 fn parse_reflect_payload(raw: &str) -> Result<Value> {
-    let payload: Value = serde_json::from_str(raw.trim())?;
+    let payload: Value = serde_json::from_str(raw.trim()).context("parse reflect payload JSON")?;
     if !payload.is_object() {
         anyhow::bail!("reflect output must be a JSON object");
     }
@@ -71,8 +73,12 @@ pub(super) async fn run_persona_reflect_writeback(
         config.persona.clone(),
     );
 
-    let canonical_state = persistence.load_backend_canonical().await?;
-    let reflect_message = build_reflect_message(canonical_state.as_ref(), user_message, answer)?;
+    let canonical_state = persistence
+        .load_backend_canonical()
+        .await
+        .context("load canonical persona state")?;
+    let reflect_message = build_reflect_message(canonical_state.as_ref(), user_message, answer)
+        .context("build persona reflect message")?;
 
     let reflect_raw = provider
         .chat_with_system(
@@ -81,8 +87,10 @@ pub(super) async fn run_persona_reflect_writeback(
             model_name,
             0.0,
         )
-        .await?;
-    let reflect_payload = parse_reflect_payload(&reflect_raw)?;
+        .await
+        .context("call reflect provider for persona writeback")?;
+    let reflect_payload =
+        parse_reflect_payload(&reflect_raw).context("parse persona reflect payload")?;
 
     let Some(previous_state) = canonical_state else {
         tracing::warn!("persona reflect produced payload but canonical state header is missing");
@@ -115,10 +123,12 @@ pub(super) async fn run_persona_reflect_writeback(
         last_updated_at: accepted.state_header.last_updated_at,
     };
 
-    StateHeaderV1::validate_writeback_candidate(&previous_state, &candidate, &config.persona)?;
+    StateHeaderV1::validate_writeback_candidate(&previous_state, &candidate, &config.persona)
+        .context("validate persona writeback candidate")?;
     persistence
         .persist_backend_canonical_and_sync_mirror(&candidate)
-        .await?;
+        .await
+        .context("persist canonical persona state")?;
 
     for (idx, entry) in accepted.memory_append.iter().enumerate() {
         let input = MemoryEventInput::new(
@@ -132,7 +142,9 @@ pub(super) async fn run_persona_reflect_writeback(
         .with_confidence(0.9)
         .with_importance(0.8)
         .with_occurred_at(candidate.last_updated_at.clone());
-        mem.append_event(input).await?;
+        mem.append_event(input)
+            .await
+            .context("append persona writeback memory event")?;
     }
 
     enqueue_reflect_self_tasks(config, &accepted.self_tasks);

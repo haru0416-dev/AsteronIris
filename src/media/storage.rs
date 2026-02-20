@@ -56,7 +56,7 @@ impl MediaStore {
             media_type,
             filename: filename.map(String::from),
             size_bytes: data.len() as u64,
-            storage_path: storage_path.to_string_lossy().to_string(),
+            storage_path: storage_path.to_string_lossy().into_owned(),
             created_at,
         };
         self.persist_metadata(&media_file)?;
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn store_and_retrieve_roundtrip() {
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().to_string_lossy().to_string();
+        let workspace_dir = temp_dir.path().to_string_lossy().into_owned();
         let store = MediaStore::new(&MediaConfig::default(), &workspace_dir).unwrap();
 
         let data = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00];
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn store_rejects_oversized_file() {
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().to_string_lossy().to_string();
+        let workspace_dir = temp_dir.path().to_string_lossy().into_owned();
         let config = MediaConfig {
             max_file_size_mb: 1,
             ..MediaConfig::default()
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn store_creates_file_on_disk() {
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().to_string_lossy().to_string();
+        let workspace_dir = temp_dir.path().to_string_lossy().into_owned();
         let store = MediaStore::new(&MediaConfig::default(), &workspace_dir).unwrap();
 
         let data = b"hello";
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn retrieve_errors_for_nonexistent_id() {
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().to_string_lossy().to_string();
+        let workspace_dir = temp_dir.path().to_string_lossy().into_owned();
         let store = MediaStore::new(&MediaConfig::default(), &workspace_dir).unwrap();
 
         let result = store.retrieve("missing-id");

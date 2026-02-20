@@ -689,3 +689,163 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.previous {
+                unsafe {
+                    std::env::set_var(self.key, value);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn detect_locale_uses_expected_priority_order() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        let _lang = EnvVarGuard::set("LANG", "pt_BR.UTF-8");
+        let _lc_messages = EnvVarGuard::set("LC_MESSAGES", "es_ES.UTF-8");
+
+        let _asteroniris_lang = EnvVarGuard::set("ASTERONIRIS_LANG", "ja_JP.UTF-8");
+        assert_eq!(detect_locale("fr_FR"), "ja");
+        drop(_asteroniris_lang);
+
+        assert_eq!(detect_locale("fr_FR"), "fr");
+        assert_eq!(detect_locale("en"), "pt");
+
+        let _lang_unset = EnvVarGuard::unset("LANG");
+        assert_eq!(detect_locale("en"), "es");
+
+        let _lc_messages_unset = EnvVarGuard::unset("LC_MESSAGES");
+        assert_eq!(detect_locale("en"), "en");
+    }
+
+    #[test]
+    fn normalise_locale_handles_common_formats() {
+        assert_eq!(normalise_locale("ja_JP.UTF-8"), "ja");
+        assert_eq!(normalise_locale("en_US"), "en");
+        assert_eq!(normalise_locale("en"), "en");
+        assert_eq!(normalise_locale(""), "");
+    }
+
+    #[test]
+    fn needs_onboarding_is_true_without_api_key_or_provider() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _asteroniris_api_key = EnvVarGuard::unset("ASTERONIRIS_API_KEY");
+        let _api_key = EnvVarGuard::unset("API_KEY");
+
+        let config = Config {
+            api_key: None,
+            default_provider: None,
+            ..Config::default()
+        };
+
+        assert!(config.needs_onboarding());
+    }
+
+    #[test]
+    fn needs_onboarding_is_false_with_configured_api_key() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _asteroniris_api_key = EnvVarGuard::unset("ASTERONIRIS_API_KEY");
+        let _api_key = EnvVarGuard::unset("API_KEY");
+
+        let config = Config {
+            api_key: Some("sk-configured".to_string()),
+            default_provider: None,
+            ..Config::default()
+        };
+
+        assert!(!config.needs_onboarding());
+    }
+
+    #[test]
+    fn needs_onboarding_is_false_with_env_api_key() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _asteroniris_api_key = EnvVarGuard::set("ASTERONIRIS_API_KEY", "sk-env");
+        let _api_key = EnvVarGuard::unset("API_KEY");
+
+        let config = Config {
+            api_key: None,
+            default_provider: None,
+            ..Config::default()
+        };
+
+        assert!(!config.needs_onboarding());
+    }
+
+    #[test]
+    fn default_config_has_reasonable_values() {
+        let config = Config::default();
+
+        assert_eq!(config.api_key, None);
+        assert!(config.default_provider.is_some());
+        assert!(config.default_model.is_some());
+        assert!((0.0..=2.0).contains(&config.default_temperature));
+        assert!(config.workspace_dir.ends_with("workspace"));
+        assert!(config.config_path.ends_with("config.toml"));
+        assert_eq!(config.locale, "en");
+    }
+
+    #[test]
+    fn config_toml_round_trip_preserves_serialized_fields() {
+        let config = Config {
+            api_key: Some("sk-test".into()),
+            default_provider: Some("openrouter".into()),
+            default_model: Some("anthropic/claude-sonnet-4-20250514".into()),
+            default_temperature: 1.1,
+            locale: "ja".into(),
+            ..Config::default()
+        };
+
+        let serialized = toml::to_string(&config).unwrap();
+        let deserialized: Config = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.api_key, config.api_key);
+        assert_eq!(deserialized.default_provider, config.default_provider);
+        assert_eq!(deserialized.default_model, config.default_model);
+        assert_eq!(deserialized.default_temperature, config.default_temperature);
+        assert_eq!(deserialized.locale, config.locale);
+        assert_eq!(deserialized.autonomy.level, config.autonomy.level);
+        assert_eq!(
+            deserialized.autonomy.external_action_execution,
+            config.autonomy.external_action_execution
+        );
+        assert_eq!(deserialized.workspace_dir, PathBuf::new());
+        assert_eq!(deserialized.config_path, PathBuf::new());
+    }
+}

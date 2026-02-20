@@ -41,7 +41,7 @@ struct ChannelRuntime {
 }
 
 pub async fn doctor_channels(config: Arc<Config>) -> Result<()> {
-    let channels = factory::build_channels(&config.channels_config);
+    let channels = factory::build_channels(config.channels_config.clone());
 
     if channels.is_empty() {
         println!("{}", t!("channels.no_channels_doctor"));
@@ -166,7 +166,7 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
 
     let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
     let mut channel_policies = HashMap::new();
-    for entry in factory::build_channels(&config.channels_config) {
+    for entry in factory::build_channels(config.channels_config.clone()) {
         channel_policies.insert(entry.channel.name().to_string(), entry.policy);
         channels.push(entry.channel);
     }
