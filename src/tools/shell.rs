@@ -1,8 +1,7 @@
 use super::traits::{Tool, ToolResult};
-use crate::security::SecurityPolicy;
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use serde_json::json;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Maximum shell command execution time before kill.
@@ -16,13 +15,11 @@ const SAFE_ENV_VARS: &[&str] = &[
 ];
 
 /// Shell command execution tool with sandboxing
-pub struct ShellTool {
-    security: Arc<SecurityPolicy>,
-}
+pub struct ShellTool;
 
 impl ShellTool {
-    pub fn new(security: Arc<SecurityPolicy>) -> Self {
-        Self { security }
+    pub const fn new() -> Self {
+        Self
     }
 }
 
@@ -49,28 +46,15 @@ impl Tool for ShellTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let command = args
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' parameter"))?;
-
-        // Security check: validate command against allowlist
-        if !self.security.is_command_allowed(command) {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("blocked by security policy: command not allowed".to_string()),
-            });
-        }
-
-        if let Err(policy_error) = self.security.consume_action_and_cost(0) {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(policy_error.to_string()),
-            });
-        }
 
         // Execute with timeout to prevent hanging commands.
         // Clear the environment to prevent leaking API keys and other secrets
@@ -78,7 +62,7 @@ impl Tool for ShellTool {
         let mut cmd = tokio::process::Command::new("sh");
         cmd.arg("-c")
             .arg(command)
-            .current_dir(&self.security.workspace_dir)
+            .current_dir(&ctx.workspace_dir)
             .env_clear();
 
         for var in SAFE_ENV_VARS {
@@ -135,6 +119,8 @@ impl Tool for ShellTool {
 mod tests {
     use super::*;
     use crate::security::{AutonomyLevel, SecurityPolicy};
+    use crate::tools::middleware::ExecutionContext;
+    use std::sync::Arc;
 
     fn test_security(autonomy: AutonomyLevel) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
@@ -146,19 +132,19 @@ mod tests {
 
     #[test]
     fn shell_tool_name() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
+        let tool = ShellTool::new();
         assert_eq!(tool.name(), "shell");
     }
 
     #[test]
     fn shell_tool_description() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
+        let tool = ShellTool::new();
         assert!(!tool.description().is_empty());
     }
 
     #[test]
     fn shell_tool_schema_has_command() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
+        let tool = ShellTool::new();
         let schema = tool.parameters_schema();
         assert!(schema["properties"]["command"].is_object());
         assert!(
@@ -171,9 +157,10 @@ mod tests {
 
     #[tokio::test]
     async fn shell_executes_allowed_command() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
+        let tool = ShellTool::new();
+        let ctx = ExecutionContext::test_default(test_security(AutonomyLevel::Supervised));
         let result = tool
-            .execute(json!({"command": "echo hello"}))
+            .execute(json!({"command": "echo hello"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
@@ -182,41 +169,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shell_blocks_disallowed_command() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
-        let result = tool.execute(json!({"command": "rm -rf /"})).await.unwrap();
-        assert!(!result.success);
-        assert!(result.error.as_ref().unwrap().contains("not allowed"));
-    }
-
-    #[tokio::test]
-    async fn shell_blocks_readonly() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::ReadOnly));
-        let result = tool.execute(json!({"command": "ls"})).await.unwrap();
-        assert!(!result.success);
-        assert!(result.error.as_ref().unwrap().contains("not allowed"));
-    }
-
-    #[tokio::test]
     async fn shell_missing_command_param() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
-        let result = tool.execute(json!({})).await;
+        let tool = ShellTool::new();
+        let ctx = ExecutionContext::test_default(test_security(AutonomyLevel::Supervised));
+        let result = tool.execute(json!({}), &ctx).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("command"));
     }
 
     #[tokio::test]
     async fn shell_wrong_type_param() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
-        let result = tool.execute(json!({"command": 123})).await;
+        let tool = ShellTool::new();
+        let ctx = ExecutionContext::test_default(test_security(AutonomyLevel::Supervised));
+        let result = tool.execute(json!({"command": 123}), &ctx).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn shell_captures_exit_code() {
-        let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
+        let tool = ShellTool::new();
+        let ctx = ExecutionContext::test_default(test_security(AutonomyLevel::Supervised));
         let result = tool
-            .execute(json!({"command": "ls /nonexistent_dir_xyz"}))
+            .execute(json!({"command": "ls /nonexistent_dir_xyz"}), &ctx)
             .await
             .unwrap();
         assert!(!result.success);
@@ -227,15 +201,6 @@ mod tests {
             autonomy: AutonomyLevel::Supervised,
             workspace_dir: std::env::temp_dir(),
             allowed_commands: vec!["env".into(), "echo".into()],
-            ..SecurityPolicy::default()
-        })
-    }
-
-    fn test_security_with_action_limit(limit: u32) -> Arc<SecurityPolicy> {
-        Arc::new(SecurityPolicy {
-            autonomy: AutonomyLevel::Supervised,
-            workspace_dir: std::env::temp_dir(),
-            max_actions_per_hour: limit,
             ..SecurityPolicy::default()
         })
     }
@@ -275,8 +240,9 @@ mod tests {
         let _g1 = EnvGuard::set("API_KEY", "sk-test-secret-12345");
         let _g2 = EnvGuard::set("ASTERONIRIS_API_KEY", "sk-test-secret-67890");
 
-        let tool = ShellTool::new(test_security_with_env_cmd());
-        let result = tool.execute(json!({"command": "env"})).await.unwrap();
+        let tool = ShellTool::new();
+        let ctx = ExecutionContext::test_default(test_security_with_env_cmd());
+        let result = tool.execute(json!({"command": "env"}), &ctx).await.unwrap();
         assert!(result.success);
         assert!(
             !result.output.contains("sk-test-secret-12345"),
@@ -290,10 +256,11 @@ mod tests {
 
     #[tokio::test]
     async fn shell_preserves_path_and_home() {
-        let tool = ShellTool::new(test_security_with_env_cmd());
+        let tool = ShellTool::new();
+        let ctx = ExecutionContext::test_default(test_security_with_env_cmd());
 
         let result = tool
-            .execute(json!({"command": "echo $HOME"}))
+            .execute(json!({"command": "echo $HOME"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
@@ -303,29 +270,13 @@ mod tests {
         );
 
         let result = tool
-            .execute(json!({"command": "echo $PATH"}))
+            .execute(json!({"command": "echo $PATH"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
         assert!(
             !result.output.trim().is_empty(),
             "PATH should be available in shell"
-        );
-    }
-
-    #[tokio::test]
-    async fn shell_policy_blocks_when_action_limit_is_exhausted() {
-        let tool = ShellTool::new(test_security_with_action_limit(0));
-        let result = tool
-            .execute(json!({"command": "echo should-not-run"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .is_some_and(|msg| msg.contains("action limit"))
         );
     }
 }

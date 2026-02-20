@@ -1,20 +1,17 @@
 use super::traits::{Tool, ToolResult};
-use crate::security::SecurityPolicy;
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use serde_json::json;
-use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Read file contents with path sandboxing
-pub struct FileReadTool {
-    security: Arc<SecurityPolicy>,
-}
+pub struct FileReadTool;
 
 impl FileReadTool {
-    pub fn new(security: Arc<SecurityPolicy>) -> Self {
-        Self { security }
+    pub const fn new() -> Self {
+        Self
     }
 }
 
@@ -41,22 +38,17 @@ impl Tool for FileReadTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let path = args
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
 
-        // Security check: validate path is within workspace
-        if !self.security.is_path_allowed(path) {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Path not allowed by security policy: {path}")),
-            });
-        }
-
-        let full_path = self.security.workspace_dir.join(path);
+        let full_path = ctx.workspace_dir.join(path);
 
         // Resolve path before reading to block symlink escapes.
         let resolved_path = match tokio::fs::canonicalize(&full_path).await {
@@ -69,17 +61,6 @@ impl Tool for FileReadTool {
                 });
             }
         };
-
-        if !self.security.is_resolved_path_allowed(&resolved_path) {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Resolved path escapes workspace: {}",
-                    resolved_path.display()
-                )),
-            });
-        }
 
         let mut file = match tokio::fs::File::open(&resolved_path).await {
             Ok(file) => file,
@@ -143,6 +124,8 @@ impl Tool for FileReadTool {
 mod tests {
     use super::*;
     use crate::security::{AutonomyLevel, SecurityPolicy};
+    use crate::tools::middleware::ExecutionContext;
+    use std::sync::Arc;
 
     fn test_security(workspace: std::path::PathBuf) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
@@ -154,13 +137,13 @@ mod tests {
 
     #[test]
     fn file_read_name() {
-        let tool = FileReadTool::new(test_security(std::env::temp_dir()));
+        let tool = FileReadTool::new();
         assert_eq!(tool.name(), "file_read");
     }
 
     #[test]
     fn file_read_schema_has_path() {
-        let tool = FileReadTool::new(test_security(std::env::temp_dir()));
+        let tool = FileReadTool::new();
         let schema = tool.parameters_schema();
         assert!(schema["properties"]["path"].is_object());
         assert!(
@@ -180,8 +163,12 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = FileReadTool::new(test_security(dir.clone()));
-        let result = tool.execute(json!({"path": "test.txt"})).await.unwrap();
+        let tool = FileReadTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let result = tool
+            .execute(json!({"path": "test.txt"}), &ctx)
+            .await
+            .unwrap();
         assert!(result.success);
         assert_eq!(result.output, "hello world");
         assert!(result.error.is_none());
@@ -195,8 +182,12 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
-        let tool = FileReadTool::new(test_security(dir.clone()));
-        let result = tool.execute(json!({"path": "nope.txt"})).await.unwrap();
+        let tool = FileReadTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let result = tool
+            .execute(json!({"path": "nope.txt"}), &ctx)
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("Failed to resolve"));
 
@@ -204,34 +195,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_read_blocks_path_traversal() {
-        let dir = std::env::temp_dir().join("asteroniris_test_file_read_traversal");
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-
-        let tool = FileReadTool::new(test_security(dir.clone()));
-        let result = tool
-            .execute(json!({"path": "../../../etc/passwd"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.as_ref().unwrap().contains("not allowed"));
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-    }
-
-    #[tokio::test]
-    async fn file_read_blocks_absolute_path() {
-        let tool = FileReadTool::new(test_security(std::env::temp_dir()));
-        let result = tool.execute(json!({"path": "/etc/passwd"})).await.unwrap();
-        assert!(!result.success);
-        assert!(result.error.as_ref().unwrap().contains("not allowed"));
-    }
-
-    #[tokio::test]
     async fn file_read_missing_path_param() {
-        let tool = FileReadTool::new(test_security(std::env::temp_dir()));
-        let result = tool.execute(json!({})).await;
+        let tool = FileReadTool::new();
+        let ctx = ExecutionContext::test_default(test_security(std::env::temp_dir()));
+        let result = tool.execute(json!({}), &ctx).await;
         assert!(result.is_err());
     }
 
@@ -242,8 +209,12 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("empty.txt"), "").await.unwrap();
 
-        let tool = FileReadTool::new(test_security(dir.clone()));
-        let result = tool.execute(json!({"path": "empty.txt"})).await.unwrap();
+        let tool = FileReadTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let result = tool
+            .execute(json!({"path": "empty.txt"}), &ctx)
+            .await
+            .unwrap();
         assert!(result.success);
         assert_eq!(result.output, "");
 
@@ -261,49 +232,16 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = FileReadTool::new(test_security(dir.clone()));
+        let tool = FileReadTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
         let result = tool
-            .execute(json!({"path": "sub/dir/deep.txt"}))
+            .execute(json!({"path": "sub/dir/deep.txt"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
         assert_eq!(result.output, "deep content");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
-    }
-
-    #[tokio::test]
-    #[cfg(unix)]
-    async fn file_read_blocks_symlink_escape() {
-        use std::os::unix::fs::symlink;
-
-        let root = std::env::temp_dir().join("asteroniris_test_file_read_symlink_escape");
-        let workspace = root.join("workspace");
-        let outside = root.join("outside");
-
-        let _ = tokio::fs::remove_dir_all(&root).await;
-        tokio::fs::create_dir_all(&workspace).await.unwrap();
-        tokio::fs::create_dir_all(&outside).await.unwrap();
-
-        tokio::fs::write(outside.join("secret.txt"), "outside workspace")
-            .await
-            .unwrap();
-
-        symlink(outside.join("secret.txt"), workspace.join("escape.txt")).unwrap();
-
-        let tool = FileReadTool::new(test_security(workspace.clone()));
-        let result = tool.execute(json!({"path": "escape.txt"})).await.unwrap();
-
-        assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("escapes workspace")
-        );
-
-        let _ = tokio::fs::remove_dir_all(&root).await;
     }
 
     #[tokio::test]
@@ -316,8 +254,12 @@ mod tests {
         let big = vec![b'x'; 10 * 1024 * 1024 + 1];
         tokio::fs::write(dir.join("huge.bin"), &big).await.unwrap();
 
-        let tool = FileReadTool::new(test_security(dir.clone()));
-        let result = tool.execute(json!({"path": "huge.bin"})).await.unwrap();
+        let tool = FileReadTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let result = tool
+            .execute(json!({"path": "huge.bin"}), &ctx)
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("File too large"));
 

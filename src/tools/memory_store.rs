@@ -3,6 +3,7 @@ use crate::memory::traits::MemoryLayer;
 use crate::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -175,7 +176,11 @@ impl Tool for MemoryStoreTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let entity_id = args
             .get("entity_id")
             .and_then(|v| v.as_str())
@@ -264,6 +269,7 @@ impl Tool for MemoryStoreTool {
 mod tests {
     use super::*;
     use crate::memory::SqliteMemory;
+    use crate::tools::middleware::ExecutionContext;
     use tempfile::TempDir;
 
     fn test_mem() -> (TempDir, Arc<dyn Memory>) {
@@ -287,8 +293,13 @@ mod tests {
     async fn store_core() {
         let (_tmp, mem) = test_mem();
         let tool = MemoryStoreTool::new(mem.clone());
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"entity_id": "lang", "slot_key": "note", "value": "Prefers Rust"}))
+            .execute(
+                json!({"entity_id": "lang", "slot_key": "note", "value": "Prefers Rust"}),
+                &ctx,
+            )
             .await
             .unwrap();
         assert!(result.success);
@@ -303,8 +314,13 @@ mod tests {
     async fn store_with_category() {
         let (_tmp, mem) = test_mem();
         let tool = MemoryStoreTool::new(mem.clone());
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"entity_id": "note", "slot_key": "daily", "value": "Fixed bug"}))
+            .execute(
+                json!({"entity_id": "note", "slot_key": "daily", "value": "Fixed bug"}),
+                &ctx,
+            )
             .await
             .unwrap();
         assert!(result.success);
@@ -314,8 +330,10 @@ mod tests {
     async fn store_missing_key() {
         let (_tmp, mem) = test_mem();
         let tool = MemoryStoreTool::new(mem);
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"slot_key": "x", "value": "no key"}))
+            .execute(json!({"slot_key": "x", "value": "no key"}), &ctx)
             .await;
         assert!(result.is_err());
     }
@@ -324,8 +342,10 @@ mod tests {
     async fn store_missing_content() {
         let (_tmp, mem) = test_mem();
         let tool = MemoryStoreTool::new(mem);
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"entity_id": "no_content", "slot_key": "x"}))
+            .execute(json!({"entity_id": "no_content", "slot_key": "x"}), &ctx)
             .await;
         assert!(result.is_err());
     }

@@ -1,19 +1,16 @@
 use super::traits::{Tool, ToolResult};
-use crate::security::SecurityPolicy;
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use serde_json::json;
-use std::sync::Arc;
 
 /// Open approved HTTPS URLs in Brave Browser (no scraping, no DOM automation).
 pub struct BrowserOpenTool {
-    security: Arc<SecurityPolicy>,
     allowed_domains: Vec<String>,
 }
 
 impl BrowserOpenTool {
-    pub fn new(security: Arc<SecurityPolicy>, allowed_domains: Vec<String>) -> Self {
+    pub fn new(allowed_domains: Vec<String>) -> Self {
         Self {
-            security,
             allowed_domains: normalize_allowed_domains(allowed_domains),
         }
     }
@@ -76,27 +73,15 @@ impl Tool for BrowserOpenTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let url = args
             .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?;
-
-        if !self.security.can_act() {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Action blocked: autonomy is read-only".into()),
-            });
-        }
-
-        if !self.security.record_action() {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Action blocked: rate limit exceeded".into()),
-            });
-        }
 
         let url = match self.validate_url(url) {
             Ok(v) => v,
@@ -308,17 +293,9 @@ fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::{AutonomyLevel, SecurityPolicy};
 
     fn test_tool(allowed_domains: Vec<&str>) -> BrowserOpenTool {
-        let security = Arc::new(SecurityPolicy {
-            autonomy: AutonomyLevel::Supervised,
-            ..SecurityPolicy::default()
-        });
-        BrowserOpenTool::new(
-            security,
-            allowed_domains.into_iter().map(String::from).collect(),
-        )
+        BrowserOpenTool::new(allowed_domains.into_iter().map(String::from).collect())
     }
 
     #[test]
@@ -412,8 +389,7 @@ mod tests {
 
     #[test]
     fn validate_requires_allowlist() {
-        let security = Arc::new(SecurityPolicy::default());
-        let tool = BrowserOpenTool::new(security, vec![]);
+        let tool = BrowserOpenTool::new(vec![]);
         let err = tool
             .validate_url("https://example.com")
             .unwrap_err()
@@ -431,35 +407,5 @@ mod tests {
         assert_eq!(parse_ipv4("1.2.3"), None);
         assert_eq!(parse_ipv4("1.2.3.999"), None);
         assert_eq!(parse_ipv4("not-an-ip"), None);
-    }
-
-    #[tokio::test]
-    async fn execute_blocks_readonly_mode() {
-        let security = Arc::new(SecurityPolicy {
-            autonomy: AutonomyLevel::ReadOnly,
-            ..SecurityPolicy::default()
-        });
-        let tool = BrowserOpenTool::new(security, vec!["example.com".into()]);
-        let result = tool
-            .execute(json!({"url": "https://example.com"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("read-only"));
-    }
-
-    #[tokio::test]
-    async fn execute_blocks_when_rate_limited() {
-        let security = Arc::new(SecurityPolicy {
-            max_actions_per_hour: 0,
-            ..SecurityPolicy::default()
-        });
-        let tool = BrowserOpenTool::new(security, vec!["example.com".into()]);
-        let result = tool
-            .execute(json!({"url": "https://example.com"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("rate limit"));
     }
 }

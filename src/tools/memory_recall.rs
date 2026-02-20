@@ -1,6 +1,7 @@
 use super::traits::{Tool, ToolResult};
 use crate::memory::{Memory, RecallQuery};
 use crate::security::policy::TenantPolicyContext;
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use serde_json::json;
 use std::fmt::Write;
@@ -118,7 +119,11 @@ impl Tool for MemoryRecallTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let request = match Self::build_recall_request(&args) {
             Ok(request) => request,
             Err(error) => {
@@ -170,6 +175,7 @@ mod tests {
     use crate::memory::{
         MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
     };
+    use crate::tools::middleware::ExecutionContext;
     use tempfile::TempDir;
 
     fn seeded_mem() -> (TempDir, Arc<dyn Memory>) {
@@ -182,8 +188,10 @@ mod tests {
     async fn recall_empty() {
         let (_tmp, mem) = seeded_mem();
         let tool = MemoryRecallTool::new(mem);
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"entity_id": "default", "query": "anything"}))
+            .execute(json!({"entity_id": "default", "query": "anything"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
@@ -223,8 +231,10 @@ mod tests {
         .unwrap();
 
         let tool = MemoryRecallTool::new(mem);
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"entity_id": "default", "query": "Rust"}))
+            .execute(json!({"entity_id": "default", "query": "Rust"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
@@ -253,8 +263,13 @@ mod tests {
         }
 
         let tool = MemoryRecallTool::new(mem);
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"entity_id": "default", "query": "Rust", "limit": 3}))
+            .execute(
+                json!({"entity_id": "default", "query": "Rust", "limit": 3}),
+                &ctx,
+            )
             .await
             .unwrap();
         assert!(result.success);
@@ -270,7 +285,9 @@ mod tests {
     async fn recall_missing_query() {
         let (_tmp, mem) = seeded_mem();
         let tool = MemoryRecallTool::new(mem);
-        let result = tool.execute(json!({})).await;
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
+        let result = tool.execute(json!({}), &ctx).await;
         assert!(result.is_err());
     }
 
@@ -286,16 +303,21 @@ mod tests {
     async fn recall_rejects_default_scope_when_tenant_mode_enabled() {
         let (_tmp, mem) = seeded_mem();
         let tool = MemoryRecallTool::new(mem);
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
 
         let result = tool
-            .execute(json!({
-                "entity_id": "default",
-                "query": "anything",
-                "policy_context": {
-                    "tenant_mode_enabled": true,
-                    "tenant_id": "tenant-alpha"
-                }
-            }))
+            .execute(
+                json!({
+                    "entity_id": "default",
+                    "query": "anything",
+                    "policy_context": {
+                        "tenant_mode_enabled": true,
+                        "tenant_id": "tenant-alpha"
+                    }
+                }),
+                &ctx,
+            )
             .await
             .unwrap();
 

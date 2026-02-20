@@ -1,6 +1,7 @@
 use super::traits::{Tool, ToolResult};
 use crate::memory::{ForgetMode, Memory};
 use crate::security::policy::TenantPolicyContext;
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -103,7 +104,11 @@ impl Tool for MemoryForgetTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let key = args
             .get("slot_key")
             .or_else(|| args.get("key"))
@@ -160,6 +165,7 @@ mod tests {
     use crate::memory::{
         MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
     };
+    use crate::tools::middleware::ExecutionContext;
     use tempfile::TempDir;
 
     fn test_mem() -> (TempDir, Arc<dyn Memory>) {
@@ -195,8 +201,13 @@ mod tests {
         .unwrap();
 
         let tool = MemoryForgetTool::new(mem.clone());
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"entity_id": "default", "slot_key": "temp", "mode": "hard"}))
+            .execute(
+                json!({"entity_id": "default", "slot_key": "temp", "mode": "hard"}),
+                &ctx,
+            )
             .await
             .unwrap();
         assert!(result.success);
@@ -209,8 +220,10 @@ mod tests {
     async fn forget_nonexistent() {
         let (_tmp, mem) = test_mem();
         let tool = MemoryForgetTool::new(mem);
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
-            .execute(json!({"entity_id": "default", "slot_key": "nope"}))
+            .execute(json!({"entity_id": "default", "slot_key": "nope"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
@@ -221,7 +234,9 @@ mod tests {
     async fn forget_missing_key() {
         let (_tmp, mem) = test_mem();
         let tool = MemoryForgetTool::new(mem);
-        let result = tool.execute(json!({"entity_id": "default"})).await;
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
+        let result = tool.execute(json!({"entity_id": "default"}), &ctx).await;
         assert!(result.is_err());
     }
 }

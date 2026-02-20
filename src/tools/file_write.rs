@@ -1,17 +1,14 @@
 use super::traits::{Tool, ToolResult};
-use crate::security::SecurityPolicy;
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use serde_json::json;
-use std::sync::Arc;
 
 /// Write file contents with path sandboxing
-pub struct FileWriteTool {
-    security: Arc<SecurityPolicy>,
-}
+pub struct FileWriteTool;
 
 impl FileWriteTool {
-    pub fn new(security: Arc<SecurityPolicy>) -> Self {
-        Self { security }
+    pub const fn new() -> Self {
+        Self
     }
 }
 
@@ -42,7 +39,11 @@ impl Tool for FileWriteTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let path = args
             .get("path")
             .and_then(|v| v.as_str())
@@ -53,16 +54,7 @@ impl Tool for FileWriteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'content' parameter"))?;
 
-        // Security check: validate path is within workspace
-        if !self.security.is_path_allowed(path) {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Path not allowed by security policy: {path}")),
-            });
-        }
-
-        let full_path = self.security.workspace_dir.join(path);
+        let full_path = ctx.workspace_dir.join(path);
 
         let Some(parent) = full_path.parent() else {
             return Ok(ToolResult {
@@ -109,17 +101,6 @@ impl Tool for FileWriteTool {
             }
         };
 
-        if !self.security.is_resolved_path_allowed(&resolved_parent) {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Resolved path escapes workspace: {}",
-                    resolved_parent.display()
-                )),
-            });
-        }
-
         let Some(file_name) = full_path.file_name() else {
             return Ok(ToolResult {
                 success: false,
@@ -163,6 +144,8 @@ impl Tool for FileWriteTool {
 mod tests {
     use super::*;
     use crate::security::{AutonomyLevel, SecurityPolicy};
+    use crate::tools::middleware::ExecutionContext;
+    use std::sync::Arc;
 
     fn test_security(workspace: std::path::PathBuf) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
@@ -174,13 +157,13 @@ mod tests {
 
     #[test]
     fn file_write_name() {
-        let tool = FileWriteTool::new(test_security(std::env::temp_dir()));
+        let tool = FileWriteTool::new();
         assert_eq!(tool.name(), "file_write");
     }
 
     #[test]
     fn file_write_schema_has_path_and_content() {
-        let tool = FileWriteTool::new(test_security(std::env::temp_dir()));
+        let tool = FileWriteTool::new();
         let schema = tool.parameters_schema();
         assert!(schema["properties"]["path"].is_object());
         assert!(schema["properties"]["content"].is_object());
@@ -195,9 +178,10 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
-        let tool = FileWriteTool::new(test_security(dir.clone()));
+        let tool = FileWriteTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
         let result = tool
-            .execute(json!({"path": "out.txt", "content": "written!"}))
+            .execute(json!({"path": "out.txt", "content": "written!"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
@@ -217,9 +201,10 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
-        let tool = FileWriteTool::new(test_security(dir.clone()));
+        let tool = FileWriteTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
         let result = tool
-            .execute(json!({"path": "a/b/c/deep.txt", "content": "deep"}))
+            .execute(json!({"path": "a/b/c/deep.txt", "content": "deep"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
@@ -241,9 +226,10 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = FileWriteTool::new(test_security(dir.clone()));
+        let tool = FileWriteTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
         let result = tool
-            .execute(json!({"path": "exist.txt", "content": "new"}))
+            .execute(json!({"path": "exist.txt", "content": "new"}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
@@ -257,44 +243,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_write_blocks_path_traversal() {
-        let dir = std::env::temp_dir().join("asteroniris_test_file_write_traversal");
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-
-        let tool = FileWriteTool::new(test_security(dir.clone()));
-        let result = tool
-            .execute(json!({"path": "../../etc/evil", "content": "bad"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.as_ref().unwrap().contains("not allowed"));
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-    }
-
-    #[tokio::test]
-    async fn file_write_blocks_absolute_path() {
-        let tool = FileWriteTool::new(test_security(std::env::temp_dir()));
-        let result = tool
-            .execute(json!({"path": "/etc/evil", "content": "bad"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.as_ref().unwrap().contains("not allowed"));
-    }
-
-    #[tokio::test]
     async fn file_write_missing_path_param() {
-        let tool = FileWriteTool::new(test_security(std::env::temp_dir()));
-        let result = tool.execute(json!({"content": "data"})).await;
+        let tool = FileWriteTool::new();
+        let ctx = ExecutionContext::test_default(test_security(std::env::temp_dir()));
+        let result = tool.execute(json!({"content": "data"}), &ctx).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn file_write_missing_content_param() {
-        let tool = FileWriteTool::new(test_security(std::env::temp_dir()));
-        let result = tool.execute(json!({"path": "file.txt"})).await;
+        let tool = FileWriteTool::new();
+        let ctx = ExecutionContext::test_default(test_security(std::env::temp_dir()));
+        let result = tool.execute(json!({"path": "file.txt"}), &ctx).await;
         assert!(result.is_err());
     }
 
@@ -304,48 +264,15 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
-        let tool = FileWriteTool::new(test_security(dir.clone()));
+        let tool = FileWriteTool::new();
+        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
         let result = tool
-            .execute(json!({"path": "empty.txt", "content": ""}))
+            .execute(json!({"path": "empty.txt", "content": ""}), &ctx)
             .await
             .unwrap();
         assert!(result.success);
         assert!(result.output.contains("0 bytes"));
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
-    }
-
-    #[tokio::test]
-    #[cfg(unix)]
-    async fn file_write_blocks_symlink_escape() {
-        use std::os::unix::fs::symlink;
-
-        let root = std::env::temp_dir().join("asteroniris_test_file_write_symlink_escape");
-        let workspace = root.join("workspace");
-        let outside = root.join("outside");
-
-        let _ = tokio::fs::remove_dir_all(&root).await;
-        tokio::fs::create_dir_all(&workspace).await.unwrap();
-        tokio::fs::create_dir_all(&outside).await.unwrap();
-
-        symlink(&outside, workspace.join("escape_dir")).unwrap();
-
-        let tool = FileWriteTool::new(test_security(workspace.clone()));
-        let result = tool
-            .execute(json!({"path": "escape_dir/hijack.txt", "content": "bad"}))
-            .await
-            .unwrap();
-
-        assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("escapes workspace")
-        );
-        assert!(!outside.join("hijack.txt").exists());
-
-        let _ = tokio::fs::remove_dir_all(&root).await;
     }
 }

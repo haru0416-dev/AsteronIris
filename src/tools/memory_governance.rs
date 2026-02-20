@@ -1,10 +1,11 @@
 use super::traits::{Tool, ToolResult};
 use crate::memory::{BeliefSlot, ForgetMode, Memory, PrivacyLevel};
-use crate::security::SecurityPolicy;
 use crate::security::policy::TenantPolicyContext;
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -27,12 +28,11 @@ impl GovernanceAction {
 
 pub struct MemoryGovernanceTool {
     memory: Arc<dyn Memory>,
-    security: Arc<SecurityPolicy>,
 }
 
 impl MemoryGovernanceTool {
-    pub fn new(memory: Arc<dyn Memory>, security: Arc<SecurityPolicy>) -> Self {
-        Self { memory, security }
+    pub fn new(memory: Arc<dyn Memory>) -> Self {
+        Self { memory }
     }
 
     fn parse_action(args: &serde_json::Value) -> anyhow::Result<GovernanceAction> {
@@ -182,10 +182,9 @@ impl MemoryGovernanceTool {
         }
     }
 
-    fn audit_path(&self) -> PathBuf {
+    fn audit_path(workspace_dir: &Path) -> PathBuf {
         let date = Utc::now().format("%Y-%m-%d").to_string();
-        self.security
-            .workspace_dir
+        workspace_dir
             .join("memory_governance")
             .join(format!("{date}.jsonl"))
     }
@@ -196,10 +195,11 @@ impl MemoryGovernanceTool {
         action: &GovernanceAction,
         entity_id: &str,
         scope_keys: &[String],
-        outcome: &str,
-        message: &str,
+        status: (&str, &str),
+        workspace_dir: &Path,
     ) -> anyhow::Result<String> {
-        let path = self.audit_path();
+        let (outcome, message) = status;
+        let path = Self::audit_path(workspace_dir);
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -378,7 +378,11 @@ impl Tool for MemoryGovernanceTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let action = Self::parse_action(&args)?;
         let actor = Self::parse_actor(&args)?;
         let entity_id = Self::parse_entity_id(&args)?;
@@ -388,7 +392,14 @@ impl Tool for MemoryGovernanceTool {
 
         if let Err(error) = policy_context.enforce_recall_scope(&entity_id) {
             let audit_record_path = self
-                .append_audit_record(&actor, &action, &entity_id, &scope_keys, "denied", error)
+                .append_audit_record(
+                    &actor,
+                    &action,
+                    &entity_id,
+                    &scope_keys,
+                    ("denied", error),
+                    &ctx.workspace_dir,
+                )
                 .await?;
             return Ok(ToolResult {
                 success: false,
@@ -429,8 +440,8 @@ impl Tool for MemoryGovernanceTool {
                 &action,
                 &entity_id,
                 &scope_keys,
-                "allowed",
-                "governance action completed",
+                ("allowed", "governance action completed"),
+                &ctx.workspace_dir,
             )
             .await?;
 

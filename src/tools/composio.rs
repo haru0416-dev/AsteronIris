@@ -7,6 +7,7 @@
 // The Composio API key is stored in the encrypted secret store.
 
 use super::traits::{Tool, ToolResult};
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -168,7 +169,11 @@ impl Tool for ComposioTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult> {
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
@@ -301,6 +306,7 @@ pub struct ComposioAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::middleware::ExecutionContext;
 
     // ── Constructor ───────────────────────────────────────────
 
@@ -342,14 +348,23 @@ mod tests {
     #[tokio::test]
     async fn execute_missing_action_returns_error() {
         let tool = ComposioTool::new("test-key");
-        let result = tool.execute(json!({})).await;
+        let ctx = ExecutionContext::test_default(std::sync::Arc::new(
+            crate::security::SecurityPolicy::default(),
+        ));
+        let result = tool.execute(json!({}), &ctx).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn execute_unknown_action_returns_error() {
         let tool = ComposioTool::new("test-key");
-        let result = tool.execute(json!({"action": "unknown"})).await.unwrap();
+        let ctx = ExecutionContext::test_default(std::sync::Arc::new(
+            crate::security::SecurityPolicy::default(),
+        ));
+        let result = tool
+            .execute(json!({"action": "unknown"}), &ctx)
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("Unknown action"));
     }
@@ -357,14 +372,20 @@ mod tests {
     #[tokio::test]
     async fn execute_without_action_name_returns_error() {
         let tool = ComposioTool::new("test-key");
-        let result = tool.execute(json!({"action": "execute"})).await;
+        let ctx = ExecutionContext::test_default(std::sync::Arc::new(
+            crate::security::SecurityPolicy::default(),
+        ));
+        let result = tool.execute(json!({"action": "execute"}), &ctx).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn connect_without_app_returns_error() {
         let tool = ComposioTool::new("test-key");
-        let result = tool.execute(json!({"action": "connect"})).await;
+        let ctx = ExecutionContext::test_default(std::sync::Arc::new(
+            crate::security::SecurityPolicy::default(),
+        ));
+        let result = tool.execute(json!({"action": "connect"}), &ctx).await;
         assert!(result.is_err());
     }
 

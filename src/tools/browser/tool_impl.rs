@@ -1,6 +1,7 @@
 use super::domain::{extract_host, host_matches_allowlist, is_private_host, normalize_domains};
 use super::types::{AgentBrowserResponse, BrowserAction};
 use crate::security::SecurityPolicy;
+use crate::tools::middleware::ExecutionContext;
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -382,7 +383,7 @@ impl Tool for BrowserTool {
         })
     }
 
-    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+    async fn execute(&self, args: Value, _ctx: &ExecutionContext) -> anyhow::Result<ToolResult> {
         // Security checks
         if !self.security.can_act() {
             return Ok(ToolResult {
