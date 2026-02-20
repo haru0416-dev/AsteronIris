@@ -3,8 +3,8 @@ use asteroniris::memory::{
     SqliteMemory,
 };
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
-use asteroniris::tools::MemoryGovernanceTool;
-use asteroniris::tools::traits::Tool;
+use asteroniris::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
+
 use rusqlite::Connection;
 use serde_json::json;
 use std::sync::Arc;
@@ -105,16 +105,20 @@ async fn dsar_delete_completeness_detects_residue() {
     )
     .expect("residue trigger should be created");
 
-    let tool = MemoryGovernanceTool::new(memory.clone(), security);
+    let tool = MemoryGovernanceTool::new(memory.clone());
+    let ctx = ExecutionContext::from_security(security);
     let delete = tool
-        .execute(json!({
-            "action": "delete",
-            "actor": "compliance-bot",
-            "entity_id": entity_id,
-            "slot_key": slot_key,
-            "mode": "hard",
-            "reason": "dsar-residue-fixture"
-        }))
+        .execute(
+            json!({
+                "action": "delete",
+                "actor": "compliance-bot",
+                "entity_id": entity_id,
+                "slot_key": slot_key,
+                "mode": "hard",
+                "reason": "dsar-residue-fixture"
+            }),
+            &ctx,
+        )
         .await
         .expect("delete should execute");
     assert!(delete.success, "tool call should complete with payload");

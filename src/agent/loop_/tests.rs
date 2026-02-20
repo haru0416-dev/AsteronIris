@@ -89,6 +89,32 @@ fn noop_observer() -> Arc<dyn Observer> {
     Arc::new(NoopObserver)
 }
 
+fn main_turn_params<'a>(
+    config: &Config,
+    answer_provider: &'a dyn Provider,
+    reflect_provider: &'a dyn Provider,
+    system_prompt: &'a str,
+    model_name: &'a str,
+    temperature: f64,
+) -> MainSessionTurnParams<'a> {
+    MainSessionTurnParams {
+        answer_provider,
+        reflect_provider,
+        system_prompt,
+        model_name,
+        temperature,
+        registry: Arc::new(crate::tools::ToolRegistry::new(vec![])),
+        max_tool_iterations: config.autonomy.max_tool_loop_iterations,
+        rate_limiter: Arc::new(crate::security::EntityRateLimiter::new(
+            config.autonomy.max_actions_per_hour,
+            config.autonomy.max_actions_per_entity_per_hour,
+        )),
+        permission_store: Arc::new(crate::security::PermissionStore::load(
+            &config.workspace_dir,
+        )),
+    }
+}
+
 #[tokio::test]
 async fn persona_loop_two_calls_per_turn() {
     let temp = TempDir::new().unwrap();
@@ -121,13 +147,7 @@ async fn persona_loop_two_calls_per_turn() {
         &config,
         &security,
         mem.clone(),
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.4,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.4),
         "How do we wire Task 4?",
         &noop_observer(),
     )
@@ -173,13 +193,7 @@ async fn persona_loop_call2_failure_preserves_answer() {
         &config,
         &security,
         mem.clone(),
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.4,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.4),
         "Keep answer path stable",
         &noop_observer(),
     )
@@ -296,13 +310,14 @@ async fn persona_reflect_no_retry() {
         &config,
         &security,
         mem.clone(),
-        &MainSessionTurnParams {
-            answer_provider: &answer_provider,
-            reflect_provider: &reflect_provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.2,
-        },
+        &main_turn_params(
+            &config,
+            &answer_provider,
+            &reflect_provider,
+            "system",
+            "test-model",
+            0.2,
+        ),
         "verify reflect retry suppression",
         &noop_observer(),
     )
@@ -369,13 +384,14 @@ async fn persona_budget_counter_stable() {
             &config,
             &security,
             mem.clone(),
-            &MainSessionTurnParams {
-                answer_provider: &answer_provider,
-                reflect_provider: &reflect_provider,
-                system_prompt: "system",
-                model_name: "test-model",
-                temperature: 0.2,
-            },
+            &main_turn_params(
+                &config,
+                &answer_provider,
+                &reflect_provider,
+                "system",
+                "test-model",
+                0.2,
+            ),
             &format!("turn-{turn}-message"),
             &RuntimeMemoryWriteContext::main_session_default(),
             &noop_observer(),
@@ -415,13 +431,7 @@ async fn persona_loop_policy_blocks_when_action_limit_is_exhausted() {
         &config,
         &security,
         mem,
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.1,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.1),
         "blocked by policy",
         &noop_observer(),
     )
@@ -451,13 +461,7 @@ async fn autonomy_temperature_clamped() {
         &config,
         &security,
         mem,
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 1.9,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 1.9),
         "clamp this temperature",
         &noop_observer(),
     )
@@ -496,13 +500,7 @@ async fn verify_repair_recovers_within_attempt_cap() {
         &config,
         &security,
         mem,
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.2,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.2),
         "recover after one failure",
         &noop_observer(),
     )
@@ -533,13 +531,7 @@ async fn verify_repair_stops_at_max_attempts() {
         &config,
         &security,
         mem,
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.2,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.2),
         "always fail",
         &noop_observer(),
     )
@@ -572,13 +564,7 @@ async fn verify_repair_emits_escalation_event() {
         &config,
         &security,
         mem.clone(),
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.2,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.2),
         "escalate and emit event",
         &noop_observer(),
     )
@@ -628,13 +614,7 @@ async fn verify_repair_retries_still_enforce_policy_limits() {
         &config,
         &security,
         mem,
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.2,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.2),
         "policy must gate every retry",
         &noop_observer(),
     )
@@ -668,13 +648,7 @@ async fn post_turn_inference_hook_appends_tagged_events() {
         &config,
         &security,
         mem.clone(),
-        &MainSessionTurnParams {
-            answer_provider: &provider,
-            reflect_provider: &provider,
-            system_prompt: "system",
-            model_name: "test-model",
-            temperature: 0.3,
-        },
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.3),
         "derive inferences",
         &noop_observer(),
     )

@@ -1,8 +1,10 @@
 use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
-use asteroniris::tools::traits::Tool;
-use asteroniris::tools::{MemoryForgetTool, MemoryRecallTool, MemoryStoreTool};
+use asteroniris::security::SecurityPolicy;
+use asteroniris::tools::{
+    ExecutionContext, MemoryForgetTool, MemoryRecallTool, MemoryStoreTool, Tool,
+};
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -16,24 +18,31 @@ fn sqlite_memory() -> (TempDir, Arc<dyn Memory>) {
 #[tokio::test]
 async fn memory_tool_schema_backward_compat() {
     let (_temp, memory) = sqlite_memory();
+    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
 
     let store = MemoryStoreTool::new(memory.clone());
     let store_result = store
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-100",
-            "slot_key": "profile.language",
-            "value": "Rust"
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-100",
+                "slot_key": "profile.language",
+                "value": "Rust"
+            }),
+            &ctx,
+        )
         .await
         .expect("legacy store payload should execute");
     assert!(store_result.success);
 
     let recall = MemoryRecallTool::new(memory.clone());
     let recall_result = recall
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-100",
-            "query": "Rust"
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-100",
+                "query": "Rust"
+            }),
+            &ctx,
+        )
         .await
         .expect("legacy recall payload should execute");
     assert!(recall_result.success);
@@ -56,16 +65,22 @@ async fn memory_tool_schema_backward_compat() {
 
     let forget = MemoryForgetTool::new(memory);
     let forget_result = forget
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-100",
-            "key": "legacy.slot"
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-100",
+                "key": "legacy.slot"
+            }),
+            &ctx,
+        )
         .await
         .expect("legacy forget payload shape should execute");
     assert!(forget_result.success);
 
     let missing_entity = store
-        .execute(json!({"slot_key": "profile.locale", "value": "en-US"}))
+        .execute(
+            json!({"slot_key": "profile.locale", "value": "en-US"}),
+            &ctx,
+        )
         .await;
     assert!(missing_entity.is_err());
     assert_eq!(
@@ -76,7 +91,7 @@ async fn memory_tool_schema_backward_compat() {
     );
 
     let missing_slot_key = forget
-        .execute(json!({"entity_id": "tenant-alpha:user-100"}))
+        .execute(json!({"entity_id": "tenant-alpha:user-100"}), &ctx)
         .await;
     assert!(missing_slot_key.is_err());
     assert_eq!(
@@ -87,7 +102,7 @@ async fn memory_tool_schema_backward_compat() {
     );
 
     let missing_query = recall
-        .execute(json!({"entity_id": "tenant-alpha:user-100"}))
+        .execute(json!({"entity_id": "tenant-alpha:user-100"}), &ctx)
         .await;
     assert!(missing_query.is_err());
     assert_eq!(
@@ -101,14 +116,18 @@ async fn memory_tool_schema_backward_compat() {
 #[tokio::test]
 async fn memory_tool_policy_context_validation() {
     let (_temp, memory) = sqlite_memory();
+    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
 
     let recall = MemoryRecallTool::new(memory.clone());
     let invalid_recall_context = recall
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-200",
-            "query": "anything",
-            "policy_context": "tenant-alpha"
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-200",
+                "query": "anything",
+                "policy_context": "tenant-alpha"
+            }),
+            &ctx,
+        )
         .await;
     assert!(invalid_recall_context.is_err());
     assert_eq!(
@@ -119,14 +138,17 @@ async fn memory_tool_policy_context_validation() {
     );
 
     let invalid_recall_flag = recall
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-200",
-            "query": "anything",
-            "policy_context": {
-                "tenant_mode_enabled": "yes",
-                "tenant_id": "tenant-alpha"
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-200",
+                "query": "anything",
+                "policy_context": {
+                    "tenant_mode_enabled": "yes",
+                    "tenant_id": "tenant-alpha"
+                }
+            }),
+            &ctx,
+        )
         .await;
     assert!(invalid_recall_flag.is_err());
     assert_eq!(
@@ -138,15 +160,18 @@ async fn memory_tool_policy_context_validation() {
 
     let store = MemoryStoreTool::new(memory.clone());
     let invalid_provenance = store
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-200",
-            "slot_key": "profile.timezone",
-            "value": "UTC",
-            "provenance": {
-                "source_class": "invalid",
-                "reference": "ticket:11"
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-200",
+                "slot_key": "profile.timezone",
+                "value": "UTC",
+                "provenance": {
+                    "source_class": "invalid",
+                    "reference": "ticket:11"
+                }
+            }),
+            &ctx,
+        )
         .await;
     assert!(invalid_provenance.is_err());
     assert_eq!(
@@ -157,15 +182,18 @@ async fn memory_tool_policy_context_validation() {
     );
 
     let empty_provenance_reference = store
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-200",
-            "slot_key": "profile.timezone",
-            "value": "UTC",
-            "provenance": {
-                "source_class": "system",
-                "reference": "   "
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-200",
+                "slot_key": "profile.timezone",
+                "value": "UTC",
+                "provenance": {
+                    "source_class": "system",
+                    "reference": "   "
+                }
+            }),
+            &ctx,
+        )
         .await;
     assert!(empty_provenance_reference.is_err());
     assert_eq!(
@@ -177,14 +205,17 @@ async fn memory_tool_policy_context_validation() {
 
     let forget = MemoryForgetTool::new(memory);
     let invalid_forget_context = forget
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-200",
-            "slot_key": "profile.timezone",
-            "policy_context": {
-                "tenant_mode_enabled": true,
-                "tenant_id": 123
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-200",
+                "slot_key": "profile.timezone",
+                "policy_context": {
+                    "tenant_mode_enabled": true,
+                    "tenant_id": 123
+                }
+            }),
+            &ctx,
+        )
         .await;
     assert!(invalid_forget_context.is_err());
     assert_eq!(

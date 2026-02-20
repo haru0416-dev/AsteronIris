@@ -6,3 +6,5 @@ mod autonomy_cross_layer_flow;
 mod external_content;
 #[path = "agent/scheduler_routes.rs"]
 mod scheduler_routes;
+#[path = "agent/tool_loop_flow.rs"]
+mod tool_loop_flow;

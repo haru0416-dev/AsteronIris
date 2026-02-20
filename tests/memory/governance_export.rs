@@ -3,8 +3,8 @@ use asteroniris::memory::{
     SqliteMemory,
 };
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
-use asteroniris::tools::MemoryGovernanceTool;
-use asteroniris::tools::traits::Tool;
+use asteroniris::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
+
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -65,15 +65,19 @@ async fn dsar_export_then_delete_flow() {
     )
     .await;
 
-    let tool = MemoryGovernanceTool::new(memory.clone(), security);
+    let tool = MemoryGovernanceTool::new(memory.clone());
+    let ctx = ExecutionContext::from_security(security);
 
     let inspect = tool
-        .execute(json!({
-            "action": "inspect",
-            "actor": "compliance-bot",
-            "entity_id": entity_id,
-            "slot_keys": ["profile.name", "profile.email"]
-        }))
+        .execute(
+            json!({
+                "action": "inspect",
+                "actor": "compliance-bot",
+                "entity_id": entity_id,
+                "slot_keys": ["profile.name", "profile.email"]
+            }),
+            &ctx,
+        )
         .await
         .expect("inspect should execute");
     assert!(inspect.success);
@@ -87,12 +91,15 @@ async fn dsar_export_then_delete_flow() {
     );
 
     let export = tool
-        .execute(json!({
-            "action": "export",
-            "actor": "compliance-bot",
-            "entity_id": entity_id,
-            "slot_keys": ["profile.name", "profile.email"]
-        }))
+        .execute(
+            json!({
+                "action": "export",
+                "actor": "compliance-bot",
+                "entity_id": entity_id,
+                "slot_keys": ["profile.name", "profile.email"]
+            }),
+            &ctx,
+        )
         .await
         .expect("export should execute");
     assert!(export.success);
@@ -119,14 +126,17 @@ async fn dsar_export_then_delete_flow() {
     assert!(private_entry.get("value").is_none());
 
     let delete = tool
-        .execute(json!({
-            "action": "delete",
-            "actor": "compliance-bot",
-            "entity_id": entity_id,
-            "slot_key": "profile.email",
-            "mode": "hard",
-            "reason": "dsar-export-delete"
-        }))
+        .execute(
+            json!({
+                "action": "delete",
+                "actor": "compliance-bot",
+                "entity_id": entity_id,
+                "slot_key": "profile.email",
+                "mode": "hard",
+                "reason": "dsar-export-delete"
+            }),
+            &ctx,
+        )
         .await
         .expect("delete should execute");
     assert!(delete.success);

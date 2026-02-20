@@ -11,7 +11,8 @@ use asteroniris::security::policy::{
     TenantPolicyContext,
 };
 use asteroniris::tools::memory_recall::MemoryRecallTool;
-use asteroniris::tools::traits::Tool;
+use asteroniris::tools::{ExecutionContext, Tool};
+
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -153,16 +154,20 @@ async fn tenant_recall_all_entrypoints_allow_same_tenant() {
     assert_eq!(direct.len(), 1);
 
     let tool = MemoryRecallTool::new(memory.clone());
+    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
     let tool_result = tool
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-003",
-            "query": "language",
-            "limit": 5,
-            "policy_context": {
-                "tenant_mode_enabled": true,
-                "tenant_id": "tenant-alpha"
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-003",
+                "query": "language",
+                "limit": 5,
+                "policy_context": {
+                    "tenant_mode_enabled": true,
+                    "tenant_id": "tenant-alpha"
+                }
+            }),
+            &ctx,
+        )
         .await
         .unwrap();
     assert!(tool_result.success);
@@ -207,16 +212,20 @@ async fn tenant_recall_all_entrypoints_block_cross_scope() {
     );
 
     let tool = MemoryRecallTool::new(memory.clone());
+    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
     let tool_result = tool
-        .execute(json!({
-            "entity_id": "tenant-beta:user-004",
-            "query": "timezone",
-            "limit": 5,
-            "policy_context": {
-                "tenant_mode_enabled": true,
-                "tenant_id": "tenant-alpha"
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-beta:user-004",
+                "query": "timezone",
+                "limit": 5,
+                "policy_context": {
+                    "tenant_mode_enabled": true,
+                    "tenant_id": "tenant-alpha"
+                }
+            }),
+            &ctx,
+        )
         .await
         .unwrap();
     assert!(!tool_result.success);
@@ -255,16 +264,20 @@ async fn tenant_recall_e2e_same_tenant_paths() {
     let policy_context = TenantPolicyContext::enabled("tenant-alpha");
 
     let tool = MemoryRecallTool::new(memory.clone());
+    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
     let tool_result = tool
-        .execute(json!({
-            "entity_id": "tenant-alpha:user-005",
-            "query": "language",
-            "limit": 5,
-            "policy_context": {
-                "tenant_mode_enabled": true,
-                "tenant_id": "tenant-alpha"
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-alpha:user-005",
+                "query": "language",
+                "limit": 5,
+                "policy_context": {
+                    "tenant_mode_enabled": true,
+                    "tenant_id": "tenant-alpha"
+                }
+            }),
+            &ctx,
+        )
         .await
         .unwrap();
     assert!(tool_result.success);
@@ -328,16 +341,20 @@ async fn tenant_recall_e2e_cross_tenant_block() {
     let tenant_alpha_context = TenantPolicyContext::enabled("tenant-alpha");
 
     let tool = MemoryRecallTool::new(memory.clone());
+    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
     let cross_tool_result = tool
-        .execute(json!({
-            "entity_id": "tenant-beta:user-006",
-            "query": "timezone",
-            "limit": 5,
-            "policy_context": {
-                "tenant_mode_enabled": true,
-                "tenant_id": "tenant-alpha"
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "tenant-beta:user-006",
+                "query": "timezone",
+                "limit": 5,
+                "policy_context": {
+                    "tenant_mode_enabled": true,
+                    "tenant_id": "tenant-alpha"
+                }
+            }),
+            &ctx,
+        )
         .await
         .unwrap();
     assert!(!cross_tool_result.success);
@@ -349,15 +366,18 @@ async fn tenant_recall_e2e_cross_tenant_block() {
     );
 
     let default_tool_result = tool
-        .execute(json!({
-            "entity_id": "default",
-            "query": "timezone",
-            "limit": 5,
-            "policy_context": {
-                "tenant_mode_enabled": true,
-                "tenant_id": "tenant-alpha"
-            }
-        }))
+        .execute(
+            json!({
+                "entity_id": "default",
+                "query": "timezone",
+                "limit": 5,
+                "policy_context": {
+                    "tenant_mode_enabled": true,
+                    "tenant_id": "tenant-alpha"
+                }
+            }),
+            &ctx,
+        )
         .await
         .unwrap();
     assert!(!default_tool_result.success);

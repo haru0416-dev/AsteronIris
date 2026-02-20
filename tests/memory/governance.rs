@@ -2,8 +2,8 @@ use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
-use asteroniris::tools::MemoryGovernanceTool;
-use asteroniris::tools::traits::Tool;
+use asteroniris::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
+
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -63,15 +63,19 @@ async fn memory_governance_inspect_export_delete() {
     )
     .await;
 
-    let tool = MemoryGovernanceTool::new(memory.clone(), security);
+    let tool = MemoryGovernanceTool::new(memory.clone());
+    let ctx = ExecutionContext::from_security(Arc::clone(&security));
 
     let inspect = tool
-        .execute(json!({
-            "action": "inspect",
-            "actor": "compliance-bot",
-            "entity_id": "tenant-alpha:user-1",
-            "slot_keys": ["profile.name", "profile.email"]
-        }))
+        .execute(
+            json!({
+                "action": "inspect",
+                "actor": "compliance-bot",
+                "entity_id": "tenant-alpha:user-1",
+                "slot_keys": ["profile.name", "profile.email"]
+            }),
+            &ctx,
+        )
         .await
         .expect("inspect should execute");
     assert!(inspect.success);
@@ -84,12 +88,15 @@ async fn memory_governance_inspect_export_delete() {
     );
 
     let export = tool
-        .execute(json!({
-            "action": "export",
-            "actor": "compliance-bot",
-            "entity_id": "tenant-alpha:user-1",
-            "slot_keys": ["profile.name", "profile.email"]
-        }))
+        .execute(
+            json!({
+                "action": "export",
+                "actor": "compliance-bot",
+                "entity_id": "tenant-alpha:user-1",
+                "slot_keys": ["profile.name", "profile.email"]
+            }),
+            &ctx,
+        )
         .await
         .expect("export should execute");
     assert!(export.success);
@@ -99,14 +106,17 @@ async fn memory_governance_inspect_export_delete() {
     assert_eq!(export_payload["result"]["entry_count"], 2);
 
     let delete = tool
-        .execute(json!({
-            "action": "delete",
-            "actor": "compliance-bot",
-            "entity_id": "tenant-alpha:user-1",
-            "slot_key": "profile.email",
-            "mode": "hard",
-            "reason": "dsar"
-        }))
+        .execute(
+            json!({
+                "action": "delete",
+                "actor": "compliance-bot",
+                "entity_id": "tenant-alpha:user-1",
+                "slot_key": "profile.email",
+                "mode": "hard",
+                "reason": "dsar"
+            }),
+            &ctx,
+        )
         .await
         .expect("delete should execute");
     assert!(delete.success);
@@ -168,14 +178,18 @@ async fn memory_governance_export_returns_scoped_bundle() {
     )
     .await;
 
-    let tool = MemoryGovernanceTool::new(memory, security);
+    let tool = MemoryGovernanceTool::new(memory);
+    let ctx = ExecutionContext::from_security(security);
     let export = tool
-        .execute(json!({
-            "action": "export",
-            "actor": "exporter",
-            "entity_id": "tenant-alpha:user-2",
-            "slot_keys": ["profile.nickname", "profile.ssn", "profile.email", "missing.key"]
-        }))
+        .execute(
+            json!({
+                "action": "export",
+                "actor": "exporter",
+                "entity_id": "tenant-alpha:user-2",
+                "slot_keys": ["profile.nickname", "profile.ssn", "profile.email", "missing.key"]
+            }),
+            &ctx,
+        )
         .await
         .expect("export should execute");
 
@@ -232,19 +246,23 @@ async fn memory_governance_delete_denied_is_audited() {
     )
     .await;
 
-    let tool = MemoryGovernanceTool::new(memory, security);
+    let tool = MemoryGovernanceTool::new(memory);
+    let ctx = ExecutionContext::from_security(security);
     let denied = tool
-        .execute(json!({
-            "action": "delete",
-            "actor": "compliance-bot",
-            "entity_id": "tenant-beta:user-3",
-            "slot_key": "profile.region",
-            "mode": "hard",
-            "policy_context": {
-                "tenant_mode_enabled": true,
-                "tenant_id": "tenant-alpha"
-            }
-        }))
+        .execute(
+            json!({
+                "action": "delete",
+                "actor": "compliance-bot",
+                "entity_id": "tenant-beta:user-3",
+                "slot_key": "profile.region",
+                "mode": "hard",
+                "policy_context": {
+                    "tenant_mode_enabled": true,
+                    "tenant_id": "tenant-alpha"
+                }
+            }),
+            &ctx,
+        )
         .await
         .expect("governance tool should return deny result");
 

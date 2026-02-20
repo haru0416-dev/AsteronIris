@@ -5,6 +5,7 @@ use crate::memory::Memory;
 use crate::providers::Provider;
 use crate::security::SecurityPolicy;
 use crate::security::pairing::PairingGuard;
+use crate::tools::ToolRegistry;
 use async_trait::async_trait;
 use axum::{
     body::Bytes,
@@ -15,6 +16,14 @@ use axum::{
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
+
+fn test_registry() -> Arc<ToolRegistry> {
+    Arc::new(ToolRegistry::new(vec![]))
+}
+
+fn test_rate_limiter() -> Arc<crate::security::EntityRateLimiter> {
+    Arc::new(crate::security::EntityRateLimiter::new(100, 20))
+}
 
 struct CountingProvider {
     calls: Arc<AtomicUsize>,
@@ -285,6 +294,10 @@ async fn webhook_policy_blocks_when_action_limit_is_exhausted() {
 
     let state = AppState {
         provider,
+        registry: test_registry(),
+        rate_limiter: test_rate_limiter(),
+        max_tool_loop_iterations: 10,
+        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
         model: "test-model".to_string(),
         temperature: 0.0,
         openai_compat_api_keys: None,
@@ -370,6 +383,10 @@ fn effective_defense_mode_kill_switch_forces_audit() {
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
+        registry: test_registry(),
+        rate_limiter: test_rate_limiter(),
+        max_tool_loop_iterations: 10,
+        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
         model: "test".to_string(),
         temperature: 0.0,
         openai_compat_api_keys: None,
@@ -438,6 +455,10 @@ fn make_test_state(pairing: PairingGuard) -> AppState {
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
+        registry: test_registry(),
+        rate_limiter: test_rate_limiter(),
+        max_tool_loop_iterations: 10,
+        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
         model: "test-model".to_string(),
         temperature: 0.0,
         openai_compat_api_keys: None,
@@ -488,6 +509,10 @@ fn make_whatsapp_state() -> AppState {
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
+        registry: test_registry(),
+        rate_limiter: test_rate_limiter(),
+        max_tool_loop_iterations: 10,
+        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
         model: "test-model".to_string(),
         temperature: 0.0,
         openai_compat_api_keys: None,

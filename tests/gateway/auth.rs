@@ -48,6 +48,8 @@ impl GatewayTestServer {
         config.channels_config.webhook = Some(WebhookConfig {
             port,
             secret: Some(webhook_secret.to_string()),
+            autonomy_level: None,
+            tool_allowlist: None,
         });
 
         let host = "127.0.0.1".to_string();
