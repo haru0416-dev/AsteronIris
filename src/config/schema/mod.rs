@@ -2,6 +2,7 @@ mod autonomy;
 mod channels;
 mod core;
 mod gateway;
+mod mcp;
 mod memory;
 mod observability;
 mod tools;
@@ -19,6 +20,8 @@ pub use core::{
     ReliabilityConfig, RuntimeConfig, RuntimeKind, SecretsConfig,
 };
 pub use gateway::{GatewayConfig, GatewayDefenseMode};
+#[allow(unused_imports)]
+pub use mcp::{McpConfig, McpServerConfig, McpTransport};
 pub use memory::MemoryConfig;
 pub use observability::ObservabilityConfig;
 #[allow(unused_imports)]

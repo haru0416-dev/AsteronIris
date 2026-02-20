@@ -101,6 +101,7 @@ tower-http = { version = "0.6", default-features = false, features = ["limit", "
 # Streaming (OpenAI-compat SSE, WebSocket)
 async-stream = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
+rmcp = { version = "0.16.0", features = ["client", "transport-child-process", "transport-io"], optional = true }
 
 [features]
 default = ["email", "vector-search", "tui", "bundled-sqlite"]
@@ -109,6 +110,7 @@ email = ["dep:lettre", "dep:mail-parser"]
 vector-search = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema"]
 tui = ["dep:ratatui", "dep:crossterm"]
 media = ["dep:infer", "dep:mime"]
+mcp = ["dep:rmcp"]
 
 [profile.dev]
 codegen-units = 256

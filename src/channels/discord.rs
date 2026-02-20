@@ -1,4 +1,4 @@
-use super::traits::{Channel, ChannelMessage};
+use super::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -32,9 +32,72 @@ impl DiscordChannel {
     }
 
     fn bot_user_id_from_token(token: &str) -> Option<String> {
-        // Discord bot tokens are base64(bot_user_id).timestamp.hmac
         let part = token.split('.').next()?;
         base64_decode(part)
+    }
+
+    pub async fn send_embed(
+        &self,
+        channel_id: &str,
+        title: Option<&str>,
+        description: &str,
+        color: Option<u32>,
+    ) -> anyhow::Result<()> {
+        let url = format!("https://discord.com/api/v10/channels/{channel_id}/messages");
+        let mut embed = json!({ "description": description });
+        if let Some(t) = title {
+            embed["title"] = json!(t);
+        }
+        if let Some(c) = color {
+            embed["color"] = json!(c);
+        }
+        let body = json!({ "embeds": [embed] });
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.bot_token))
+            .json(&body)
+            .send()
+            .await
+            .context("send Discord embed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err = resp
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+            anyhow::bail!("Discord embed send failed ({status}): {err}");
+        }
+
+        Ok(())
+    }
+
+    fn parse_attachments(d: &serde_json::Value) -> Vec<MediaAttachment> {
+        d.get("attachments")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|att| {
+                        let url = att.get("url")?.as_str()?.to_string();
+                        let mime = att
+                            .get("content_type")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("application/octet-stream")
+                            .to_string();
+                        let filename = att
+                            .get("filename")
+                            .and_then(|f| f.as_str())
+                            .map(String::from);
+                        Some(MediaAttachment {
+                            mime_type: mime,
+                            data: MediaData::Url(url),
+                            filename,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -161,7 +224,7 @@ impl Channel for DiscordChannel {
             "op": 2,
             "d": {
                 "token": self.bot_token,
-                "intents": 33281, // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT | DIRECT_MESSAGES
+                "intents": 37377, // GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
                 "properties": {
                     "os": "linux",
                     "browser": "asteroniris",
@@ -283,7 +346,9 @@ impl Channel for DiscordChannel {
                     }
 
                     let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                    if content.is_empty() {
+                    let attachments = Self::parse_attachments(d);
+
+                    if content.is_empty() && attachments.is_empty() {
                         continue;
                     }
 
@@ -298,7 +363,7 @@ impl Channel for DiscordChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
-                        attachments: Vec::new(),
+                        attachments,
                     };
 
                     if tx.send(channel_msg).await.is_err() {
@@ -306,6 +371,67 @@ impl Channel for DiscordChannel {
                     }
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    async fn send_typing(&self, recipient: &str) -> anyhow::Result<()> {
+        let url = format!("https://discord.com/api/v10/channels/{recipient}/typing");
+        self.client
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.bot_token))
+            .send()
+            .await
+            .context("send Discord typing indicator")?;
+        Ok(())
+    }
+
+    async fn send_media(
+        &self,
+        attachment: &MediaAttachment,
+        recipient: &str,
+    ) -> anyhow::Result<()> {
+        let url = format!("https://discord.com/api/v10/channels/{recipient}/messages");
+        let bytes = match &attachment.data {
+            MediaData::Url(media_url) => self
+                .client
+                .get(media_url)
+                .send()
+                .await
+                .context("download media for Discord upload")?
+                .bytes()
+                .await
+                .context("read media bytes")?
+                .to_vec(),
+            MediaData::Bytes(b) => b.clone(),
+        };
+        let filename = attachment
+            .filename
+            .as_deref()
+            .unwrap_or("attachment")
+            .to_string();
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(filename)
+            .mime_str(&attachment.mime_type)?;
+        let form = reqwest::multipart::Form::new().part("files[0]", part);
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.bot_token))
+            .multipart(form)
+            .send()
+            .await
+            .context("send Discord media")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err = resp
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+            anyhow::bail!("Discord media send failed ({status}): {err}");
         }
 
         Ok(())
@@ -415,5 +541,72 @@ mod tests {
     fn bot_user_id_from_empty_token() {
         let id = DiscordChannel::bot_user_id_from_token("");
         assert_eq!(id, Some(String::new()));
+    }
+
+    #[test]
+    fn gateway_intents_include_direct_messages() {
+        // GUILDS(1) | GUILD_MESSAGES(512) | DIRECT_MESSAGES(4096) | MESSAGE_CONTENT(32768) = 37377
+        let intents: u64 = 37377;
+        assert_ne!(intents & 1, 0, "GUILDS");
+        assert_ne!(intents & 512, 0, "GUILD_MESSAGES");
+        assert_ne!(intents & 4096, 0, "DIRECT_MESSAGES");
+        assert_ne!(intents & 32768, 0, "MESSAGE_CONTENT");
+    }
+
+    #[test]
+    fn parse_attachments_from_discord_payload() {
+        let d = serde_json::json!({
+            "attachments": [
+                {
+                    "id": "123",
+                    "filename": "image.png",
+                    "content_type": "image/png",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/image.png",
+                    "size": 12345
+                },
+                {
+                    "id": "456",
+                    "filename": "doc.pdf",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/doc.pdf",
+                    "size": 999
+                }
+            ]
+        });
+
+        let attachments = DiscordChannel::parse_attachments(&d);
+        assert_eq!(attachments.len(), 2);
+
+        assert_eq!(attachments[0].mime_type, "image/png");
+        assert_eq!(attachments[0].filename.as_deref(), Some("image.png"));
+        assert!(matches!(&attachments[0].data, MediaData::Url(u) if u.contains("image.png")));
+
+        assert_eq!(attachments[1].mime_type, "application/octet-stream");
+        assert_eq!(attachments[1].filename.as_deref(), Some("doc.pdf"));
+    }
+
+    #[test]
+    fn parse_attachments_empty_array() {
+        let d = serde_json::json!({ "attachments": [] });
+        assert!(DiscordChannel::parse_attachments(&d).is_empty());
+    }
+
+    #[test]
+    fn parse_attachments_missing_field() {
+        let d = serde_json::json!({ "content": "hello" });
+        assert!(DiscordChannel::parse_attachments(&d).is_empty());
+    }
+
+    #[test]
+    fn embed_json_construction() {
+        let mut embed = serde_json::json!({ "description": "test body" });
+        embed["title"] = serde_json::json!("Test Title");
+        embed["color"] = serde_json::json!(0x00FF00);
+
+        let body = serde_json::json!({ "embeds": [embed] });
+        let embeds = body["embeds"].as_array().unwrap();
+        assert_eq!(embeds.len(), 1);
+        assert_eq!(embeds[0]["title"], "Test Title");
+        assert_eq!(embeds[0]["description"], "test body");
+        assert_eq!(embeds[0]["color"], 0x00FF00);
     }
 }

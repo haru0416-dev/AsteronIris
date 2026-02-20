@@ -1,6 +1,6 @@
 use super::{
-    AutonomyConfig, ChannelsConfig, GatewayConfig, MemoryConfig, ObservabilityConfig, ToolsConfig,
-    TunnelConfig,
+    AutonomyConfig, ChannelsConfig, GatewayConfig, McpConfig, MemoryConfig, ObservabilityConfig,
+    ToolsConfig, TunnelConfig,
 };
 use crate::security::SecretStore;
 use anyhow::{Context, Result};
@@ -66,6 +66,9 @@ pub struct Config {
 
     #[serde(default)]
     pub tools: ToolsConfig,
+
+    #[serde(default)]
+    pub mcp: McpConfig,
 
     #[serde(default = "default_locale")]
     pub locale: String,
@@ -426,6 +429,7 @@ impl Default for Config {
             persona: PersonaConfig::default(),
             identity: IdentityConfig::default(),
             tools: ToolsConfig::default(),
+            mcp: McpConfig::default(),
             locale: default_locale(),
         }
     }

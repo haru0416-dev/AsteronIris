@@ -99,6 +99,7 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
         persona: PersonaConfig::default(),
         identity: crate::config::IdentityConfig::default(),
         tools: crate::config::ToolsConfig::default(),
+        mcp: crate::config::McpConfig::default(),
         locale: String::from("en"),
     };
 
@@ -282,6 +283,7 @@ pub fn run_quick_setup(
         persona: PersonaConfig::default(),
         identity: crate::config::IdentityConfig::default(),
         tools: crate::config::ToolsConfig::default(),
+        mcp: crate::config::McpConfig::default(),
         locale: String::from("en"),
     };
 

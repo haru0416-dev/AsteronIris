@@ -129,6 +129,7 @@ fn build_config_from_state(state: &state::WizardState) -> Result<Config> {
         persona: PersonaConfig::default(),
         identity: crate::config::IdentityConfig::default(),
         tools: crate::config::ToolsConfig::default(),
+        mcp: crate::config::McpConfig::default(),
         locale: String::from("en"),
     };
 

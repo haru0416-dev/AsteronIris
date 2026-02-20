@@ -32,6 +32,8 @@ pub mod health;
 pub mod heartbeat;
 pub mod integrations;
 pub mod links;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 #[cfg(feature = "media")]
 pub mod media;
 pub mod memory;
