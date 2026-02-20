@@ -19,15 +19,15 @@
 
 ## Highlights
 
-| | Feature | Description |
-|---|---|---|
-| &#9889; | **Fast CLI** | Rust-native binary with onboarding wizard and built-in diagnostics |
-| &#129302; | **Agent Mode** | Interactive or single-message execution with tool use and reflection |
-| &#127760; | **Gateway** | Axum HTTP server with pairing auth, request limits, and timeout guardrails |
-| &#128126; | **Daemon** | Long-running supervisor — gateway + channels + heartbeat + scheduler |
-| &#128451; | **Memory** | Pluggable backends: SQLite, LanceDB, Markdown, None |
-| &#128172; | **Channels** | CLI, Telegram, Discord, Slack, iMessage, Matrix, WhatsApp, Email, IRC |
-| &#128274; | **Security** | Deny-by-default policy, encrypted vault, workspace-scoped access |
+| Feature | Description |
+|---------|-------------|
+| **Fast CLI** | Rust-native binary with onboarding wizard and built-in diagnostics |
+| **Agent Mode** | Interactive or single-message execution with tool use and reflection |
+| **Gateway** | Axum HTTP server with pairing auth, request limits, and timeout guardrails |
+| **Daemon** | Long-running supervisor — gateway + channels + heartbeat + scheduler |
+| **Memory** | Pluggable backends: SQLite, LanceDB, Markdown, None |
+| **Channels** | CLI, Telegram, Discord, Slack, iMessage, Matrix, WhatsApp, Email, IRC |
+| **Security** | Deny-by-default policy, encrypted vault, workspace-scoped access |
 
 ---
 
