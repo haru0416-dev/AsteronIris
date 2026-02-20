@@ -3,11 +3,16 @@
 //! - Gemini CLI OAuth tokens (reuse existing ~/.gemini/ authentication)
 //! - Google Cloud ADC (`GOOGLE_APPLICATION_CREDENTIALS`)
 
-use crate::providers::{ProviderResponse, traits::Provider};
+use crate::providers::{
+    ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason,
+    scrub_secret_patterns, traits::Provider,
+};
 use async_trait::async_trait;
 use directories::UserDirs;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Gemini provider supporting multiple authentication methods.
@@ -25,6 +30,8 @@ struct GenerateContentRequest {
     contents: Vec<Content>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_instruction: Option<Content>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<GeminiTool>>,
     #[serde(rename = "generationConfig")]
     generation_config: GenerationConfig,
 }
@@ -32,13 +39,46 @@ struct GenerateContentRequest {
 #[derive(Debug, Serialize)]
 struct Content {
     #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<&'static str>,
+    role: Option<String>,
     parts: Vec<Part>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Part {
-    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(rename = "functionCall", skip_serializing_if = "Option::is_none")]
+    function_call: Option<GeminiFunctionCall>,
+    #[serde(rename = "functionResponse", skip_serializing_if = "Option::is_none")]
+    function_response: Option<GeminiFunctionResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GeminiFunctionCall {
+    name: String,
+    #[serde(default)]
+    args: Value,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GeminiFunctionResponse {
+    name: String,
+    response: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiTool {
+    #[serde(rename = "function_declarations")]
+    function_declarations: Vec<GeminiFunctionDeclaration>,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiFunctionDeclaration {
+    name: String,
+    description: String,
+    parameters: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,6 +109,8 @@ struct UsageMetadata {
 #[derive(Debug, Deserialize)]
 struct Candidate {
     content: CandidateContent,
+    #[serde(rename = "finishReason")]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +121,8 @@ struct CandidateContent {
 #[derive(Debug, Deserialize)]
 struct ResponsePart {
     text: Option<String>,
+    #[serde(rename = "functionCall")]
+    function_call: Option<GeminiFunctionCall>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,19 +237,16 @@ impl GeminiProvider {
     ) -> GenerateContentRequest {
         let system_instruction = system_prompt.map(|sys| Content {
             role: None,
-            parts: vec![Part {
-                text: sys.to_string(),
-            }],
+            parts: vec![Part::text(scrub_secret_patterns(sys).into_owned())],
         });
 
         GenerateContentRequest {
             contents: vec![Content {
-                role: Some("user"),
-                parts: vec![Part {
-                    text: message.to_string(),
-                }],
+                role: Some("user".to_string()),
+                parts: vec![Part::text(scrub_secret_patterns(message).into_owned())],
             }],
             system_instruction,
+            tools: None,
             generation_config: GenerationConfig {
                 temperature,
                 max_output_tokens: 8192,
@@ -222,22 +263,192 @@ impl GeminiProvider {
     }
 
     fn extract_text(result: &GenerateContentResponse) -> anyhow::Result<String> {
-        result
+        let text = result
             .candidates
             .as_ref()
             .and_then(|c| c.first())
-            .and_then(|c| c.content.parts.first())
-            .and_then(|p| p.text.as_ref())
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))
+            .map(|candidate| {
+                candidate
+                    .content
+                    .parts
+                    .iter()
+                    .filter_map(|part| part.text.as_ref())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        if text.is_empty() {
+            anyhow::bail!("No response from Gemini");
+        }
+
+        Ok(text)
     }
 
-    async fn call_api(
-        &self,
+    fn build_gemini_tools(tools: &[crate::tools::traits::ToolSpec]) -> Option<Vec<GeminiTool>> {
+        if tools.is_empty() {
+            None
+        } else {
+            Some(vec![GeminiTool {
+                function_declarations: tools
+                    .iter()
+                    .map(|tool| GeminiFunctionDeclaration {
+                        name: tool.name.clone(),
+                        description: scrub_secret_patterns(&tool.description).into_owned(),
+                        parameters: tool.parameters.clone(),
+                    })
+                    .collect(),
+            }])
+        }
+    }
+
+    fn map_provider_message(
+        provider_message: &ProviderMessage,
+        tool_id_to_name: &HashMap<String, String>,
+    ) -> Content {
+        let role = match provider_message.role {
+            MessageRole::Assistant => "model",
+            MessageRole::User | MessageRole::System => "user",
+        }
+        .to_string();
+
+        let parts = provider_message
+            .content
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Text { text } => Part::text(scrub_secret_patterns(text).into_owned()),
+                ContentBlock::ToolUse { id, name, input } => {
+                    let args = if input.is_object() {
+                        input.clone()
+                    } else {
+                        let mut wrapped = Map::new();
+                        wrapped.insert("input".to_string(), input.clone());
+                        Value::Object(wrapped)
+                    };
+                    Part::function_call(GeminiFunctionCall {
+                        name: name.clone(),
+                        args,
+                        id: Some(id.clone()),
+                    })
+                }
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
+                    let tool_name = tool_id_to_name
+                        .get(tool_use_id)
+                        .cloned()
+                        .unwrap_or_else(|| "tool".to_string());
+                    Part::function_response(GeminiFunctionResponse {
+                        name: tool_name,
+                        response: serde_json::json!({
+                            "tool_use_id": tool_use_id,
+                            "content": scrub_secret_patterns(content).into_owned(),
+                            "is_error": is_error,
+                        }),
+                    })
+                }
+            })
+            .collect();
+
+        Content {
+            role: Some(role),
+            parts,
+        }
+    }
+
+    fn build_tools_request(
         system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+        messages: &[ProviderMessage],
+        tools: &[crate::tools::traits::ToolSpec],
         temperature: f64,
+    ) -> GenerateContentRequest {
+        let tool_id_to_name = messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .filter_map(|block| match block {
+                ContentBlock::ToolUse { id, name, .. } => Some((id.clone(), name.clone())),
+                ContentBlock::Text { .. } | ContentBlock::ToolResult { .. } => None,
+            })
+            .collect::<HashMap<_, _>>();
+
+        GenerateContentRequest {
+            contents: messages
+                .iter()
+                .map(|message| Self::map_provider_message(message, &tool_id_to_name))
+                .collect(),
+            system_instruction: system_prompt.map(|system| Content {
+                role: None,
+                parts: vec![Part::text(scrub_secret_patterns(system).into_owned())],
+            }),
+            tools: Self::build_gemini_tools(tools),
+            generation_config: GenerationConfig {
+                temperature,
+                max_output_tokens: 8192,
+            },
+        }
+    }
+
+    fn map_stop_reason(candidate: &Candidate) -> StopReason {
+        if candidate
+            .content
+            .parts
+            .iter()
+            .any(|part| part.function_call.is_some())
+        {
+            return StopReason::ToolUse;
+        }
+
+        match candidate.finish_reason.as_deref() {
+            Some("STOP") => StopReason::EndTurn,
+            Some("FUNCTION_CALL") => StopReason::ToolUse,
+            Some("MAX_TOKENS") => StopReason::MaxTokens,
+            Some(_) | None => StopReason::Error,
+        }
+    }
+
+    fn parse_content_blocks(parts: &[ResponsePart]) -> Vec<ContentBlock> {
+        let mut tool_call_index = 1usize;
+        let mut blocks = Vec::new();
+
+        for part in parts {
+            if let Some(text) = &part.text {
+                let scrubbed = scrub_secret_patterns(text).into_owned();
+                if !scrubbed.is_empty() {
+                    blocks.push(ContentBlock::Text { text: scrubbed });
+                }
+            }
+
+            if let Some(function_call) = &part.function_call {
+                let input = if function_call.args.is_object() {
+                    function_call.args.clone()
+                } else {
+                    let mut wrapped = Map::new();
+                    wrapped.insert("input".to_string(), function_call.args.clone());
+                    Value::Object(wrapped)
+                };
+                let id = function_call
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| format!("gemini_call_{tool_call_index}"));
+                tool_call_index += 1;
+                blocks.push(ContentBlock::ToolUse {
+                    id,
+                    name: function_call.name.clone(),
+                    input,
+                });
+            }
+        }
+
+        blocks
+    }
+
+    async fn call_api_with_request(
+        &self,
+        model: &str,
+        request: &GenerateContentRequest,
     ) -> anyhow::Result<GenerateContentResponse> {
         let api_key = self.api_key.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -249,13 +460,12 @@ impl GeminiProvider {
             )
         })?;
 
-        let request = Self::build_request(system_prompt, message, temperature);
         let model_name = Self::model_name(model);
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
         );
 
-        let response = self.client.post(&url).json(&request).send().await?;
+        let response = self.client.post(&url).json(request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -270,6 +480,43 @@ impl GeminiProvider {
         }
 
         Ok(result)
+    }
+
+    async fn call_api(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<GenerateContentResponse> {
+        let request = Self::build_request(system_prompt, message, temperature);
+        self.call_api_with_request(model, &request).await
+    }
+}
+
+impl Part {
+    fn text(text: String) -> Self {
+        Self {
+            text: Some(text),
+            function_call: None,
+            function_response: None,
+        }
+    }
+
+    fn function_call(function_call: GeminiFunctionCall) -> Self {
+        Self {
+            text: None,
+            function_call: Some(function_call),
+            function_response: None,
+        }
+    }
+
+    fn function_response(function_response: GeminiFunctionResponse) -> Self {
+        Self {
+            text: None,
+            function_call: None,
+            function_response: Some(function_response),
+        }
     }
 }
 
@@ -313,11 +560,64 @@ impl Provider for GeminiProvider {
         }
         Ok(provider_response)
     }
+
+    async fn chat_with_tools(
+        &self,
+        system_prompt: Option<&str>,
+        messages: &[ProviderMessage],
+        tools: &[crate::tools::traits::ToolSpec],
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let request = Self::build_tools_request(system_prompt, messages, tools, temperature);
+        let result = self.call_api_with_request(model, &request).await?;
+
+        let candidate = result
+            .candidates
+            .as_ref()
+            .and_then(|candidates| candidates.first())
+            .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))?;
+
+        let content_blocks = Self::parse_content_blocks(&candidate.content.parts);
+        let text = content_blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut provider_response = if let Some(usage) = result.usage_metadata {
+            ProviderResponse::with_usage(
+                text,
+                usage.prompt_token_count,
+                usage.candidates_token_count,
+            )
+        } else {
+            ProviderResponse::text_only(text)
+        };
+
+        provider_response.content_blocks = content_blocks;
+        provider_response.stop_reason = Some(Self::map_stop_reason(candidate));
+
+        if let Some(model_version) = result.model_version {
+            provider_response = provider_response.with_model(model_version);
+        }
+
+        Ok(provider_response)
+    }
+
+    fn supports_tool_calling(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::Provider;
+    use crate::tools::traits::ToolSpec;
 
     #[test]
     fn provider_creates_without_key() {
@@ -377,17 +677,14 @@ mod tests {
     fn request_serialization() {
         let request = GenerateContentRequest {
             contents: vec![Content {
-                role: Some("user"),
-                parts: vec![Part {
-                    text: "Hello".to_string(),
-                }],
+                role: Some("user".to_string()),
+                parts: vec![Part::text("Hello".to_string())],
             }],
             system_instruction: Some(Content {
                 role: None,
-                parts: vec![Part {
-                    text: "You are helpful".to_string(),
-                }],
+                parts: vec![Part::text("You are helpful".to_string())],
             }),
+            tools: None,
             generation_config: GenerationConfig {
                 temperature: 0.7,
                 max_output_tokens: 8192,
@@ -426,6 +723,99 @@ mod tests {
             .unwrap()
             .text;
         assert_eq!(text, Some("Hello there!".to_string()));
+    }
+
+    #[test]
+    fn gemini_tools_serialize_as_function_declarations() {
+        let tools = vec![ToolSpec {
+            name: "shell".to_string(),
+            description: "Execute shell command".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"]
+            }),
+        }];
+
+        let request = GeminiProvider::build_tools_request(
+            None,
+            &[ProviderMessage::user("list files")],
+            &tools,
+            0.1,
+        );
+        let value = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(
+            value["tools"][0]["function_declarations"][0]["name"],
+            "shell"
+        );
+        assert_eq!(
+            value["tools"][0]["function_declarations"][0]["parameters"]["type"],
+            "object"
+        );
+    }
+
+    #[test]
+    fn gemini_function_call_response_parses_to_tool_use_block() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"functionCall": {"name": "shell", "args": {"command": "ls"}}}]
+                },
+                "finishReason": "FUNCTION_CALL"
+            }]
+        }"#;
+
+        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let candidate = response.candidates.unwrap().into_iter().next().unwrap();
+        let blocks = GeminiProvider::parse_content_blocks(&candidate.content.parts);
+
+        assert!(matches!(
+            &blocks[0],
+            ContentBlock::ToolUse { name, input, .. }
+            if name == "shell" && input == &serde_json::json!({"command": "ls"})
+        ));
+    }
+
+    #[test]
+    fn gemini_finish_reason_mapping_handles_tool_calls() {
+        let with_tool_call = Candidate {
+            content: CandidateContent {
+                parts: vec![ResponsePart {
+                    text: None,
+                    function_call: Some(GeminiFunctionCall {
+                        name: "shell".to_string(),
+                        args: serde_json::json!({"command": "ls"}),
+                        id: None,
+                    }),
+                }],
+            },
+            finish_reason: Some("STOP".to_string()),
+        };
+        let max_tokens = Candidate {
+            content: CandidateContent {
+                parts: vec![ResponsePart {
+                    text: Some("x".to_string()),
+                    function_call: None,
+                }],
+            },
+            finish_reason: Some("MAX_TOKENS".to_string()),
+        };
+
+        assert_eq!(
+            GeminiProvider::map_stop_reason(&with_tool_call),
+            StopReason::ToolUse
+        );
+        assert_eq!(
+            GeminiProvider::map_stop_reason(&max_tokens),
+            StopReason::MaxTokens
+        );
+    }
+
+    #[test]
+    fn supports_tool_calling_returns_true() {
+        let provider = GeminiProvider::new(Some("test-api-key"));
+        assert!(provider.supports_tool_calling());
     }
 
     #[test]

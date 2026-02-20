@@ -3,7 +3,12 @@
 //! This module provides a single implementation that works for all of them.
 
 use super::sanitize_api_error;
-use crate::providers::{ProviderResponse, traits::Provider};
+use crate::providers::{
+    ProviderMessage, ProviderResponse,
+    fallback_tools::{augment_system_prompt_with_tools, build_fallback_response},
+    traits::{Provider, messages_to_text},
+};
+use crate::tools::traits::ToolSpec;
 use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -349,6 +354,16 @@ impl OpenAiCompatibleProvider {
             }
         }
     }
+
+    fn prepare_fallback_input(
+        system_prompt: Option<&str>,
+        messages: &[ProviderMessage],
+        tools: &[ToolSpec],
+    ) -> (String, String) {
+        let augmented_prompt = augment_system_prompt_with_tools(system_prompt.unwrap_or(""), tools);
+        let text = messages_to_text(messages);
+        (augmented_prompt, text)
+    }
 }
 
 #[async_trait]
@@ -375,11 +390,27 @@ impl Provider for OpenAiCompatibleProvider {
         self.chat_with_system_internal(system_prompt, message, model, temperature)
             .await
     }
+
+    async fn chat_with_tools(
+        &self,
+        system_prompt: Option<&str>,
+        messages: &[ProviderMessage],
+        tools: &[ToolSpec],
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let (augmented_prompt, text) = Self::prepare_fallback_input(system_prompt, messages, tools);
+        let response = self
+            .chat_with_system_full(Some(&augmented_prompt), &text, model, temperature)
+            .await?;
+        Ok(build_fallback_response(response, tools))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::{ContentBlock, MessageRole, Provider, ProviderMessage};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -683,5 +714,41 @@ mod tests {
             p.chat_completions_url(),
             "https://opencode.ai/zen/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn fallback_input_includes_tool_schema_in_augmented_prompt() {
+        let messages = vec![ProviderMessage {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text {
+                text: "read src/lib.rs".to_string(),
+            }],
+        }];
+        let tools = vec![ToolSpec {
+            name: "file_read".to_string(),
+            description: "Read a file".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"}
+                }
+            }),
+        }];
+
+        let (prompt, text) = OpenAiCompatibleProvider::prepare_fallback_input(
+            Some("System prompt"),
+            &messages,
+            &tools,
+        );
+
+        assert!(prompt.contains("## Available Tools"));
+        assert!(prompt.contains("file_read: Read a file"));
+        assert!(text.contains("User: read src/lib.rs"));
+    }
+
+    #[test]
+    fn supports_tool_calling_returns_false() {
+        let provider = make_provider("test", "https://api.example.com", Some("key"));
+        assert!(!provider.supports_tool_calling());
     }
 }

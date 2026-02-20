@@ -1,4 +1,9 @@
-use crate::providers::{ProviderResponse, traits::Provider};
+use crate::providers::{
+    ProviderMessage, ProviderResponse,
+    fallback_tools::{augment_system_prompt_with_tools, build_fallback_response},
+    traits::{Provider, messages_to_text},
+};
+use crate::tools::traits::ToolSpec;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -105,6 +110,16 @@ impl OllamaProvider {
 
         response.json().await.map_err(anyhow::Error::msg)
     }
+
+    fn prepare_fallback_input(
+        system_prompt: Option<&str>,
+        messages: &[ProviderMessage],
+        tools: &[ToolSpec],
+    ) -> (String, String) {
+        let augmented_prompt = augment_system_prompt_with_tools(system_prompt.unwrap_or(""), tools);
+        let text = messages_to_text(messages);
+        (augmented_prompt, text)
+    }
 }
 
 #[async_trait]
@@ -145,11 +160,27 @@ impl Provider for OllamaProvider {
         }
         Ok(provider_response)
     }
+
+    async fn chat_with_tools(
+        &self,
+        system_prompt: Option<&str>,
+        messages: &[ProviderMessage],
+        tools: &[ToolSpec],
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let (augmented_prompt, text) = Self::prepare_fallback_input(system_prompt, messages, tools);
+        let response = self
+            .chat_with_system_full(Some(&augmented_prompt), &text, model, temperature)
+            .await?;
+        Ok(build_fallback_response(response, tools))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::{ContentBlock, MessageRole, Provider};
 
     #[test]
     fn default_url() {
@@ -234,5 +265,38 @@ mod tests {
         let json = r#"{"message":{"role":"assistant","content":"line1\nline2\nline3"}}"#;
         let resp: ChatResponse = serde_json::from_str(json).unwrap();
         assert!(resp.message.content.contains("line1"));
+    }
+
+    #[test]
+    fn fallback_input_includes_tool_schema_in_augmented_prompt() {
+        let messages = vec![ProviderMessage {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text {
+                text: "list files".to_string(),
+            }],
+        }];
+        let tools = vec![ToolSpec {
+            name: "shell".to_string(),
+            description: "Execute shell command".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"}
+                }
+            }),
+        }];
+
+        let (prompt, text) =
+            OllamaProvider::prepare_fallback_input(Some("You are helpful"), &messages, &tools);
+
+        assert!(prompt.contains("## Available Tools"));
+        assert!(prompt.contains("shell: Execute shell command"));
+        assert!(text.contains("User: list files"));
+    }
+
+    #[test]
+    fn supports_tool_calling_returns_false() {
+        let provider = OllamaProvider::new(None);
+        assert!(!provider.supports_tool_calling());
     }
 }
