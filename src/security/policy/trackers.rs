@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -52,6 +53,56 @@ impl Clone for ActionTracker {
         Self {
             actions: Mutex::new(actions.clone()),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct EntityRateLimiter {
+    global: ActionTracker,
+    per_entity: Mutex<HashMap<String, ActionTracker>>,
+    global_max: u32,
+    per_entity_max: u32,
+}
+
+#[derive(Debug, Clone)]
+pub enum RateLimitError {
+    GlobalExhausted,
+    EntityExhausted { entity_id: String },
+}
+
+impl EntityRateLimiter {
+    pub fn new(global_max: u32, per_entity_max: u32) -> Self {
+        Self {
+            global: ActionTracker::new(),
+            per_entity: Mutex::new(HashMap::new()),
+            global_max,
+            per_entity_max,
+        }
+    }
+
+    pub fn check_and_record(&self, entity_id: &str) -> Result<(), RateLimitError> {
+        if self.global.count() >= usize::try_from(self.global_max).unwrap_or(usize::MAX) {
+            return Err(RateLimitError::GlobalExhausted);
+        }
+
+        let mut per_entity = self
+            .per_entity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let tracker = per_entity
+            .entry(entity_id.to_string())
+            .or_insert_with(ActionTracker::new);
+
+        if tracker.count() >= usize::try_from(self.per_entity_max).unwrap_or(usize::MAX) {
+            return Err(RateLimitError::EntityExhausted {
+                entity_id: entity_id.to_string(),
+            });
+        }
+
+        self.global.record();
+        tracker.record();
+        Ok(())
     }
 }
 
@@ -127,5 +178,37 @@ fn rollover_day_if_needed(state: &mut DailyCostState) {
     if state.day_epoch != today {
         state.day_epoch = today;
         state.spent_cents = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EntityRateLimiter, RateLimitError};
+
+    #[test]
+    fn entity_rate_limiter_allows_independent_entity_buckets() {
+        let limiter = EntityRateLimiter::new(10, 2);
+
+        assert!(limiter.check_and_record("entity-a").is_ok());
+        assert!(limiter.check_and_record("entity-a").is_ok());
+        assert!(matches!(
+            limiter.check_and_record("entity-a"),
+            Err(RateLimitError::EntityExhausted { .. })
+        ));
+
+        assert!(limiter.check_and_record("entity-b").is_ok());
+        assert!(limiter.check_and_record("entity-b").is_ok());
+    }
+
+    #[test]
+    fn entity_rate_limiter_enforces_global_backstop() {
+        let limiter = EntityRateLimiter::new(2, 10);
+
+        assert!(limiter.check_and_record("entity-a").is_ok());
+        assert!(limiter.check_and_record("entity-b").is_ok());
+        assert!(matches!(
+            limiter.check_and_record("entity-c"),
+            Err(RateLimitError::GlobalExhausted)
+        ));
     }
 }

@@ -1,4 +1,5 @@
 use crate::security::{ActionPolicyVerdict, ExternalActionExecution, SecurityPolicy};
+use crate::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,11 @@ pub trait Tool: Send + Sync {
     fn parameters_schema(&self) -> serde_json::Value;
 
     /// Execute the tool with given arguments
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult>;
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> anyhow::Result<ToolResult>;
 
     /// Get the full spec for LLM registration
     fn spec(&self) -> ToolSpec {

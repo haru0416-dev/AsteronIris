@@ -7,6 +7,8 @@ pub mod memory_forget;
 pub mod memory_governance;
 pub mod memory_recall;
 pub mod memory_store;
+pub mod middleware;
+pub mod registry;
 pub mod shell;
 pub mod traits;
 
@@ -19,21 +21,28 @@ pub use memory_forget::MemoryForgetTool;
 pub use memory_governance::MemoryGovernanceTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
+#[allow(unused_imports)]
+pub use middleware::{
+    ExecutionContext, MiddlewareDecision, ToolMiddleware, default_middleware_chain,
+};
+#[allow(unused_imports)]
+pub use registry::ToolRegistry;
 pub use shell::ShellTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
 pub use traits::{ActionIntent, ActionOperator, ActionResult, NoopOperator, ToolResult, ToolSpec};
 
+use crate::config::schema::ToolsConfig;
 use crate::memory::Memory;
 use crate::security::SecurityPolicy;
 use std::sync::Arc;
 
 /// Create the default tool registry
-pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
+pub fn default_tools(_security: &Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
     vec![
-        Box::new(ShellTool::new(Arc::clone(&security))),
-        Box::new(FileReadTool::new(Arc::clone(&security))),
-        Box::new(FileWriteTool::new(security)),
+        Box::new(ShellTool::new()),
+        Box::new(FileReadTool::new()),
+        Box::new(FileWriteTool::new()),
     ]
 }
 
@@ -100,21 +109,41 @@ pub fn all_tools(
     memory: Arc<dyn Memory>,
     composio_key: Option<&str>,
     browser_config: &crate::config::BrowserConfig,
+    tools_config: &ToolsConfig,
 ) -> Vec<Box<dyn Tool>> {
-    let mut tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(ShellTool::new(Arc::clone(security))),
-        Box::new(FileReadTool::new(Arc::clone(security))),
-        Box::new(FileWriteTool::new(Arc::clone(security))),
-        Box::new(MemoryStoreTool::new(Arc::clone(&memory))),
-        Box::new(MemoryRecallTool::new(Arc::clone(&memory))),
-        Box::new(MemoryForgetTool::new(Arc::clone(&memory))),
-        Box::new(MemoryGovernanceTool::new(memory, Arc::clone(security))),
-    ];
+    let mut tools: Vec<Box<dyn Tool>> = Vec::new();
+
+    if tools_config.shell.enabled {
+        tools.push(Box::new(ShellTool::new()));
+    }
+
+    if tools_config.file_read.enabled {
+        tools.push(Box::new(FileReadTool::new()));
+    }
+
+    if tools_config.file_write.enabled {
+        tools.push(Box::new(FileWriteTool::new()));
+    }
+
+    if tools_config.memory_store.enabled {
+        tools.push(Box::new(MemoryStoreTool::new(Arc::clone(&memory))));
+    }
+
+    if tools_config.memory_recall.enabled {
+        tools.push(Box::new(MemoryRecallTool::new(Arc::clone(&memory))));
+    }
+
+    if tools_config.memory_forget.enabled {
+        tools.push(Box::new(MemoryForgetTool::new(Arc::clone(&memory))));
+    }
+
+    if tools_config.memory_governance.enabled {
+        tools.push(Box::new(MemoryGovernanceTool::new(memory)));
+    }
 
     if browser_config.enabled {
         // Add legacy browser_open tool for simple URL opening
         tools.push(Box::new(BrowserOpenTool::new(
-            Arc::clone(security),
             browser_config.allowed_domains.clone(),
         )));
         // Add full browser automation tool (agent-browser)
@@ -137,13 +166,14 @@ pub fn all_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::schema::ToolEntry;
     use crate::config::{BrowserConfig, MemoryConfig};
     use tempfile::TempDir;
 
     #[test]
     fn default_tools_has_three() {
         let security = Arc::new(SecurityPolicy::default());
-        let tools = default_tools(security);
+        let tools = default_tools(&security);
         assert_eq!(tools.len(), 3);
     }
 
@@ -164,7 +194,8 @@ mod tests {
             session_name: None,
         };
 
-        let tools = all_tools(&security, mem, None, &browser);
+        let tools_cfg = ToolsConfig::default();
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"browser_open"));
     }
@@ -186,7 +217,8 @@ mod tests {
             session_name: None,
         };
 
-        let tools = all_tools(&security, mem, None, &browser);
+        let tools_cfg = ToolsConfig::default();
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"browser_open"));
     }
@@ -194,7 +226,7 @@ mod tests {
     #[test]
     fn default_tools_names() {
         let security = Arc::new(SecurityPolicy::default());
-        let tools = default_tools(security);
+        let tools = default_tools(&security);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"shell"));
         assert!(names.contains(&"file_read"));
@@ -204,7 +236,7 @@ mod tests {
     #[test]
     fn default_tools_all_have_descriptions() {
         let security = Arc::new(SecurityPolicy::default());
-        let tools = default_tools(security);
+        let tools = default_tools(&security);
         for tool in &tools {
             assert!(
                 !tool.description().is_empty(),
@@ -217,7 +249,7 @@ mod tests {
     #[test]
     fn default_tools_all_have_schemas() {
         let security = Arc::new(SecurityPolicy::default());
-        let tools = default_tools(security);
+        let tools = default_tools(&security);
         for tool in &tools {
             let schema = tool.parameters_schema();
             assert!(
@@ -236,7 +268,7 @@ mod tests {
     #[test]
     fn tool_spec_generation() {
         let security = Arc::new(SecurityPolicy::default());
-        let tools = default_tools(security);
+        let tools = default_tools(&security);
         for tool in &tools {
             let spec = tool.spec();
             assert_eq!(spec.name, tool.name());
@@ -283,5 +315,136 @@ mod tests {
         let parsed: ToolSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "test");
         assert_eq!(parsed.description, "A test tool");
+    }
+
+    #[test]
+    fn all_tools_respects_disabled_shell() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let mut tools_cfg = ToolsConfig::default();
+        tools_cfg.shell.enabled = false;
+
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(!names.contains(&"shell"));
+    }
+
+    #[test]
+    fn all_tools_respects_disabled_file_read() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let mut tools_cfg = ToolsConfig::default();
+        tools_cfg.file_read.enabled = false;
+
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(!names.contains(&"file_read"));
+    }
+
+    #[test]
+    fn all_tools_respects_disabled_memory_forget() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let tools_cfg = ToolsConfig::default();
+
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(!names.contains(&"memory_forget"));
+    }
+
+    #[test]
+    fn all_tools_includes_memory_forget_when_enabled() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let mut tools_cfg = ToolsConfig::default();
+        tools_cfg.memory_forget.enabled = true;
+
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"memory_forget"));
+    }
+
+    #[test]
+    fn all_tools_with_all_disabled_yields_empty() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let tools_cfg = ToolsConfig {
+            shell: ToolEntry { enabled: false },
+            file_read: ToolEntry { enabled: false },
+            file_write: ToolEntry { enabled: false },
+            memory_store: ToolEntry { enabled: false },
+            memory_recall: ToolEntry { enabled: false },
+            memory_forget: ToolEntry { enabled: false },
+            memory_governance: ToolEntry { enabled: false },
+        };
+
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        assert_eq!(tools.len(), 0);
+    }
+
+    #[test]
+    fn all_tools_default_config_has_expected_tools() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let tools_cfg = ToolsConfig::default();
+
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+
+        assert!(names.contains(&"shell"));
+        assert!(names.contains(&"file_read"));
+        assert!(names.contains(&"file_write"));
+        assert!(names.contains(&"memory_store"));
+        assert!(names.contains(&"memory_recall"));
+        assert!(!names.contains(&"memory_forget"));
+        assert!(!names.contains(&"memory_governance"));
     }
 }
