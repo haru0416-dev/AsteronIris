@@ -103,7 +103,6 @@ pub async fn run_gateway(host: &str, port: u16, config: Arc<Config>) -> Result<(
 }
 
 /// Run the HTTP gateway from a pre-bound listener.
-#[allow(clippy::too_many_lines)]
 pub async fn run_gateway_with_listener(
     host: &str,
     listener: tokio::net::TcpListener,
@@ -144,7 +143,6 @@ pub async fn run_gateway_with_listener(
         .and_then(|w| w.secret.as_deref())
         .map(Arc::from);
 
-    // WhatsApp channel (if configured)
     let whatsapp_channel: Option<Arc<WhatsAppChannel>> =
         config.channels_config.whatsapp.as_ref().map(|wa| {
             Arc::new(WhatsAppChannel::new(
@@ -155,77 +153,22 @@ pub async fn run_gateway_with_listener(
             ))
         });
 
-    // WhatsApp app secret for webhook signature verification
-    // Priority: environment variable > config file
-    let whatsapp_app_secret: Option<Arc<str>> = std::env::var("ASTERONIRIS_WHATSAPP_APP_SECRET")
-        .ok()
-        .and_then(|secret| {
-            let secret = secret.trim();
-            (!secret.is_empty()).then(|| secret.to_owned())
-        })
-        .or_else(|| {
-            config.channels_config.whatsapp.as_ref().and_then(|wa| {
-                wa.app_secret
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|secret| !secret.is_empty())
-                    .map(ToOwned::to_owned)
-            })
-        })
-        .map(Arc::from);
+    let whatsapp_app_secret = resolve_whatsapp_app_secret(&config);
 
-    // ── Pairing guard ──────────────────────────────────────
     let pairing = Arc::new(PairingGuard::new(
         config.gateway.require_pairing,
         &config.gateway.paired_tokens,
     ));
 
-    // ── Tunnel ────────────────────────────────────────────────
-    let tunnel = crate::tunnel::create_tunnel(&config.tunnel)?;
-    let mut tunnel_url: Option<String> = None;
+    let tunnel_url = start_tunnel(&config, host, actual_port).await?;
 
-    if let Some(ref tun) = tunnel {
-        println!("› {}", t!("gateway.tunnel_starting", name = tun.name()));
-        match tun.start(host, actual_port).await {
-            Ok(url) => {
-                println!("✓ {}", t!("gateway.tunnel_active", url = url));
-                tunnel_url = Some(url);
-            }
-            Err(e) => {
-                println!("! {}", t!("gateway.tunnel_failed", error = e));
-                println!("   {}", t!("gateway.tunnel_fallback"));
-            }
-        }
-    }
-
-    println!("◆ {}", t!("gateway.listening", addr = display_addr));
-    if let Some(ref url) = tunnel_url {
-        println!("  › {}", t!("gateway.public_url", url = url));
-    }
-    println!("  {}", t!("gateway.route_pair"));
-    println!("  {}", t!("gateway.route_webhook"));
-    println!("  GET /ws → WebSocket");
-    if whatsapp_channel.is_some() {
-        println!("  {}", t!("gateway.route_whatsapp_get"));
-        println!("  {}", t!("gateway.route_whatsapp_post"));
-    }
-    println!("  {}", t!("gateway.route_health"));
-    if let Some(code) = pairing.pairing_code() {
-        println!();
-        println!("  ✓ {}", t!("gateway.pairing_required"));
-        println!("     ┌──────────────┐");
-        println!("     │  {code}  │");
-        println!("     └──────────────┘");
-        println!("     {}", t!("gateway.pairing_send", code = code));
-    } else if pairing.require_pairing() {
-        println!("  ✓ {}", t!("gateway.pairing_active"));
-    } else {
-        println!("  ! {}", t!("gateway.pairing_disabled"));
-    }
-    if webhook_secret.is_some() {
-        println!("  ✓ {}", t!("gateway.webhook_secret_enabled"));
-    }
-    println!("  {}\n", t!("gateway.stop_hint"));
+    print_gateway_banner(
+        &display_addr,
+        tunnel_url.as_deref(),
+        whatsapp_channel.is_some(),
+        &pairing,
+        webhook_secret.is_some(),
+    );
 
     crate::health::mark_component_ok("gateway");
 
@@ -245,7 +188,92 @@ pub async fn run_gateway_with_listener(
         security,
     };
 
-    let app = Router::new()
+    let app = build_app(state);
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+// Priority: environment variable > config file.
+fn resolve_whatsapp_app_secret(config: &Config) -> Option<Arc<str>> {
+    std::env::var("ASTERONIRIS_WHATSAPP_APP_SECRET")
+        .ok()
+        .and_then(|secret| {
+            let secret = secret.trim();
+            (!secret.is_empty()).then(|| secret.to_owned())
+        })
+        .or_else(|| {
+            config.channels_config.whatsapp.as_ref().and_then(|wa| {
+                wa.app_secret
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|secret| !secret.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+        })
+        .map(Arc::from)
+}
+
+async fn start_tunnel(config: &Config, host: &str, port: u16) -> Result<Option<String>> {
+    let tunnel = crate::tunnel::create_tunnel(&config.tunnel)?;
+
+    let Some(ref tun) = tunnel else {
+        return Ok(None);
+    };
+
+    println!("› {}", t!("gateway.tunnel_starting", name = tun.name()));
+    match tun.start(host, port).await {
+        Ok(url) => {
+            println!("✓ {}", t!("gateway.tunnel_active", url = url));
+            Ok(Some(url))
+        }
+        Err(e) => {
+            println!("! {}", t!("gateway.tunnel_failed", error = e));
+            println!("   {}", t!("gateway.tunnel_fallback"));
+            Ok(None)
+        }
+    }
+}
+
+fn print_gateway_banner(
+    display_addr: &str,
+    tunnel_url: Option<&str>,
+    whatsapp_enabled: bool,
+    pairing: &PairingGuard,
+    webhook_secret_enabled: bool,
+) {
+    println!("◆ {}", t!("gateway.listening", addr = display_addr));
+    if let Some(url) = tunnel_url {
+        println!("  › {}", t!("gateway.public_url", url = url));
+    }
+    println!("  {}", t!("gateway.route_pair"));
+    println!("  {}", t!("gateway.route_webhook"));
+    println!("  GET /ws → WebSocket");
+    if whatsapp_enabled {
+        println!("  {}", t!("gateway.route_whatsapp_get"));
+        println!("  {}", t!("gateway.route_whatsapp_post"));
+    }
+    println!("  {}", t!("gateway.route_health"));
+    if let Some(code) = pairing.pairing_code() {
+        println!();
+        println!("  ✓ {}", t!("gateway.pairing_required"));
+        println!("     ┌──────────────┐");
+        println!("     │  {code}  │");
+        println!("     └──────────────┘");
+        println!("     {}", t!("gateway.pairing_send", code = code));
+    } else if pairing.require_pairing() {
+        println!("  ✓ {}", t!("gateway.pairing_active"));
+    } else {
+        println!("  ! {}", t!("gateway.pairing_disabled"));
+    }
+    if webhook_secret_enabled {
+        println!("  ✓ {}", t!("gateway.webhook_secret_enabled"));
+    }
+    println!("  {}\n", t!("gateway.stop_hint"));
+}
+
+fn build_app(state: AppState) -> Router {
+    Router::new()
         .route("/health", get(handle_health))
         .route("/pair", post(handle_pair))
         .route("/webhook", post(handle_webhook))
@@ -261,11 +289,7 @@ pub async fn run_gateway_with_listener(
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(REQUEST_TIMEOUT_SECS),
-        ));
-
-    axum::serve(listener, app).await?;
-
-    Ok(())
+        ))
 }
 
 #[cfg(test)]

@@ -5,7 +5,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 pub struct OpenAiProvider {
-    api_key: Option<String>,
+    /// Pre-computed `"Bearer <key>"` header value (avoids `format!` per request).
+    cached_auth_header: Option<String>,
     client: Client,
 }
 
@@ -18,7 +19,7 @@ struct ChatRequest {
 
 #[derive(Debug, Serialize)]
 struct Message {
-    role: String,
+    role: &'static str,
     content: String,
 }
 
@@ -48,10 +49,13 @@ struct ResponseMessage {
 impl OpenAiProvider {
     pub fn new(api_key: Option<&str>) -> Self {
         Self {
-            api_key: api_key.map(ToString::to_string),
+            cached_auth_header: api_key.map(|k| format!("Bearer {k}")),
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
@@ -63,17 +67,18 @@ impl OpenAiProvider {
         model: &str,
         temperature: f64,
     ) -> ChatRequest {
-        let mut messages = Vec::new();
+        let capacity = if system_prompt.is_some() { 2 } else { 1 };
+        let mut messages = Vec::with_capacity(capacity);
 
         if let Some(sys) = system_prompt {
             messages.push(Message {
-                role: "system".to_string(),
+                role: "system",
                 content: sys.to_string(),
             });
         }
 
         messages.push(Message {
-            role: "user".to_string(),
+            role: "user",
             content: message.to_string(),
         });
 
@@ -99,7 +104,7 @@ impl OpenAiProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<ChatResponse> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
+        let auth_header = self.cached_auth_header.as_ref().ok_or_else(|| {
             anyhow::anyhow!("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
         })?;
 
@@ -108,7 +113,7 @@ impl OpenAiProvider {
         let response = self
             .client
             .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Authorization", auth_header)
             .json(&request)
             .send()
             .await
@@ -170,19 +175,22 @@ mod tests {
     #[test]
     fn creates_with_key() {
         let p = OpenAiProvider::new(Some("sk-proj-abc123"));
-        assert_eq!(p.api_key.as_deref(), Some("sk-proj-abc123"));
+        assert_eq!(
+            p.cached_auth_header.as_deref(),
+            Some("Bearer sk-proj-abc123")
+        );
     }
 
     #[test]
     fn creates_without_key() {
         let p = OpenAiProvider::new(None);
-        assert!(p.api_key.is_none());
+        assert!(p.cached_auth_header.is_none());
     }
 
     #[test]
     fn creates_with_empty_key() {
         let p = OpenAiProvider::new(Some(""));
-        assert_eq!(p.api_key.as_deref(), Some(""));
+        assert_eq!(p.cached_auth_header.as_deref(), Some("Bearer "));
     }
 
     #[tokio::test]
@@ -208,11 +216,11 @@ mod tests {
             model: "gpt-4o".to_string(),
             messages: vec![
                 Message {
-                    role: "system".to_string(),
+                    role: "system",
                     content: "You are AsteronIris".to_string(),
                 },
                 Message {
-                    role: "user".to_string(),
+                    role: "user",
                     content: "hello".to_string(),
                 },
             ],
@@ -229,7 +237,7 @@ mod tests {
         let req = ChatRequest {
             model: "gpt-4o".to_string(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: "user",
                 content: "hello".to_string(),
             }],
             temperature: 0.0,

@@ -10,16 +10,16 @@ impl SqliteMemory {
         query: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<(String, f32)>> {
-        // Escape FTS5 special chars and build query
-        let fts_query: String = query.split_whitespace().fold(String::new(), |mut acc, w| {
-            if !acc.is_empty() {
-                acc.push_str(" OR ");
+        let words: Vec<&str> = query.split_whitespace().collect();
+        let mut fts_query = String::with_capacity(words.len() * 20);
+        for (i, w) in words.iter().enumerate() {
+            if i > 0 {
+                fts_query.push_str(" OR ");
             }
-            acc.push('"');
-            acc.push_str(w);
-            acc.push('"');
-            acc
-        });
+            fts_query.push('"');
+            fts_query.push_str(w);
+            fts_query.push('"');
+        }
 
         if fts_query.is_empty() {
             return Ok(Vec::new());
@@ -32,7 +32,7 @@ impl SqliteMemory {
                    ORDER BY score
                    LIMIT ?2";
 
-        let mut stmt = conn.prepare(sql)?;
+        let mut stmt = conn.prepare_cached(sql)?;
         #[allow(clippy::cast_possible_wrap)]
         let limit_i64 = limit as i64;
 
@@ -44,7 +44,7 @@ impl SqliteMemory {
             Ok((id, (-score) as f32))
         })?;
 
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(limit);
         for row in rows {
             results.push(row?);
         }
@@ -59,7 +59,7 @@ impl SqliteMemory {
         limit: usize,
     ) -> anyhow::Result<Vec<(String, f32)>> {
         let mut stmt =
-            conn.prepare("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL")?;
+            conn.prepare_cached("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL")?;
 
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
@@ -67,7 +67,7 @@ impl SqliteMemory {
             Ok((id, blob))
         })?;
 
-        let mut scored: Vec<(String, f32)> = Vec::new();
+        let mut scored: Vec<(String, f32)> = Vec::with_capacity(limit);
         for row in rows {
             let (id, blob) = row?;
             let emb = vector::bytes_to_vec(&blob);

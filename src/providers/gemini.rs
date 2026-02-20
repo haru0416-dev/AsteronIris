@@ -32,7 +32,7 @@ struct GenerateContentRequest {
 #[derive(Debug, Serialize)]
 struct Content {
     #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<String>,
+    role: Option<&'static str>,
     parts: Vec<Part>,
 }
 
@@ -119,6 +119,9 @@ impl GeminiProvider {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
@@ -197,7 +200,7 @@ impl GeminiProvider {
 
         GenerateContentRequest {
             contents: vec![Content {
-                role: Some("user".to_string()),
+                role: Some("user"),
                 parts: vec![Part {
                     text: message.to_string(),
                 }],
@@ -374,7 +377,7 @@ mod tests {
     fn request_serialization() {
         let request = GenerateContentRequest {
             contents: vec![Content {
-                role: Some("user".to_string()),
+                role: Some("user"),
                 parts: vec![Part {
                     text: "Hello".to_string(),
                 }],

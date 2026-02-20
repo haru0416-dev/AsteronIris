@@ -114,8 +114,8 @@ impl EmbeddingProvider for NoopEmbedding {
 
 pub struct OpenAiEmbedding {
     client: reqwest::Client,
-    base_url: String,
-    api_key: String,
+    cached_embeddings_url: String,
+    cached_auth_header: String,
     model: String,
     dims: usize,
 }
@@ -201,16 +201,20 @@ fn validate_custom_base_url(raw: &str, policy: CustomBaseUrlPolicy) -> anyhow::R
 
 impl OpenAiEmbedding {
     pub fn new(base_url: &str, api_key: &str, model: &str, dims: usize) -> Self {
+        let base = base_url.trim_end_matches('/');
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(10))
+            .pool_max_idle_per_host(10)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_keepalive(Duration::from_secs(60))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
         Self {
             client,
-            base_url: base_url.trim_end_matches('/').to_string(),
-            api_key: api_key.to_string(),
+            cached_embeddings_url: format!("{base}/v1/embeddings"),
+            cached_auth_header: format!("Bearer {api_key}"),
             model: model.to_string(),
             dims,
         }
@@ -239,8 +243,8 @@ impl EmbeddingProvider for OpenAiEmbedding {
 
         let resp = self
             .client
-            .post(format!("{}/v1/embeddings", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .post(&self.cached_embeddings_url)
+            .header("Authorization", &self.cached_auth_header)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -453,7 +457,10 @@ mod tests {
     #[test]
     fn openai_trailing_slash_stripped() {
         let p = OpenAiEmbedding::new("https://api.openai.com/", "key", "model", 1536);
-        assert_eq!(p.base_url, "https://api.openai.com");
+        assert_eq!(
+            p.cached_embeddings_url,
+            "https://api.openai.com/v1/embeddings"
+        );
     }
 
     #[test]

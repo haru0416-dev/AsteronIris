@@ -90,7 +90,7 @@ impl SqliteMemory {
                 0.0
             };
 
-        let mut incumbent_stmt = conn.prepare(
+        let mut incumbent_stmt = conn.prepare_cached(
             "SELECT winner_event_id, source, confidence, updated_at FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
         )?;
         let current: Option<(String, String, f64, String)> = incumbent_stmt
@@ -320,7 +320,7 @@ impl SqliteMemory {
         let like_query = format!("%{}%", query.query);
         #[allow(clippy::cast_possible_wrap)]
         let limit_i64 = query.limit as i64;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT rd.entity_id, rd.slot_key, rd.text_body, rd.reliability, rd.importance, rd.visibility, rd.updated_at,
                     rd.provenance_source_class, rd.provenance_reference, bs.status,
                     EXISTS(
@@ -401,7 +401,7 @@ impl SqliteMemory {
             },
         )?;
 
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(query.limit);
         for row in rows {
             let candidate = row?;
             if candidate.allowed_for_replay() {
@@ -519,7 +519,7 @@ impl SqliteMemory {
             )
         };
 
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(limit);
         let merged_ids = merged
             .iter()
             .map(|scored| scored.id.clone())
@@ -645,7 +645,7 @@ impl SqliteMemory {
             })
         })?;
 
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(limit);
         for row in rows {
             out.push(row?);
         }
@@ -663,7 +663,7 @@ impl SqliteMemory {
             .lock()
             .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, key, content, category, created_at FROM memories WHERE key = ?1",
         )?;
 
@@ -696,7 +696,7 @@ impl SqliteMemory {
             .lock()
             .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(64);
 
         let row_mapper = |row: &rusqlite::Row| -> rusqlite::Result<MemoryEntry> {
             Ok(MemoryEntry {
@@ -712,7 +712,7 @@ impl SqliteMemory {
 
         if let Some(cat) = category {
             let cat_str = Self::category_to_str(cat);
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, key, content, category, created_at FROM memories
                  WHERE category = ?1 ORDER BY updated_at DESC",
             )?;
@@ -721,7 +721,7 @@ impl SqliteMemory {
                 results.push(row?);
             }
         } else {
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, key, content, category, created_at FROM memories
                  ORDER BY updated_at DESC",
             )?;

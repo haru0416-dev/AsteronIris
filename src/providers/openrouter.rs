@@ -4,7 +4,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 pub struct OpenRouterProvider {
-    api_key: Option<String>,
+    /// Pre-computed `"Bearer <key>"` header value (avoids `format!` per request).
+    cached_auth_header: Option<String>,
     client: Client,
 }
 
@@ -17,7 +18,7 @@ struct ChatRequest {
 
 #[derive(Debug, Serialize)]
 struct Message {
-    role: String,
+    role: &'static str,
     content: String,
 }
 
@@ -47,10 +48,13 @@ struct ResponseMessage {
 impl OpenRouterProvider {
     pub fn new(api_key: Option<&str>) -> Self {
         Self {
-            api_key: api_key.map(ToString::to_string),
+            cached_auth_header: api_key.map(|k| format!("Bearer {k}")),
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
@@ -62,17 +66,18 @@ impl OpenRouterProvider {
         model: &str,
         temperature: f64,
     ) -> ChatRequest {
-        let mut messages = Vec::new();
+        let capacity = if system_prompt.is_some() { 2 } else { 1 };
+        let mut messages = Vec::with_capacity(capacity);
 
         if let Some(sys) = system_prompt {
             messages.push(Message {
-                role: "system".to_string(),
+                role: "system",
                 content: sys.to_string(),
             });
         }
 
         messages.push(Message {
-            role: "user".to_string(),
+            role: "user",
             content: message.to_string(),
         });
 
@@ -98,7 +103,7 @@ impl OpenRouterProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<ChatResponse> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
+        let auth_header = self.cached_auth_header.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "OpenRouter API key not set. Run `asteroniris onboard` or set OPENROUTER_API_KEY env var."
             )
@@ -109,7 +114,7 @@ impl OpenRouterProvider {
         let response = self
             .client
             .post("https://openrouter.ai/api/v1/chat/completions")
-            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Authorization", auth_header)
             .header(
                 "HTTP-Referer",
                 "https://github.com/haru0416-dev/AsteronIris",
@@ -132,10 +137,10 @@ impl Provider for OpenRouterProvider {
     async fn warmup(&self) -> anyhow::Result<()> {
         // Hit a lightweight endpoint to establish TLS + HTTP/2 connection pool.
         // This prevents the first real chat request from timing out on cold start.
-        if let Some(api_key) = self.api_key.as_ref() {
+        if let Some(auth_header) = self.cached_auth_header.as_ref() {
             self.client
                 .get("https://openrouter.ai/api/v1/auth/key")
-                .header("Authorization", format!("Bearer {api_key}"))
+                .header("Authorization", auth_header)
                 .send()
                 .await?
                 .error_for_status()?;

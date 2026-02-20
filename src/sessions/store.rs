@@ -190,7 +190,7 @@ impl SessionStore for SqliteSessionStore {
 
     fn get_session(&self, id: &str) -> Result<Option<Session>> {
         let conn = self.lock_connection()?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, channel, user_id, state, model, metadata, created_at, updated_at
              FROM sessions
              WHERE id = ?1",
@@ -203,7 +203,7 @@ impl SessionStore for SqliteSessionStore {
 
     fn get_or_create_session(&self, channel: &str, user_id: &str) -> Result<Session> {
         let conn = self.lock_connection()?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, channel, user_id, state, model, metadata, created_at, updated_at
              FROM sessions
              WHERE channel = ?1 AND user_id = ?2 AND state = 'active'
@@ -224,14 +224,14 @@ impl SessionStore for SqliteSessionStore {
         let conn = self.lock_connection()?;
         let mut sessions = Vec::new();
         let mut stmt = if channel.is_some() {
-            conn.prepare(
+            conn.prepare_cached(
                 "SELECT id, channel, user_id, state, model, metadata, created_at, updated_at
                  FROM sessions
                  WHERE channel = ?1
                  ORDER BY updated_at DESC",
             )?
         } else {
-            conn.prepare(
+            conn.prepare_cached(
                 "SELECT id, channel, user_id, state, model, metadata, created_at, updated_at
                  FROM sessions
                  ORDER BY updated_at DESC",
@@ -323,7 +323,7 @@ impl SessionStore for SqliteSessionStore {
         let mut messages = Vec::new();
         if let Some(limit_count) = limit {
             let limit_i64 = i64::try_from(limit_count)?;
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, session_id, role, content, input_tokens, output_tokens, created_at
                  FROM chat_messages
                  WHERE session_id = ?1
@@ -337,7 +337,7 @@ impl SessionStore for SqliteSessionStore {
             }
             messages.reverse();
         } else {
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, session_id, role, content, input_tokens, output_tokens, created_at
                  FROM chat_messages
                  WHERE session_id = ?1

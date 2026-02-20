@@ -64,181 +64,110 @@ fn resolve_api_key(name: &str, explicit_api_key: Option<&str>) -> Option<String>
     None
 }
 
-#[allow(clippy::too_many_lines)]
-pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<dyn Provider>> {
-    let resolved_key = resolve_api_key(name, api_key);
-    let api_key = resolved_key.as_deref();
-    match name {
-        // ── Primary providers (custom implementations) ───────
-        "openrouter" => Ok(Box::new(super::openrouter::OpenRouterProvider::new(
-            api_key,
-        ))),
-        "anthropic" => Ok(Box::new(super::anthropic::AnthropicProvider::new(api_key))),
-        "openai" => Ok(Box::new(super::openai::OpenAiProvider::new(api_key))),
-        "ollama" => Ok(Box::new(super::ollama::OllamaProvider::new(None))),
-        "gemini" | "google" | "google-gemini" => {
-            Ok(Box::new(super::gemini::GeminiProvider::new(api_key)))
-        }
-
-        // ── OpenAI-compatible providers ──────────────────────
-        "venice" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Venice",
-            "https://api.venice.ai",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "vercel" | "vercel-ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Vercel AI Gateway",
-            "https://api.vercel.ai",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "cloudflare" | "cloudflare-ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
+fn compatible_provider_spec(name: &str) -> Option<(&'static str, &'static str)> {
+    let spec = match name {
+        "venice" => ("Venice", "https://api.venice.ai"),
+        "vercel" | "vercel-ai" => ("Vercel AI Gateway", "https://api.vercel.ai"),
+        "cloudflare" | "cloudflare-ai" => (
             "Cloudflare AI Gateway",
             "https://gateway.ai.cloudflare.com/v1",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "moonshot" | "kimi" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Moonshot",
-            "https://api.moonshot.cn",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "synthetic" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Synthetic",
-            "https://api.synthetic.com",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "opencode" | "opencode-zen" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "OpenCode Zen",
-            "https://api.opencode.ai",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "zai" | "z.ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Z.AI",
-            "https://api.z.ai/api/coding/paas/v4",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "glm" | "zhipu" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "GLM",
-            "https://open.bigmodel.cn/api/paas",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "minimax" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "MiniMax",
-            "https://api.minimax.chat",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "bedrock" | "aws-bedrock" => Ok(Box::new(OpenAiCompatibleProvider::new(
+        ),
+        "moonshot" | "kimi" => ("Moonshot", "https://api.moonshot.cn"),
+        "synthetic" => ("Synthetic", "https://api.synthetic.com"),
+        "opencode" | "opencode-zen" => ("OpenCode Zen", "https://api.opencode.ai"),
+        "zai" | "z.ai" => ("Z.AI", "https://api.z.ai/api/coding/paas/v4"),
+        "glm" | "zhipu" => ("GLM", "https://open.bigmodel.cn/api/paas"),
+        "minimax" => ("MiniMax", "https://api.minimax.chat"),
+        "bedrock" | "aws-bedrock" => (
             "Amazon Bedrock",
             "https://bedrock-runtime.us-east-1.amazonaws.com",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "qianfan" | "baidu" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Qianfan",
-            "https://aip.baidubce.com",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
+        ),
+        "qianfan" | "baidu" => ("Qianfan", "https://aip.baidubce.com"),
+        "groq" => ("Groq", "https://api.groq.com/openai"),
+        "mistral" => ("Mistral", "https://api.mistral.ai"),
+        "xai" | "grok" => ("xAI", "https://api.x.ai"),
+        "deepseek" => ("DeepSeek", "https://api.deepseek.com"),
+        "together" | "together-ai" => ("Together AI", "https://api.together.xyz"),
+        "fireworks" | "fireworks-ai" => ("Fireworks AI", "https://api.fireworks.ai/inference"),
+        "perplexity" => ("Perplexity", "https://api.perplexity.ai"),
+        "cohere" => ("Cohere", "https://api.cohere.com/compatibility"),
+        "copilot" | "github-copilot" => ("GitHub Copilot", "https://api.githubcopilot.com"),
+        _ => return None,
+    };
+    Some(spec)
+}
 
-        // ── Extended ecosystem (community favorites) ─────────
-        "groq" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Groq",
-            "https://api.groq.com/openai",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "mistral" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Mistral",
-            "https://api.mistral.ai",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "xai" | "grok" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "xAI",
-            "https://api.x.ai",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "deepseek" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "DeepSeek",
-            "https://api.deepseek.com",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "together" | "together-ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Together AI",
-            "https://api.together.xyz",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "fireworks" | "fireworks-ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Fireworks AI",
-            "https://api.fireworks.ai/inference",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "perplexity" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Perplexity",
-            "https://api.perplexity.ai",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "cohere" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Cohere",
-            "https://api.cohere.com/compatibility",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-        "copilot" | "github-copilot" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "GitHub Copilot",
-            "https://api.githubcopilot.com",
-            api_key,
-            AuthStyle::Bearer,
-        ))),
-
-        // ── Bring Your Own Provider (custom URL) ───────────
-        name if name.starts_with("custom:") => {
-            let base_url = name.strip_prefix("custom:").unwrap_or("");
-            if base_url.is_empty() {
-                anyhow::bail!(
-                    "Custom provider requires a URL. Format: custom:https://your-api.com"
-                );
-            }
+fn create_custom_provider(
+    name: &str,
+    api_key: Option<&str>,
+) -> Option<anyhow::Result<Box<dyn Provider>>> {
+    if let Some(base_url) = name.strip_prefix("custom:") {
+        Some(if base_url.is_empty() {
+            Err(anyhow::anyhow!(
+                "Custom provider requires a URL. Format: custom:https://your-api.com"
+            ))
+        } else {
             Ok(Box::new(OpenAiCompatibleProvider::new(
                 "Custom",
                 base_url,
                 api_key,
                 AuthStyle::Bearer,
             )))
-        }
-
-        // ── Anthropic-compatible custom endpoints ───────────
-        name if name.starts_with("anthropic-custom:") => {
-            let base_url = name.strip_prefix("anthropic-custom:").unwrap_or("");
-            if base_url.is_empty() {
-                anyhow::bail!(
-                    "Anthropic-custom provider requires a URL. Format: anthropic-custom:https://your-api.com"
-                );
-            }
+        })
+    } else if let Some(base_url) = name.strip_prefix("anthropic-custom:") {
+        Some(if base_url.is_empty() {
+            Err(anyhow::anyhow!(
+                "Anthropic-custom provider requires a URL. Format: anthropic-custom:https://your-api.com"
+            ))
+        } else {
             Ok(Box::new(
                 super::anthropic::AnthropicProvider::with_base_url(api_key, Some(base_url)),
             ))
-        }
-
-        _ => anyhow::bail!(
-            "Unknown provider: {name}. Check README for supported providers or run `asteroniris onboard --interactive` to reconfigure.\n\
-             Tip: Use \"custom:https://your-api.com\" for OpenAI-compatible endpoints.\n\
-             Tip: Use \"anthropic-custom:https://your-api.com\" for Anthropic-compatible endpoints."
-        ),
+        })
+    } else {
+        None
     }
+}
+
+pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<dyn Provider>> {
+    let resolved_key = resolve_api_key(name, api_key);
+    let api_key = resolved_key.as_deref();
+
+    // ── Primary providers (custom implementations) ───────
+    match name {
+        "openrouter" => {
+            return Ok(Box::new(super::openrouter::OpenRouterProvider::new(
+                api_key,
+            )));
+        }
+        "anthropic" => return Ok(Box::new(super::anthropic::AnthropicProvider::new(api_key))),
+        "openai" => return Ok(Box::new(super::openai::OpenAiProvider::new(api_key))),
+        "ollama" => return Ok(Box::new(super::ollama::OllamaProvider::new(None))),
+        "gemini" | "google" | "google-gemini" => {
+            return Ok(Box::new(super::gemini::GeminiProvider::new(api_key)));
+        }
+        _ => {}
+    }
+
+    // ── OpenAI-compatible providers ──────────────────────
+    if let Some((display_name, base_url)) = compatible_provider_spec(name) {
+        return Ok(Box::new(OpenAiCompatibleProvider::new(
+            display_name,
+            base_url,
+            api_key,
+            AuthStyle::Bearer,
+        )));
+    }
+
+    if let Some(result) = create_custom_provider(name, api_key) {
+        return result;
+    }
+
+    anyhow::bail!(
+        "Unknown provider: {name}. Check README for supported providers or run `asteroniris onboard --interactive` to reconfigure.\n\
+         Tip: Use \"custom:https://your-api.com\" for OpenAI-compatible endpoints.\n\
+         Tip: Use \"anthropic-custom:https://your-api.com\" for Anthropic-compatible endpoints."
+    )
 }
 
 fn create_provider_with_runtime_recovery(

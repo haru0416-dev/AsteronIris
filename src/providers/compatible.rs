@@ -14,9 +14,17 @@ use serde::{Deserialize, Serialize};
 /// Synthetic, `OpenCode` Zen, `Z.AI`, `GLM`, `MiniMax`, Bedrock, Qianfan, Groq, Mistral, `xAI`, etc.
 pub struct OpenAiCompatibleProvider {
     pub(crate) name: String,
+    #[allow(dead_code)]
     pub(crate) base_url: String,
     pub(crate) api_key: Option<String>,
+    #[allow(dead_code)]
     pub(crate) auth_header: AuthStyle,
+    /// Pre-computed `(header_name, header_value)` for auth (avoids `format!` per request).
+    cached_auth: Option<(String, String)>,
+    /// Pre-computed chat completions URL (avoids `format!` per request).
+    cached_chat_url: String,
+    /// Pre-computed responses API URL (avoids `format!` per request).
+    cached_responses_url: String,
     client: Client,
 }
 
@@ -33,39 +41,49 @@ pub enum AuthStyle {
 
 impl OpenAiCompatibleProvider {
     pub fn new(name: &str, base_url: &str, api_key: Option<&str>, auth_style: AuthStyle) -> Self {
+        let base_url = base_url.trim_end_matches('/').to_string();
+        let cached_chat_url = if base_url.contains("chat/completions") {
+            base_url.clone()
+        } else {
+            format!("{base_url}/chat/completions")
+        };
+        let cached_responses_url = if base_url.contains("responses") {
+            base_url.clone()
+        } else {
+            format!("{base_url}/v1/responses")
+        };
+
+        let cached_auth = api_key.map(|k| match &auth_style {
+            AuthStyle::Bearer => ("Authorization".to_string(), format!("Bearer {k}")),
+            AuthStyle::XApiKey => ("x-api-key".to_string(), k.to_string()),
+            AuthStyle::Custom(header) => (header.clone(), k.to_string()),
+        });
+
         Self {
             name: name.to_string(),
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url,
             api_key: api_key.map(ToString::to_string),
             auth_header: auth_style,
+            cached_auth,
+            cached_chat_url,
+            cached_responses_url,
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
     }
 
-    /// Build the full URL for chat completions, detecting if `base_url` already includes the path.
-    /// This allows custom providers with non-standard endpoints (e.g., `VolcEngine` ARK uses
-    /// `/api/coding/v3/chat/completions` instead of `/v1/chat/completions`).
-    fn chat_completions_url(&self) -> String {
-        // If base_url already contains "chat/completions", use it as-is
-        if self.base_url.contains("chat/completions") {
-            self.base_url.clone()
-        } else {
-            format!("{}/chat/completions", self.base_url)
-        }
+    fn chat_completions_url(&self) -> &str {
+        &self.cached_chat_url
     }
 
-    /// Build the full URL for responses API, detecting if `base_url` already includes the path.
-    fn responses_url(&self) -> String {
-        // If base_url already contains "responses", use it as-is
-        if self.base_url.contains("responses") {
-            self.base_url.clone()
-        } else {
-            format!("{}/v1/responses", self.base_url)
-        }
+    fn responses_url(&self) -> &str {
+        &self.cached_responses_url
     }
 }
 
@@ -78,7 +96,7 @@ struct ChatRequest {
 
 #[derive(Debug, Serialize)]
 struct Message {
-    role: String,
+    role: &'static str,
     content: String,
 }
 
@@ -117,7 +135,7 @@ struct ResponsesRequest {
 
 #[derive(Debug, Serialize)]
 struct ResponsesInput {
-    role: String,
+    role: &'static str,
     content: String,
 }
 
@@ -188,21 +206,16 @@ fn extract_chat_text(response: &ChatResponse, provider_name: &str) -> anyhow::Re
 }
 
 impl OpenAiCompatibleProvider {
-    fn apply_auth_header(
-        &self,
-        req: reqwest::RequestBuilder,
-        api_key: &str,
-    ) -> reqwest::RequestBuilder {
-        match &self.auth_header {
-            AuthStyle::Bearer => req.header("Authorization", format!("Bearer {api_key}")),
-            AuthStyle::XApiKey => req.header("x-api-key", api_key),
-            AuthStyle::Custom(header) => req.header(header, api_key),
+    fn apply_auth_header(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some((name, value)) = &self.cached_auth {
+            req.header(name, value)
+        } else {
+            req
         }
     }
 
     async fn chat_via_responses(
         &self,
-        api_key: &str,
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
@@ -210,7 +223,7 @@ impl OpenAiCompatibleProvider {
         let request = ResponsesRequest {
             model: model.to_string(),
             input: vec![ResponsesInput {
-                role: "user".to_string(),
+                role: "user",
                 content: message.to_string(),
             }],
             instructions: system_prompt.map(str::to_string),
@@ -220,7 +233,7 @@ impl OpenAiCompatibleProvider {
         let url = self.responses_url();
 
         let response = self
-            .apply_auth_header(self.client.post(&url).json(&request), api_key)
+            .apply_auth_header(self.client.post(url).json(&request))
             .send()
             .await
             .with_context(|| format!("{} Responses API request failed", self.name))?;
@@ -241,15 +254,11 @@ impl OpenAiCompatibleProvider {
         Ok(ProviderResponse::text_only(text))
     }
 
-    async fn call_chat_completions(
-        &self,
-        api_key: &str,
-        request: &ChatRequest,
-    ) -> anyhow::Result<ChatResponse> {
+    async fn call_chat_completions(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse> {
         let url = self.chat_completions_url();
 
         let response = self
-            .apply_auth_header(self.client.post(&url).json(request), api_key)
+            .apply_auth_header(self.client.post(url).json(request))
             .send()
             .await
             .with_context(|| format!("{} chat completions request failed", self.name))?;
@@ -279,24 +288,25 @@ impl OpenAiCompatibleProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<ProviderResponse> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
+        if self.api_key.is_none() {
+            anyhow::bail!(
                 "{} API key not set. Run `asteroniris onboard` or set the appropriate env var.",
                 self.name
-            )
-        })?;
+            );
+        }
 
-        let mut messages = Vec::new();
+        let capacity = if system_prompt.is_some() { 2 } else { 1 };
+        let mut messages = Vec::with_capacity(capacity);
 
         if let Some(sys) = system_prompt {
             messages.push(Message {
-                role: "system".to_string(),
+                role: "system",
                 content: sys.to_string(),
             });
         }
 
         messages.push(Message {
-            role: "user".to_string(),
+            role: "user",
             content: message.to_string(),
         });
 
@@ -306,7 +316,7 @@ impl OpenAiCompatibleProvider {
             temperature,
         };
 
-        match self.call_chat_completions(api_key, &request).await {
+        match self.call_chat_completions(&request).await {
             Ok(chat_response) => {
                 let text = extract_chat_text(&chat_response, &self.name)?;
                 let mut provider_response = if let Some(usage) = chat_response.usage {
@@ -325,7 +335,7 @@ impl OpenAiCompatibleProvider {
                 let error_text = error.to_string();
                 if let Some((_, sanitized_error)) = error_text.split_once("NOT_FOUND_FALLBACK::") {
                     return self
-                        .chat_via_responses(api_key, system_prompt, message, model)
+                        .chat_via_responses(system_prompt, message, model)
                         .await
                         .map_err(|responses_err| {
                             anyhow::anyhow!(
@@ -418,11 +428,11 @@ mod tests {
             model: "llama-3.3-70b".to_string(),
             messages: vec![
                 Message {
-                    role: "system".to_string(),
+                    role: "system",
                     content: "You are AsteronIris".to_string(),
                 },
                 Message {
-                    role: "user".to_string(),
+                    role: "user",
                     content: "hello".to_string(),
                 },
             ],

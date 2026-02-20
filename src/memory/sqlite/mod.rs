@@ -98,7 +98,10 @@ impl SqliteMemory {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
-             PRAGMA temp_store = MEMORY;",
+             PRAGMA temp_store = MEMORY;
+             PRAGMA cache_size = -8000;
+             PRAGMA mmap_size = 268435456;
+             PRAGMA busy_timeout = 5000;",
         )?;
         Self::init_schema(&conn)?;
 
@@ -176,8 +179,8 @@ impl SqliteMemory {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
-            let mut stmt =
-                conn.prepare("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")?;
+            let mut stmt = conn
+                .prepare_cached("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")?;
             let cached: Option<Vec<u8>> = stmt.query_row(params![hash], |row| row.get(0)).ok();
 
             if let Some(bytes) = cached {
@@ -249,7 +252,7 @@ impl SqliteMemory {
                 .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
             let mut stmt =
-                conn.prepare("SELECT id, content FROM memories WHERE embedding IS NULL")?;
+                conn.prepare_cached("SELECT id, content FROM memories WHERE embedding IS NULL")?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
@@ -276,7 +279,6 @@ impl SqliteMemory {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 #[allow(clippy::unused_self, clippy::unused_async)]
 impl SqliteMemory {
     fn name(&self) -> &str {

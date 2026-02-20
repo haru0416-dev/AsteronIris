@@ -18,7 +18,7 @@ struct ChatRequest {
 
 #[derive(Debug, Serialize)]
 struct Message {
-    role: String,
+    role: &'static str,
     content: String,
 }
 
@@ -50,6 +50,9 @@ impl OllamaProvider {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(300)) // Ollama runs locally, may be slow
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
@@ -65,13 +68,13 @@ impl OllamaProvider {
 
         if let Some(sys) = system_prompt {
             messages.push(Message {
-                role: "system".to_string(),
+                role: "system",
                 content: sys.to_string(),
             });
         }
 
         messages.push(Message {
-            role: "user".to_string(),
+            role: "user",
             content: message.to_string(),
         });
 
@@ -178,11 +181,11 @@ mod tests {
             model: "llama3".to_string(),
             messages: vec![
                 Message {
-                    role: "system".to_string(),
+                    role: "system",
                     content: "You are AsteronIris".to_string(),
                 },
                 Message {
-                    role: "user".to_string(),
+                    role: "user",
                     content: "hello".to_string(),
                 },
             ],
@@ -201,7 +204,7 @@ mod tests {
         let req = ChatRequest {
             model: "mistral".to_string(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: "user",
                 content: "test".to_string(),
             }],
             stream: false,

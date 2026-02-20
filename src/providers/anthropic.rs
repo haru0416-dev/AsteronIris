@@ -4,8 +4,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 pub struct AnthropicProvider {
-    credential: Option<String>,
-    base_url: String,
+    /// Pre-computed auth: `("Authorization", "Bearer <token>")` or `("x-api-key", "<key>")`.
+    cached_auth: Option<(&'static str, String)>,
+    cached_messages_url: String,
     client: Client,
 }
 
@@ -21,7 +22,7 @@ struct ChatRequest {
 
 #[derive(Debug, Serialize)]
 struct Message {
-    role: String,
+    role: &'static str,
     content: String,
 }
 
@@ -49,18 +50,26 @@ impl AnthropicProvider {
     }
 
     pub fn with_base_url(api_key: Option<&str>, base_url: Option<&str>) -> Self {
-        let base_url = base_url
+        let base = base_url
             .map_or("https://api.anthropic.com", |u| u.trim_end_matches('/'))
             .to_string();
+        let cached_messages_url = format!("{base}/v1/messages");
+        let cached_auth = api_key.map(str::trim).filter(|k| !k.is_empty()).map(|k| {
+            if Self::is_setup_token(k) {
+                ("Authorization", format!("Bearer {k}"))
+            } else {
+                ("x-api-key", k.to_string())
+            }
+        });
         Self {
-            credential: api_key
-                .map(str::trim)
-                .filter(|k| !k.is_empty())
-                .map(ToString::to_string),
-            base_url,
+            cached_auth,
+            cached_messages_url,
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
@@ -81,7 +90,7 @@ impl AnthropicProvider {
             max_tokens: 4096,
             system: system_prompt.map(ToString::to_string),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: "user",
                 content: message.to_string(),
             }],
             temperature,
@@ -103,7 +112,7 @@ impl AnthropicProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<ChatResponse> {
-        let credential = self.credential.as_ref().ok_or_else(|| {
+        let (auth_name, auth_value) = self.cached_auth.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "Anthropic credentials not set. Set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN (setup-token)."
             )
@@ -111,18 +120,13 @@ impl AnthropicProvider {
 
         let request = Self::build_request(system_prompt, message, model, temperature);
 
-        let mut request = self
+        let request = self
             .client
-            .post(format!("{}/v1/messages", self.base_url))
+            .post(&self.cached_messages_url)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
+            .header(*auth_name, auth_value)
             .json(&request);
-
-        if Self::is_setup_token(credential) {
-            request = request.header("Authorization", format!("Bearer {credential}"));
-        } else {
-            request = request.header("x-api-key", credential);
-        }
 
         let response = request.send().await?;
 
@@ -179,49 +183,72 @@ mod tests {
     #[test]
     fn creates_with_key() {
         let p = AnthropicProvider::new(Some("sk-ant-test123"));
-        assert!(p.credential.is_some());
-        assert_eq!(p.credential.as_deref(), Some("sk-ant-test123"));
-        assert_eq!(p.base_url, "https://api.anthropic.com");
+        assert!(p.cached_auth.is_some());
+        let (name, value) = p.cached_auth.as_ref().unwrap();
+        assert_eq!(*name, "x-api-key");
+        assert_eq!(value, "sk-ant-test123");
+        assert_eq!(
+            p.cached_messages_url,
+            "https://api.anthropic.com/v1/messages"
+        );
     }
 
     #[test]
     fn creates_without_key() {
         let p = AnthropicProvider::new(None);
-        assert!(p.credential.is_none());
-        assert_eq!(p.base_url, "https://api.anthropic.com");
+        assert!(p.cached_auth.is_none());
+        assert_eq!(
+            p.cached_messages_url,
+            "https://api.anthropic.com/v1/messages"
+        );
     }
 
     #[test]
     fn creates_with_empty_key() {
         let p = AnthropicProvider::new(Some(""));
-        assert!(p.credential.is_none());
+        assert!(p.cached_auth.is_none());
     }
 
     #[test]
     fn creates_with_whitespace_key() {
         let p = AnthropicProvider::new(Some("  sk-ant-test123  "));
-        assert!(p.credential.is_some());
-        assert_eq!(p.credential.as_deref(), Some("sk-ant-test123"));
+        assert!(p.cached_auth.is_some());
+        let (name, value) = p.cached_auth.as_ref().unwrap();
+        assert_eq!(*name, "x-api-key");
+        assert_eq!(value, "sk-ant-test123");
     }
 
     #[test]
     fn creates_with_custom_base_url() {
         let p =
             AnthropicProvider::with_base_url(Some("sk-ant-test"), Some("https://api.example.com"));
-        assert_eq!(p.base_url, "https://api.example.com");
-        assert_eq!(p.credential.as_deref(), Some("sk-ant-test"));
+        assert_eq!(p.cached_messages_url, "https://api.example.com/v1/messages");
+        let (name, value) = p.cached_auth.as_ref().unwrap();
+        assert_eq!(*name, "x-api-key");
+        assert_eq!(value, "sk-ant-test");
     }
 
     #[test]
     fn custom_base_url_trims_trailing_slash() {
         let p = AnthropicProvider::with_base_url(None, Some("https://api.example.com/"));
-        assert_eq!(p.base_url, "https://api.example.com");
+        assert_eq!(p.cached_messages_url, "https://api.example.com/v1/messages");
     }
 
     #[test]
     fn default_base_url_when_none_provided() {
         let p = AnthropicProvider::with_base_url(None, None);
-        assert_eq!(p.base_url, "https://api.anthropic.com");
+        assert_eq!(
+            p.cached_messages_url,
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn setup_token_uses_bearer_auth() {
+        let p = AnthropicProvider::new(Some("sk-ant-oat01-abc123"));
+        let (name, value) = p.cached_auth.as_ref().unwrap();
+        assert_eq!(*name, "Authorization");
+        assert_eq!(value, "Bearer sk-ant-oat01-abc123");
     }
 
     #[tokio::test]
@@ -260,7 +287,7 @@ mod tests {
             max_tokens: 4096,
             system: None,
             messages: vec![Message {
-                role: "user".to_string(),
+                role: "user",
                 content: "hello".to_string(),
             }],
             temperature: 0.7,
@@ -281,7 +308,7 @@ mod tests {
             max_tokens: 4096,
             system: Some("You are AsteronIris".to_string()),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: "user",
                 content: "hello".to_string(),
             }],
             temperature: 0.7,

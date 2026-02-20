@@ -54,7 +54,7 @@ impl UsageTracker for SqliteUsageTracker {
 
     fn summarize(&self, since: Option<&str>) -> Result<UsageSummary> {
         let summary = if let Some(since_ts) = since {
-            let mut stmt = self.conn.prepare(
+            let mut stmt = self.conn.prepare_cached(
                 "SELECT
                     COALESCE(SUM(input_tokens), 0),
                     COALESCE(SUM(output_tokens), 0),
@@ -75,7 +75,7 @@ impl UsageTracker for SqliteUsageTracker {
                 })
             })?
         } else {
-            let mut stmt = self.conn.prepare(
+            let mut stmt = self.conn.prepare_cached(
                 "SELECT
                     COALESCE(SUM(input_tokens), 0),
                     COALESCE(SUM(output_tokens), 0),
