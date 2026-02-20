@@ -1,6 +1,9 @@
+use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::channels::Channel;
 use crate::providers;
 use crate::security::pairing::constant_time_eq;
+use crate::security::policy::TenantPolicyContext;
+use crate::tools::middleware::ExecutionContext;
 use crate::util::truncate_with_ellipsis;
 use axum::{
     body::Bytes,
@@ -8,6 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
 };
+use std::sync::Arc;
 
 use super::autosave::{
     GATEWAY_AUTOSAVE_ENTITY_ID, gateway_runtime_policy_context, gateway_webhook_autosave_event,
@@ -19,6 +23,69 @@ use super::defense::{
 };
 use super::signature::verify_whatsapp_signature;
 use super::{AppState, WebhookBody, WhatsAppVerifyQuery};
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
+}
+
+fn log_tool_loop_stop(source: &str, stop_reason: &LoopStopReason, iterations: u32) {
+    match stop_reason {
+        LoopStopReason::Completed => {}
+        LoopStopReason::MaxIterations => {
+            tracing::warn!(source, iterations, "tool loop hit max iterations");
+        }
+        LoopStopReason::RateLimited => {
+            tracing::warn!(source, "tool loop halted by rate limiter");
+        }
+        LoopStopReason::ApprovalDenied => {
+            tracing::warn!(source, "tool loop halted pending approval");
+        }
+        LoopStopReason::Error(error) => {
+            tracing::warn!(source, error = %error, "tool loop ended with provider error");
+        }
+    }
+}
+
+async fn run_gateway_tool_loop(
+    state: &AppState,
+    system_prompt: Option<&str>,
+    user_message: &str,
+    model: &str,
+    temperature: f64,
+    source_identifier: &str,
+) -> anyhow::Result<crate::agent::tool_loop::ToolLoopResult> {
+    let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
+    let full_prompt = system_prompt.unwrap_or_default();
+    let ctx = ExecutionContext {
+        security: Arc::clone(&state.security),
+        autonomy_level: state.security.autonomy,
+        entity_id: format!("gateway:{source_identifier}"),
+        turn_number: 0,
+        workspace_dir: state.security.workspace_dir.clone(),
+        allowed_tools: None,
+        permission_store: Some(Arc::clone(&state.permission_store)),
+        rate_limiter: Arc::clone(&state.rate_limiter),
+        tenant_context: TenantPolicyContext::disabled(),
+    };
+    let result = tool_loop
+        .run(
+            state.provider.as_ref(),
+            full_prompt,
+            user_message,
+            model,
+            temperature,
+            &ctx,
+        )
+        .await?;
+    if let LoopStopReason::Error(error) = &result.stop_reason {
+        anyhow::bail!("tool loop failed: {error}");
+    }
+    Ok(result)
+}
 
 /// GET /health — always public (no secrets leaked)
 pub(super) async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
@@ -164,13 +231,20 @@ pub(super) async fn handle_webhook(
         return policy_accounting_response(policy_error);
     }
 
-    match state
-        .provider
-        .chat_with_system_full(None, &ingress.model_input, &state.model, state.temperature)
-        .await
+    let source_identifier = bearer_token(&headers).unwrap_or("anonymous");
+    match run_gateway_tool_loop(
+        &state,
+        None,
+        &ingress.model_input,
+        &state.model,
+        state.temperature,
+        source_identifier,
+    )
+    .await
     {
-        Ok(response) => {
-            let body = serde_json::json!({"response": response.text, "model": state.model});
+        Ok(result) => {
+            log_tool_loop_stop("gateway:webhook", &result.stop_reason, result.iterations);
+            let body = serde_json::json!({"response": result.final_text, "model": state.model});
             (StatusCode::OK, Json(body))
         }
         Err(e) => {
@@ -313,13 +387,19 @@ pub(super) async fn handle_whatsapp_message(
                 continue;
             }
 
-            match state
-                .provider
-                .chat_with_system_full(None, &ingress.model_input, &state.model, state.temperature)
-                .await
+            match run_gateway_tool_loop(
+                &state,
+                None,
+                &ingress.model_input,
+                &state.model,
+                state.temperature,
+                &msg.sender,
+            )
+            .await
             {
-                Ok(response) => {
-                    if let Err(e) = wa.send_chunked(&response.text, &msg.sender).await {
+                Ok(result) => {
+                    log_tool_loop_stop("gateway:whatsapp", &result.stop_reason, result.iterations);
+                    if let Err(e) = wa.send_chunked(&result.final_text, &msg.sender).await {
                         tracing::error!("Failed to send WhatsApp reply: {e}");
                     }
                 }
@@ -360,13 +440,19 @@ pub(super) async fn handle_whatsapp_message(
             continue;
         }
 
-        match state
-            .provider
-            .chat_with_system_full(None, &ingress.model_input, &state.model, state.temperature)
-            .await
+        match run_gateway_tool_loop(
+            &state,
+            None,
+            &ingress.model_input,
+            &state.model,
+            state.temperature,
+            &msg.sender,
+        )
+        .await
         {
-            Ok(response) => {
-                if let Err(e) = wa.send_chunked(&response.text, &msg.sender).await {
+            Ok(result) => {
+                log_tool_loop_stop("gateway:whatsapp", &result.stop_reason, result.iterations);
+                if let Err(e) = wa.send_chunked(&result.final_text, &msg.sender).await {
                     tracing::error!("Failed to send WhatsApp reply: {e}");
                 }
             }

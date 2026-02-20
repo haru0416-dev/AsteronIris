@@ -98,6 +98,7 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<Config> {
         browser: BrowserConfig::default(),
         persona: PersonaConfig::default(),
         identity: crate::config::IdentityConfig::default(),
+        tools: crate::config::ToolsConfig::default(),
         locale: String::from("en"),
     };
 
@@ -282,6 +283,7 @@ pub fn run_quick_setup(
         browser: BrowserConfig::default(),
         persona: PersonaConfig::default(),
         identity: crate::config::IdentityConfig::default(),
+        tools: crate::config::ToolsConfig::default(),
         locale: String::from("en"),
     };
 

@@ -294,6 +294,8 @@ mod tests {
         config.channels_config.telegram = Some(crate::config::TelegramConfig {
             bot_token: "token".into(),
             allowed_users: vec![],
+            autonomy_level: None,
+            tool_allowlist: None,
         });
         assert!(has_supervised_channels(&config));
     }

@@ -128,6 +128,7 @@ fn build_config_from_state(state: &state::WizardState) -> Result<Config> {
         browser: BrowserConfig::default(),
         persona: PersonaConfig::default(),
         identity: crate::config::IdentityConfig::default(),
+        tools: crate::config::ToolsConfig::default(),
         locale: String::from("en"),
     };
 

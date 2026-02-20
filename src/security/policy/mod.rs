@@ -9,7 +9,7 @@ pub use tenant::{
     TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR, TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR,
     TenantPolicyContext,
 };
-pub use trackers::{ActionTracker, CostTracker};
+pub use trackers::{ActionTracker, CostTracker, EntityRateLimiter, RateLimitError};
 pub use types::{ActionPolicyVerdict, AutonomyLevel, ExternalActionExecution};
 
 use std::path::{Path, PathBuf};

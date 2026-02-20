@@ -29,8 +29,10 @@ use crate::channels::WhatsAppChannel;
 use crate::config::{Config, GatewayDefenseMode};
 use crate::memory::{self, Memory};
 use crate::providers::{self, Provider};
-use crate::security::SecurityPolicy;
 use crate::security::pairing::{PairingGuard, is_public_bind};
+use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
+use crate::tools;
+use crate::tools::ToolRegistry;
 use anyhow::Result;
 use axum::{
     Router,
@@ -52,6 +54,10 @@ pub const REQUEST_TIMEOUT_SECS: u64 = 30;
 #[derive(Clone)]
 pub struct AppState {
     pub provider: Arc<dyn Provider>,
+    pub registry: Arc<ToolRegistry>,
+    pub rate_limiter: Arc<EntityRateLimiter>,
+    pub max_tool_loop_iterations: u32,
+    pub permission_store: Arc<PermissionStore>,
     pub model: String,
     pub temperature: f64,
     pub openai_compat_api_keys: Option<Vec<String>>,
@@ -135,6 +141,28 @@ pub async fn run_gateway_with_listener(
         &config.autonomy,
         &config.workspace_dir,
     ));
+    let rate_limiter = Arc::new(EntityRateLimiter::new(
+        config.autonomy.max_actions_per_hour,
+        config.autonomy.max_actions_per_entity_per_hour,
+    ));
+    let permission_store = Arc::new(PermissionStore::load(&config.workspace_dir));
+    let composio_key = if config.composio.enabled {
+        config.composio.api_key.as_deref()
+    } else {
+        None
+    };
+    let tools = tools::all_tools(
+        &security,
+        Arc::clone(&mem),
+        composio_key,
+        &config.browser,
+        &config.tools,
+    );
+    let middleware = tools::default_middleware_chain();
+    let mut registry = ToolRegistry::new(middleware);
+    for tool in tools {
+        registry.register(tool);
+    }
 
     let webhook_secret: Option<Arc<str>> = config
         .channels_config
@@ -174,6 +202,10 @@ pub async fn run_gateway_with_listener(
 
     let state = AppState {
         provider,
+        registry: Arc::new(registry),
+        rate_limiter,
+        max_tool_loop_iterations: config.autonomy.max_tool_loop_iterations,
+        permission_store,
         model,
         temperature,
         openai_compat_api_keys: None,

@@ -1,6 +1,9 @@
 use crate::providers::Provider;
-use crate::security::policy::TenantPolicyContext;
+use crate::security::PermissionStore;
+use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
+use crate::tools::ToolRegistry;
 use anyhow::Result;
+use std::sync::Arc;
 
 pub(super) const PERSONA_PER_TURN_CALL_BUDGET: u8 = 2;
 
@@ -63,6 +66,10 @@ pub(super) struct MainSessionTurnParams<'a> {
     pub(super) system_prompt: &'a str,
     pub(super) model_name: &'a str,
     pub(super) temperature: f64,
+    pub(super) registry: Arc<ToolRegistry>,
+    pub(super) max_tool_iterations: u32,
+    pub(super) rate_limiter: Arc<EntityRateLimiter>,
+    pub(super) permission_store: Arc<PermissionStore>,
 }
 
 #[derive(Debug, Clone)]

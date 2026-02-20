@@ -1,9 +1,16 @@
+use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::auth::AuthBroker;
 use crate::config::Config;
 use crate::memory::{self, Memory};
 use crate::providers::{self, Provider};
+use crate::security::policy::EntityRateLimiter;
+use crate::security::{PermissionStore, SecurityPolicy};
+use crate::tools;
+use crate::tools::middleware::ExecutionContext;
+use crate::tools::registry::ToolRegistry;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,18 +20,24 @@ use super::ingress_policy::{
     apply_external_ingress_policy, channel_autosave_entity_id, channel_autosave_input,
     channel_runtime_policy_context,
 };
+use super::policy::{ChannelPolicy, min_autonomy};
 use super::prompt_builder::build_system_prompt;
 use super::runtime::{channel_backoff_settings, spawn_supervised_listener};
 use super::traits::{Channel, ChannelMessage};
 
 struct ChannelRuntime {
     config: Arc<Config>,
+    security: Arc<SecurityPolicy>,
     provider: Arc<dyn Provider>,
+    registry: Arc<ToolRegistry>,
+    rate_limiter: Arc<EntityRateLimiter>,
+    permission_store: Arc<PermissionStore>,
     model: String,
     temperature: f64,
     mem: Arc<dyn Memory>,
     system_prompt: String,
     channels: Vec<Arc<dyn Channel>>,
+    channel_policies: HashMap<String, ChannelPolicy>,
 }
 
 pub async fn doctor_channels(config: Arc<Config>) -> Result<()> {
@@ -42,22 +55,23 @@ pub async fn doctor_channels(config: Arc<Config>) -> Result<()> {
     let mut unhealthy = 0_u32;
     let mut timeout = 0_u32;
 
-    for (name, channel) in channels {
-        let result = tokio::time::timeout(Duration::from_secs(10), channel.health_check()).await;
+    for entry in channels {
+        let result =
+            tokio::time::timeout(Duration::from_secs(10), entry.channel.health_check()).await;
         let state = classify_health_result(&result);
 
         match state {
             ChannelHealthState::Healthy => {
                 healthy += 1;
-                println!("  ✓ {name:<9} {}", t!("channels.healthy"));
+                println!("  ✓ {:<9} {}", entry.name, t!("channels.healthy"));
             }
             ChannelHealthState::Unhealthy => {
                 unhealthy += 1;
-                println!("  ✗ {name:<9} {}", t!("channels.unhealthy"));
+                println!("  ✗ {:<9} {}", entry.name, t!("channels.unhealthy"));
             }
             ChannelHealthState::Timeout => {
                 timeout += 1;
-                println!("  ! {name:<9} {}", t!("channels.timed_out"));
+                println!("  ! {:<9} {}", entry.name, t!("channels.timed_out"));
             }
         }
     }
@@ -99,16 +113,43 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
         .clone()
         .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
     let temperature = config.default_temperature;
+    let security = Arc::new(SecurityPolicy::from_config(
+        &config.autonomy,
+        &config.workspace_dir,
+    ));
+    let rate_limiter = Arc::new(EntityRateLimiter::new(
+        config.autonomy.max_actions_per_hour,
+        config.autonomy.max_actions_per_entity_per_hour,
+    ));
+    let permission_store = Arc::new(PermissionStore::load(&config.workspace_dir));
     let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
     let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
         &config.memory,
         &config.workspace_dir,
         memory_api_key.as_deref(),
     )?);
+    let composio_key = if config.composio.enabled {
+        config.composio.api_key.as_deref()
+    } else {
+        None
+    };
+    let tools = tools::all_tools(
+        &security,
+        Arc::clone(&mem),
+        composio_key,
+        &config.browser,
+        &config.tools,
+    );
+    let middleware = tools::default_middleware_chain();
+    let mut registry = ToolRegistry::new(middleware);
+    for tool in tools {
+        registry.register(tool);
+    }
 
     let workspace = config.workspace_dir.clone();
     let skills = crate::skills::load_skills(&workspace);
-    let tool_descs = crate::tools::tool_descriptions(config.browser.enabled, false);
+    let tool_descs =
+        crate::tools::tool_descriptions(config.browser.enabled, config.composio.enabled);
     let system_prompt = build_system_prompt(&workspace, &model, &tool_descs, &skills);
 
     if !skills.is_empty() {
@@ -123,19 +164,26 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
         );
     }
 
-    let channels: Vec<Arc<dyn Channel>> = factory::build_channels(&config.channels_config)
-        .into_iter()
-        .map(|(_, ch)| ch)
-        .collect();
+    let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
+    let mut channel_policies = HashMap::new();
+    for entry in factory::build_channels(&config.channels_config) {
+        channel_policies.insert(entry.channel.name().to_string(), entry.policy);
+        channels.push(entry.channel);
+    }
 
     Ok(ChannelRuntime {
         config: Arc::clone(config),
+        security,
         provider,
+        registry: Arc::new(registry),
+        rate_limiter,
+        permission_store,
         model,
         temperature,
         mem,
         system_prompt,
         channels,
+        channel_policies,
     })
 }
 
@@ -154,6 +202,7 @@ async fn reply_to_origin(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
     println!(
         "  › {}",
@@ -163,6 +212,22 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
             sender = msg.sender,
             content = truncate_with_ellipsis(&msg.content, 80)
         )
+    );
+
+    let global_autonomy = rt.config.autonomy.level;
+    let channel_policy = rt.channel_policies.get(&msg.channel);
+    let channel_level = channel_policy
+        .and_then(|policy| policy.autonomy_level)
+        .unwrap_or(global_autonomy);
+    let effective_autonomy = min_autonomy(global_autonomy, channel_level);
+    let tool_allowlist = channel_policy.and_then(|policy| policy.tool_allowlist.clone());
+
+    tracing::debug!(
+        channel = %msg.channel,
+        sender = %msg.sender,
+        effective_autonomy = ?effective_autonomy,
+        has_tool_allowlist = tool_allowlist.is_some(),
+        "resolved channel runtime policy"
     );
 
     let source = format!("channel:{}", msg.channel);
@@ -199,24 +264,77 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
         return;
     }
 
-    match rt
-        .provider
-        .chat_with_system(
-            Some(&rt.system_prompt),
+    let tenant_context = channel_runtime_policy_context();
+    let workspace_dir = if tenant_context.tenant_mode_enabled {
+        let tenant_id = tenant_context.tenant_id.as_deref().unwrap_or("default");
+        let scoped = rt.config.workspace_dir.join("tenants").join(tenant_id);
+        if let Err(error) = tokio::fs::create_dir_all(&scoped).await {
+            tracing::warn!(
+                error = %error,
+                tenant_id,
+                "failed to create tenant scoped workspace"
+            );
+        }
+        scoped
+    } else {
+        rt.config.workspace_dir.clone()
+    };
+    let ctx = ExecutionContext {
+        security: Arc::clone(&rt.security),
+        autonomy_level: effective_autonomy,
+        entity_id: format!("{}:{}", msg.channel, msg.sender),
+        turn_number: 0,
+        workspace_dir,
+        allowed_tools: tool_allowlist,
+        permission_store: Some(Arc::clone(&rt.permission_store)),
+        rate_limiter: Arc::clone(&rt.rate_limiter),
+        tenant_context,
+    };
+    let tool_loop = ToolLoop::new(
+        Arc::clone(&rt.registry),
+        rt.config.autonomy.max_tool_loop_iterations,
+    );
+
+    match tool_loop
+        .run(
+            rt.provider.as_ref(),
+            &rt.system_prompt,
             &ingress.model_input,
             &rt.model,
             rt.temperature,
+            &ctx,
         )
         .await
     {
-        Ok(response) => {
+        Ok(result) => {
+            if let LoopStopReason::Error(error) = &result.stop_reason {
+                eprintln!("  ✗ {}", t!("channels.llm_error", error = error));
+                let _ = reply_to_origin(
+                    &rt.channels,
+                    &msg.channel,
+                    &format!("! Error: {error}"),
+                    &msg.sender,
+                )
+                .await;
+                return;
+            }
+            match result.stop_reason {
+                LoopStopReason::MaxIterations => {
+                    tracing::warn!(channel = %msg.channel, sender = %msg.sender, "tool loop hit max iterations");
+                }
+                LoopStopReason::RateLimited => {
+                    tracing::warn!(channel = %msg.channel, sender = %msg.sender, "tool loop halted by rate limiting");
+                }
+                LoopStopReason::Completed | LoopStopReason::ApprovalDenied => {}
+                LoopStopReason::Error(_) => unreachable!("error stop reason handled above"),
+            }
             println!(
                 "  › {} {}",
                 t!("channels.reply"),
-                truncate_with_ellipsis(&response, 80)
+                truncate_with_ellipsis(&result.final_text, 80)
             );
             if let Err(e) =
-                reply_to_origin(&rt.channels, &msg.channel, &response, &msg.sender).await
+                reply_to_origin(&rt.channels, &msg.channel, &result.final_text, &msg.sender).await
             {
                 eprintln!(
                     "  ✗ {}",

@@ -32,8 +32,9 @@ use crate::memory::{self, Memory};
 use crate::observability::{self, Observer, ObserverEvent};
 use crate::providers::{self, Provider};
 use crate::runtime;
-use crate::security::SecurityPolicy;
+use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
 use crate::tools;
+use crate::tools::ToolRegistry;
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Instant;
@@ -61,7 +62,12 @@ pub async fn run(
     let auth_broker = AuthBroker::load_or_init(&config)?;
 
     let mem = init_memory(&config, &auth_broker)?;
-    init_tools(&config, &security, &mem);
+    let registry = init_tools(&config, &security, &mem);
+    let rate_limiter = Arc::new(EntityRateLimiter::new(
+        config.autonomy.max_actions_per_hour,
+        config.autonomy.max_actions_per_entity_per_hour,
+    ));
+    let permission_store = Arc::new(PermissionStore::load(&config.workspace_dir));
 
     let provider_name = provider_override
         .as_deref()
@@ -87,6 +93,10 @@ pub async fn run(
         system_prompt: &system_prompt,
         model_name,
         temperature,
+        registry,
+        max_tool_iterations: config.autonomy.max_tool_loop_iterations,
+        rate_limiter,
+        permission_store,
     };
 
     let (token_sum, saw_token_usage) =
@@ -112,13 +122,29 @@ fn init_memory(config: &Config, auth_broker: &AuthBroker) -> Result<Arc<dyn Memo
     Ok(mem)
 }
 
-fn init_tools(config: &Config, security: &Arc<SecurityPolicy>, mem: &Arc<dyn Memory>) {
+fn init_tools(
+    config: &Config,
+    security: &Arc<SecurityPolicy>,
+    mem: &Arc<dyn Memory>,
+) -> Arc<ToolRegistry> {
     let composio_key = if config.composio.enabled {
         config.composio.api_key.as_deref()
     } else {
         None
     };
-    let _tools = tools::all_tools(security, Arc::clone(mem), composio_key, &config.browser);
+    let tools = tools::all_tools(
+        security,
+        Arc::clone(mem),
+        composio_key,
+        &config.browser,
+        &config.tools,
+    );
+    let middleware = tools::default_middleware_chain();
+    let mut registry = ToolRegistry::new(middleware);
+    for tool in tools {
+        registry.register(tool);
+    }
+    Arc::new(registry)
 }
 
 fn resolve_providers(

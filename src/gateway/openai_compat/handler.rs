@@ -3,10 +3,14 @@ use super::streaming::build_sse_response;
 use super::types::{
     ChatCompletion, ChatCompletionRequest, Choice, ChoiceMessage, CompletionUsage, RequestMessage,
 };
+use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::gateway::AppState;
+use crate::security::policy::TenantPolicyContext;
+use crate::tools::middleware::ExecutionContext;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};
+use std::sync::Arc;
 
 pub async fn handle_chat_completions(
     State(state): State<AppState>,
@@ -27,28 +31,58 @@ pub async fn handle_chat_completions(
     let (system_prompt, user_message) = extract_messages(&request.messages);
     let temperature = request.temperature.unwrap_or(state.temperature);
     let model = request.model;
+    let source_identifier = bearer_token(&headers).unwrap_or("openai-compat");
+    let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
+    let ctx = ExecutionContext {
+        security: Arc::clone(&state.security),
+        autonomy_level: state.security.autonomy,
+        entity_id: format!("gateway:{source_identifier}"),
+        turn_number: 0,
+        workspace_dir: state.security.workspace_dir.clone(),
+        allowed_tools: None,
+        permission_store: Some(Arc::clone(&state.permission_store)),
+        rate_limiter: Arc::clone(&state.rate_limiter),
+        tenant_context: TenantPolicyContext::disabled(),
+    };
 
-    match state
-        .provider
-        .chat_with_system_full(system_prompt.as_deref(), &user_message, &model, temperature)
+    match tool_loop
+        .run(
+            state.provider.as_ref(),
+            system_prompt.as_deref().unwrap_or_default(),
+            &user_message,
+            &model,
+            temperature,
+            &ctx,
+        )
         .await
     {
-        Ok(response) => {
+        Ok(result) => {
+            if let LoopStopReason::Error(error) = &result.stop_reason {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": { "message": error, "type": "server_error" }
+                    })),
+                )
+                    .into_response();
+            }
+            if matches!(result.stop_reason, LoopStopReason::MaxIterations) {
+                tracing::warn!("openai compat tool loop hit max iterations");
+            }
             let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
             let created = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_secs());
 
             if request.stream.unwrap_or(false) {
-                build_sse_response(&completion_id, &model, &response.text, created).into_response()
+                build_sse_response(&completion_id, &model, &result.final_text, created)
+                    .into_response()
             } else {
-                let usage = response.input_tokens.zip(response.output_tokens).map(
-                    |(input_tokens, output_tokens)| CompletionUsage {
-                        prompt_tokens: input_tokens,
-                        completion_tokens: output_tokens,
-                        total_tokens: input_tokens + output_tokens,
-                    },
-                );
+                let usage = result.tokens_used.map(|total_tokens| CompletionUsage {
+                    prompt_tokens: 0,
+                    completion_tokens: total_tokens,
+                    total_tokens,
+                });
 
                 Json(ChatCompletion {
                     id: completion_id,
@@ -59,7 +93,7 @@ pub async fn handle_chat_completions(
                         index: 0,
                         message: ChoiceMessage {
                             role: "assistant".to_string(),
-                            content: response.text,
+                            content: result.final_text,
                         },
                         finish_reason: "stop".to_string(),
                     }],
@@ -76,6 +110,14 @@ pub async fn handle_chat_completions(
         )
             .into_response(),
     }
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| raw.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
 }
 
 fn extract_messages(messages: &[RequestMessage]) -> (Option<String>, String) {

@@ -9,6 +9,7 @@ use super::verify_repair::{
     emit_verify_repair_escalation_event,
 };
 
+use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::config::Config;
 use crate::memory::traits::MemoryLayer;
 use crate::memory::{
@@ -17,8 +18,10 @@ use crate::memory::{
 use crate::observability::traits::AutonomyLifecycleSignal;
 use crate::observability::{NoopObserver, Observer};
 use crate::providers::Provider;
-use crate::security::SecurityPolicy;
-use crate::security::policy::TenantPolicyContext;
+use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
+use crate::security::{PermissionStore, SecurityPolicy};
+use crate::tools;
+use crate::tools::middleware::ExecutionContext;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use std::sync::Arc;
@@ -179,12 +182,37 @@ pub async fn run_main_session_turn_for_integration_with_policy(
     user_message: &str,
 ) -> Result<String> {
     let observer: Arc<dyn Observer> = Arc::new(NoopObserver);
+    let security_arc = Arc::new(security.clone());
+    let composio_key = if config.composio.enabled {
+        config.composio.api_key.as_deref()
+    } else {
+        None
+    };
+    let tools = tools::all_tools(
+        &security_arc,
+        Arc::clone(&mem),
+        composio_key,
+        &config.browser,
+        &config.tools,
+    );
+    let middleware = tools::default_middleware_chain();
+    let mut registry = tools::ToolRegistry::new(middleware);
+    for tool in tools {
+        registry.register(tool);
+    }
     let params = MainSessionTurnParams {
         answer_provider,
         reflect_provider,
         system_prompt,
         model_name,
         temperature,
+        registry: Arc::new(registry),
+        max_tool_iterations: config.autonomy.max_tool_loop_iterations,
+        rate_limiter: Arc::new(EntityRateLimiter::new(
+            config.autonomy.max_actions_per_hour,
+            config.autonomy.max_actions_per_entity_per_hour,
+        )),
+        permission_store: Arc::new(PermissionStore::load(&config.workspace_dir)),
     };
 
     execute_main_session_turn_with_policy(
@@ -199,6 +227,7 @@ pub async fn run_main_session_turn_for_integration_with_policy(
     .await
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) async fn execute_main_session_turn_with_accounting(
     config: &Config,
     security: &SecurityPolicy,
@@ -251,17 +280,54 @@ pub(super) async fn execute_main_session_turn_with_accounting(
             "temperature clamped to autonomy band"
         );
     }
-    let response_full = params
-        .answer_provider
-        .chat_with_system_full(
-            Some(params.system_prompt),
+    let tool_loop = ToolLoop::new(Arc::clone(&params.registry), params.max_tool_iterations);
+    let ctx = ExecutionContext {
+        security: Arc::new(security.clone()),
+        autonomy_level: config.autonomy.level,
+        entity_id: "cli:local".to_string(),
+        turn_number: 0,
+        workspace_dir: config.workspace_dir.clone(),
+        allowed_tools: None,
+        permission_store: Some(Arc::clone(&params.permission_store)),
+        rate_limiter: Arc::clone(&params.rate_limiter),
+        tenant_context: TenantPolicyContext::disabled(),
+    };
+    let tool_result = tool_loop
+        .run(
+            params.answer_provider,
+            params.system_prompt,
             &enriched,
             params.model_name,
             clamped_temperature,
+            &ctx,
         )
         .await?;
-    let tokens_used = response_full.total_tokens();
-    let response = response_full.text;
+    tracing::debug!(
+        entity_id = %ctx.entity_id,
+        iterations = tool_result.iterations,
+        stop_reason = ?tool_result.stop_reason,
+        "main session tool loop completed"
+    );
+    match &tool_result.stop_reason {
+        LoopStopReason::Completed => {}
+        LoopStopReason::MaxIterations => {
+            tracing::warn!(
+                iterations = tool_result.iterations,
+                "tool loop hit max iterations"
+            );
+        }
+        LoopStopReason::RateLimited => {
+            tracing::warn!("tool loop halted by rate limiter");
+        }
+        LoopStopReason::ApprovalDenied => {
+            tracing::warn!("tool loop halted by approval requirement");
+        }
+        LoopStopReason::Error(message) => {
+            anyhow::bail!("tool loop failed: {message}");
+        }
+    }
+    let tokens_used = tool_result.tokens_used;
+    let response = tool_result.final_text;
 
     if config.persona.enabled_main_session {
         security

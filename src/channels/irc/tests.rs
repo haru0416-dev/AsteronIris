@@ -341,6 +341,8 @@ fn irc_config_serde_roundtrip() {
         nickserv_password: Some("secret".into()),
         sasl_password: None,
         verify_tls: Some(true),
+        autonomy_level: None,
+        tool_allowlist: None,
     };
 
     let toml_str = toml::to_string(&config).unwrap();
@@ -355,6 +357,8 @@ fn irc_config_serde_roundtrip() {
     assert_eq!(parsed.nickserv_password.as_deref(), Some("secret"));
     assert!(parsed.sasl_password.is_none());
     assert_eq!(parsed.verify_tls, Some(true));
+    assert!(parsed.autonomy_level.is_none());
+    assert!(parsed.tool_allowlist.is_none());
 }
 
 #[test]
@@ -376,6 +380,8 @@ nickname = "bot"
     assert!(parsed.nickserv_password.is_none());
     assert!(parsed.sasl_password.is_none());
     assert!(parsed.verify_tls.is_none());
+    assert!(parsed.autonomy_level.is_none());
+    assert!(parsed.tool_allowlist.is_none());
 }
 
 #[test]

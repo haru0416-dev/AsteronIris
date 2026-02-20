@@ -230,6 +230,8 @@ fn setup_telegram(config: &mut ChannelsConfig) -> Result<()> {
     config.telegram = Some(TelegramConfig {
         bot_token: token,
         allowed_users,
+        autonomy_level: None,
+        tool_allowlist: None,
     });
 
     Ok(())
@@ -305,6 +307,8 @@ fn setup_discord(config: &mut ChannelsConfig) -> Result<()> {
         bot_token: token,
         guild_id: if guild.is_empty() { None } else { Some(guild) },
         allowed_users,
+        autonomy_level: None,
+        tool_allowlist: None,
     });
 
     Ok(())
@@ -409,6 +413,8 @@ fn setup_slack(config: &mut ChannelsConfig) -> Result<()> {
             Some(channel)
         },
         allowed_users,
+        autonomy_level: None,
+        tool_allowlist: None,
     });
 
     Ok(())
@@ -447,6 +453,8 @@ fn setup_imessage(config: &mut ChannelsConfig) -> Result<()> {
         } else {
             allowed_contacts
         },
+        autonomy_level: None,
+        tool_allowlist: None,
     });
     println!(
         "  ✓ {}",
@@ -540,6 +548,8 @@ fn setup_matrix(config: &mut ChannelsConfig) -> Result<()> {
         } else {
             allowed_users
         },
+        autonomy_level: None,
+        tool_allowlist: None,
     });
 
     Ok(())
@@ -637,6 +647,8 @@ fn setup_whatsapp(config: &mut ChannelsConfig) -> Result<()> {
             allowed_numbers
         },
         app_secret: None,
+        autonomy_level: None,
+        tool_allowlist: None,
     });
 
     Ok(())
@@ -784,6 +796,8 @@ fn setup_irc(config: &mut ChannelsConfig) -> Result<()> {
             Some(sasl_password.trim().to_string())
         },
         verify_tls: Some(verify_tls),
+        autonomy_level: None,
+        tool_allowlist: None,
     });
 
     Ok(())
@@ -817,6 +831,8 @@ fn setup_webhook(config: &mut ChannelsConfig) -> Result<()> {
         } else {
             Some(secret)
         },
+        autonomy_level: None,
+        tool_allowlist: None,
     });
     println!(
         "  ✓ {}",

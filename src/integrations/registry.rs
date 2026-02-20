@@ -730,6 +730,8 @@ mod tests {
         config.channels_config.telegram = Some(TelegramConfig {
             bot_token: "123:ABC".into(),
             allowed_users: vec!["user".into()],
+            autonomy_level: None,
+            tool_allowlist: None,
         });
         let entries = all_integrations();
         let tg = entries.iter().find(|e| e.name == "Telegram").unwrap();
@@ -752,6 +754,8 @@ mod tests {
         let mut config = Config::default();
         config.channels_config.imessage = Some(IMessageConfig {
             allowed_contacts: vec!["*".into()],
+            autonomy_level: None,
+            tool_allowlist: None,
         });
         let entries = all_integrations();
         let im = entries.iter().find(|e| e.name == "iMessage").unwrap();
@@ -777,6 +781,8 @@ mod tests {
             access_token: "tok".into(),
             room_id: "!r:m".into(),
             allowed_users: vec![],
+            autonomy_level: None,
+            tool_allowlist: None,
         });
         let entries = all_integrations();
         let mx = entries.iter().find(|e| e.name == "Matrix").unwrap();

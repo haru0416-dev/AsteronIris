@@ -269,6 +269,8 @@ fn advance_channel_sub_step(state: &mut WizardState) {
             state.channels_config.telegram = Some(TelegramConfig {
                 bot_token: String::new(), // will be filled from connection test
                 allowed_users: allowed,
+                autonomy_level: None,
+                tool_allowlist: None,
             });
             state.channel_sub_step = ChannelSubStep::Picker;
         }
@@ -290,6 +292,8 @@ fn advance_channel_sub_step(state: &mut WizardState) {
                 bot_token: String::new(),
                 guild_id: None,
                 allowed_users: allowed,
+                autonomy_level: None,
+                tool_allowlist: None,
             });
             state.channel_sub_step = ChannelSubStep::Picker;
         }
@@ -316,6 +320,8 @@ fn advance_channel_sub_step(state: &mut WizardState) {
                 app_token: None,
                 channel_id: None,
                 allowed_users: allowed,
+                autonomy_level: None,
+                tool_allowlist: None,
             });
             state.channel_sub_step = ChannelSubStep::Picker;
         }
@@ -327,6 +333,8 @@ fn advance_channel_sub_step(state: &mut WizardState) {
                 } else {
                     contacts
                 },
+                autonomy_level: None,
+                tool_allowlist: None,
             });
             state.channel_sub_step = ChannelSubStep::Picker;
         }
@@ -357,6 +365,8 @@ fn advance_channel_sub_step(state: &mut WizardState) {
                 } else {
                     allowed
                 },
+                autonomy_level: None,
+                tool_allowlist: None,
             });
             state.channel_sub_step = ChannelSubStep::Picker;
         }
@@ -388,6 +398,8 @@ fn advance_channel_sub_step(state: &mut WizardState) {
                     allowed
                 },
                 app_secret: None,
+                autonomy_level: None,
+                tool_allowlist: None,
             });
             state.channel_sub_step = ChannelSubStep::Picker;
         }
@@ -433,6 +445,8 @@ fn advance_channel_sub_step(state: &mut WizardState) {
                 nickserv_password: None,
                 sasl_password: None,
                 verify_tls: Some(true),
+                autonomy_level: None,
+                tool_allowlist: None,
             });
             state.channel_sub_step = ChannelSubStep::Picker;
         }
@@ -442,7 +456,12 @@ fn advance_channel_sub_step(state: &mut WizardState) {
         }
         ChannelSubStep::WebhookSecret => {
             let port: u16 = val.parse().unwrap_or(8080);
-            state.channels_config.webhook = Some(WebhookConfig { port, secret: None });
+            state.channels_config.webhook = Some(WebhookConfig {
+                port,
+                secret: None,
+                autonomy_level: None,
+                tool_allowlist: None,
+            });
             state.channel_sub_step = ChannelSubStep::Picker;
         }
         ChannelSubStep::Picker => {} // handled above
