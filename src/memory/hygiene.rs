@@ -714,6 +714,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn memory_hygiene_per_layer_retention() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path();

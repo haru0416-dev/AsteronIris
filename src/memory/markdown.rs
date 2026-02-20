@@ -289,12 +289,6 @@ impl MarkdownMemory {
         None
     }
 
-    #[allow(dead_code)]
-    fn parse_markdown_entry_metadata(
-        line: &str,
-    ) -> Option<(Option<MemoryLayer>, Option<MemoryProvenance>)> {
-        Self::parse_markdown_entry_line(line).map(|entry| (entry.layer, entry.provenance))
-    }
 
     async fn read_all_entries(&self) -> anyhow::Result<Vec<MemoryEntry>> {
         let mut entries = Vec::new();
@@ -398,6 +392,7 @@ impl MarkdownMemory {
             .find(|e| e.key == key || e.content.contains(key)))
     }
 
+    // Used by unit tests in this module (e.g. markdown_list_by_category)
     #[allow(dead_code)]
     async fn list_projection_entries(
         &self,
