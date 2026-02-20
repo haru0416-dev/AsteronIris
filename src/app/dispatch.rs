@@ -1,11 +1,12 @@
 use anyhow::{Result, bail};
+use std::sync::Arc;
 use tracing::info;
 
 use crate::Config;
 use crate::app::status::render_status;
 use crate::cli::commands::{ChannelCommands, Cli, Commands};
 
-pub async fn dispatch(cli: Cli, config: Config) -> Result<()> {
+pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
     // Onboard runs quick setup by default, or the interactive wizard with --interactive
     if let Commands::Onboard {
         interactive,
@@ -35,7 +36,7 @@ pub async fn dispatch(cli: Cli, config: Config) -> Result<()> {
         };
         // Auto-start channels if user said yes during wizard
         if std::env::var("ASTERONIRIS_AUTOSTART_CHANNELS").as_deref() == Ok("1") {
-            crate::channels::start_channels(config).await?;
+            crate::channels::start_channels(Arc::new(config)).await?;
         }
         return Ok(());
     }
@@ -48,7 +49,7 @@ pub async fn dispatch(cli: Cli, config: Config) -> Result<()> {
             provider,
             model,
             temperature,
-        } => crate::agent::run(config, message, provider, model, temperature).await,
+        } => crate::agent::run((*config).clone(), message, provider, model, temperature).await,
 
         Commands::Gateway { port, host } => {
             if port == 0 {
@@ -56,7 +57,7 @@ pub async fn dispatch(cli: Cli, config: Config) -> Result<()> {
             } else {
                 info!("🚀 Starting AsteronIris Gateway on {host}:{port}");
             }
-            crate::gateway::run_gateway(&host, port, config).await
+            crate::gateway::run_gateway(&host, port, Arc::clone(&config)).await
         }
 
         Commands::Daemon { port, host } => {
@@ -65,7 +66,7 @@ pub async fn dispatch(cli: Cli, config: Config) -> Result<()> {
             } else {
                 info!("🧠 Starting AsteronIris Daemon on {host}:{port}");
             }
-            crate::daemon::run(config, host, port).await
+            crate::daemon::run((*config).clone(), host, port).await
         }
 
         Commands::Status => {
@@ -82,8 +83,8 @@ pub async fn dispatch(cli: Cli, config: Config) -> Result<()> {
         Commands::Doctor => crate::doctor::run(&config),
 
         Commands::Channel { channel_command } => match channel_command {
-            ChannelCommands::Start => crate::channels::start_channels(config).await,
-            ChannelCommands::Doctor => crate::channels::doctor_channels(config).await,
+            ChannelCommands::Start => crate::channels::start_channels(Arc::clone(&config)).await,
+            ChannelCommands::Doctor => crate::channels::doctor_channels(Arc::clone(&config)).await,
             other => crate::channels::handle_command(other, &config),
         },
 

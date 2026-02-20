@@ -3,12 +3,14 @@ use anyhow::Result;
 use chrono::Utc;
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
 const STATUS_FLUSH_SECONDS: u64 = 5;
 
 pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
+    let config = Arc::new(config);
     let initial_backoff = config.reliability.channel_initial_backoff_secs.max(1);
     let max_backoff = config
         .reliability
@@ -23,17 +25,17 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
                 .await;
     }
 
-    let mut handles: Vec<JoinHandle<()>> = vec![spawn_state_writer(config.clone())];
+    let mut handles: Vec<JoinHandle<()>> = vec![spawn_state_writer(Arc::clone(&config))];
 
     {
-        let gateway_cfg = config.clone();
+        let gateway_cfg = Arc::clone(&config);
         let gateway_host = host.clone();
         handles.push(spawn_component_supervisor(
             "gateway",
             initial_backoff,
             max_backoff,
             move || {
-                let cfg = gateway_cfg.clone();
+                let cfg = Arc::clone(&gateway_cfg);
                 let host = gateway_host.clone();
                 async move { crate::gateway::run_gateway(&host, port, cfg).await }
             },
@@ -42,13 +44,13 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
 
     {
         if has_supervised_channels(&config) {
-            let channels_cfg = config.clone();
+            let channels_cfg = Arc::clone(&config);
             handles.push(spawn_component_supervisor(
                 "channels",
                 initial_backoff,
                 max_backoff,
                 move || {
-                    let cfg = channels_cfg.clone();
+                    let cfg = Arc::clone(&channels_cfg);
                     async move { crate::channels::start_channels(cfg).await }
                 },
             ));
@@ -59,27 +61,27 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
     }
 
     if config.heartbeat.enabled {
-        let heartbeat_cfg = config.clone();
+        let heartbeat_cfg = Arc::clone(&config);
         handles.push(spawn_component_supervisor(
             "heartbeat",
             initial_backoff,
             max_backoff,
             move || {
-                let cfg = heartbeat_cfg.clone();
+                let cfg = Arc::clone(&heartbeat_cfg);
                 async move { run_heartbeat_worker(cfg).await }
             },
         ));
     }
 
     {
-        let scheduler_cfg = config.clone();
+        let scheduler_cfg = Arc::clone(&config);
         handles.push(spawn_component_supervisor(
             "scheduler",
             initial_backoff,
             max_backoff,
             move || {
-                let cfg = scheduler_cfg.clone();
-                async move { crate::cron::scheduler::run(cfg).await }
+                let cfg = Arc::clone(&scheduler_cfg);
+                async move { crate::cron::scheduler::run((*cfg).clone()).await }
             },
         ));
     }
@@ -110,7 +112,7 @@ pub fn state_file_path(config: &Config) -> PathBuf {
         .join("daemon_state.json")
 }
 
-fn spawn_state_writer(config: Config) -> JoinHandle<()> {
+fn spawn_state_writer(config: Arc<Config>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let path = state_file_path(&config);
         if let Some(parent) = path.parent() {
@@ -170,7 +172,7 @@ where
     })
 }
 
-async fn run_heartbeat_worker(config: Config) -> Result<()> {
+async fn run_heartbeat_worker(config: Arc<Config>) -> Result<()> {
     let observer: std::sync::Arc<dyn crate::observability::Observer> =
         std::sync::Arc::from(crate::observability::create_observer(&config.observability));
     let engine = crate::heartbeat::engine::HeartbeatEngine::new(
@@ -193,7 +195,8 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
         for task in tasks {
             let prompt = format!("[Heartbeat Task] {task}");
             let temp = config.default_temperature;
-            if let Err(e) = crate::agent::run(config.clone(), Some(prompt), None, None, temp).await
+            if let Err(e) =
+                crate::agent::run((*config).clone(), Some(prompt), None, None, temp).await
             {
                 crate::health::mark_component_error("heartbeat", e.to_string());
                 tracing::warn!("Heartbeat task failed: {e}");

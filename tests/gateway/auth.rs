@@ -51,8 +51,9 @@ impl GatewayTestServer {
         });
 
         let host = "127.0.0.1".to_string();
-        let handle =
-            tokio::spawn(async move { run_gateway_with_listener(&host, listener, config).await });
+        let handle = tokio::spawn(async move {
+            run_gateway_with_listener(&host, listener, Arc::new(config)).await
+        });
 
         wait_until_gateway_ready(port).await;
 

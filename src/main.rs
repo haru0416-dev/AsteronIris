@@ -15,6 +15,7 @@ i18n!("locales", fallback = "en");
 
 use anyhow::Result;
 use clap::Parser;
+use std::sync::Arc;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
@@ -68,6 +69,6 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let cli = Cli::parse();
-    let config = Config::load_or_init()?;
+    let config = Arc::new(Config::load_or_init()?);
     app::dispatch::dispatch(cli, config).await
 }

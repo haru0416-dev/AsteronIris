@@ -167,7 +167,7 @@ fn classify_health_result(
     }
 }
 
-pub async fn doctor_channels(config: Config) -> Result<()> {
+pub async fn doctor_channels(config: Arc<Config>) -> Result<()> {
     let channels = factory::build_channels(&config.channels_config);
 
     if channels.is_empty() {
@@ -220,7 +220,7 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)]
-pub async fn start_channels(config: Config) -> Result<()> {
+pub async fn start_channels(config: Arc<Config>) -> Result<()> {
     let auth_broker = AuthBroker::load_or_init(&config)?;
 
     let provider: Arc<dyn Provider> =
