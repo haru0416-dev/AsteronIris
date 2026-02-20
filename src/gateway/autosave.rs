@@ -1,5 +1,7 @@
 use crate::memory::traits::MemoryLayer;
-use crate::memory::{MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel};
+use crate::memory::{
+    MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
+};
 use crate::security::policy::TenantPolicyContext;
 
 pub(super) const GATEWAY_AUTOSAVE_ENTITY_ID: &str = "default";

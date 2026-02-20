@@ -11,6 +11,7 @@ use super::{
     LANCEDB_DEGRADED_SOFT_FORGET_MARKER, LANCEDB_DEGRADED_SOFT_FORGET_PROVENANCE,
     LANCEDB_DEGRADED_TOMBSTONE_MARKER, LANCEDB_DEGRADED_TOMBSTONE_PROVENANCE,
 };
+use anyhow::Context;
 
 use chrono::Local;
 use futures_util::TryStreamExt;
@@ -315,11 +316,16 @@ impl LanceDbMemory {
                     return None;
                 }
                 let base_score = entry.score.unwrap_or(0.0).clamp(0.0, 1.0);
+                let confidence = entry.confidence.clamp(0.0, 1.0);
+                let importance = entry.importance.clamp(0.0, 1.0);
+                // Weighted scoring: relevance (35%) + confidence (25%) + importance (20%)
+                // + recency placeholder (5%) + reliability placeholder (8%).
+                // LanceDB lacks per-row recency/contradiction data, so those are fixed estimates.
                 let final_score = 0.35_f64 * base_score
-                    + 0.25_f64 * base_score
-                    + 0.20_f64
-                    + 0.10_f64 * 0.5
-                    + 0.10_f64 * 0.8;
+                    + 0.25_f64 * confidence
+                    + 0.20_f64 * importance
+                    + 0.10_f64 * 0.5 // recency placeholder
+                    + 0.10_f64 * 0.8; // reliability placeholder
                 Some(MemoryRecallItem {
                     entity_id: entity.to_string(),
                     slot_key: slot.to_string(),
@@ -465,10 +471,7 @@ impl LanceDbMemory {
         ))
     }
 
-    pub(super) async fn count_events(
-        &self,
-        entity_id: Option<&str>,
-    ) -> anyhow::Result<usize> {
+    pub(super) async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
         if let Some(entity) = entity_id {
             let entries = self.list_projection_entries(None).await?;
             let prefix = format!("{entity}:");
@@ -481,5 +484,3 @@ impl LanceDbMemory {
         }
     }
 }
-
-use anyhow::Context;

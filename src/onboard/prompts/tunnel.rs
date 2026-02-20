@@ -11,20 +11,20 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
         TunnelConfig,
     };
 
-    print_bullet("A tunnel exposes your gateway to the internet securely.");
-    print_bullet("Skip this if you only use CLI or local channels.");
+    print_bullet(&t!("onboard.tunnel.intro"));
+    print_bullet(&t!("onboard.tunnel.skip_hint"));
     println!();
 
     let options = vec![
-        "Skip — local only (default)",
-        "Cloudflare Tunnel — Zero Trust, free tier",
-        "Tailscale — private tailnet or public Funnel",
-        "ngrok — instant public URLs",
-        "Custom — bring your own (bore, frp, ssh, etc.)",
+        t!("onboard.tunnel.skip").to_string(),
+        t!("onboard.tunnel.cloudflare").to_string(),
+        t!("onboard.tunnel.tailscale").to_string(),
+        t!("onboard.tunnel.ngrok").to_string(),
+        t!("onboard.tunnel.custom").to_string(),
     ];
 
     let choice = Select::new()
-        .with_prompt("  Select tunnel provider")
+        .with_prompt(format!("  {}", t!("onboard.tunnel.select_prompt")))
         .items(&options)
         .default(0)
         .interact()?;
@@ -32,12 +32,15 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
     let config = match choice {
         1 => {
             println!();
-            print_bullet("Get your tunnel token from the Cloudflare Zero Trust dashboard.");
+            print_bullet(&t!("onboard.tunnel.cloudflare_token_hint"));
             let token: String = Input::new()
-                .with_prompt("  Cloudflare tunnel token")
+                .with_prompt(format!(
+                    "  {}",
+                    t!("onboard.tunnel.cloudflare_token_prompt")
+                ))
                 .interact_text()?;
             if token.trim().is_empty() {
-                println!("  {} Skipped", style("→").dim());
+                println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
                 TunnelConfig::default()
             } else {
                 println!(
@@ -54,9 +57,12 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
         }
         2 => {
             println!();
-            print_bullet("Tailscale must be installed and authenticated (tailscale up).");
+            print_bullet(&t!("onboard.tunnel.tailscale_hint"));
             let funnel = Confirm::new()
-                .with_prompt("  Use Funnel (public internet)? No = tailnet only")
+                .with_prompt(format!(
+                    "  {}",
+                    t!("onboard.tunnel.tailscale_funnel_prompt")
+                ))
                 .default(false)
                 .interact()?;
             println!(
@@ -64,9 +70,9 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
                 style("✓").green().bold(),
                 style("Tailscale").green(),
                 if funnel {
-                    "Funnel — public"
+                    t!("onboard.tunnel.tailscale_funnel_public")
                 } else {
-                    "Serve — tailnet only"
+                    t!("onboard.tunnel.tailscale_serve_tailnet")
                 }
             );
             TunnelConfig {
@@ -80,18 +86,16 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
         }
         3 => {
             println!();
-            print_bullet(
-                "Get your auth token at https://dashboard.ngrok.com/get-started/your-authtoken",
-            );
+            print_bullet(&t!("onboard.tunnel.ngrok_hint"));
             let auth_token: String = Input::new()
-                .with_prompt("  ngrok auth token")
+                .with_prompt(format!("  {}", t!("onboard.tunnel.ngrok_token_prompt")))
                 .interact_text()?;
             if auth_token.trim().is_empty() {
-                println!("  {} Skipped", style("→").dim());
+                println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
                 TunnelConfig::default()
             } else {
                 let domain: String = Input::new()
-                    .with_prompt("  Custom domain (optional, Enter to skip)")
+                    .with_prompt(format!("  {}", t!("onboard.tunnel.ngrok_domain_prompt")))
                     .allow_empty(true)
                     .interact_text()?;
                 println!(
@@ -115,20 +119,20 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
         }
         4 => {
             println!();
-            print_bullet("Enter the command to start your tunnel.");
-            print_bullet("Use {port} and {host} as placeholders.");
-            print_bullet("Example: bore local {port} --to bore.pub");
+            print_bullet(&t!("onboard.tunnel.custom_hint"));
+            print_bullet(&t!("onboard.tunnel.custom_placeholder_hint"));
+            print_bullet(&t!("onboard.tunnel.custom_example"));
             let cmd: String = Input::new()
-                .with_prompt("  Start command")
+                .with_prompt(format!("  {}", t!("onboard.tunnel.custom_prompt")))
                 .interact_text()?;
             if cmd.trim().is_empty() {
-                println!("  {} Skipped", style("→").dim());
+                println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
                 TunnelConfig::default()
             } else {
                 println!(
                     "  {} Tunnel: {} ({})",
                     style("✓").green().bold(),
-                    style("Custom").green(),
+                    style(t!("onboard.tunnel.confirm_custom")).green(),
                     style(&cmd).dim()
                 );
                 TunnelConfig {
@@ -146,7 +150,7 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
             println!(
                 "  {} Tunnel: {}",
                 style("✓").green().bold(),
-                style("none (local only)").dim()
+                style(t!("onboard.tunnel.confirm_none")).dim()
             );
             TunnelConfig::default()
         }

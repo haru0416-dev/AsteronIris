@@ -71,4 +71,33 @@ mod tests {
     fn validate_non_empty_rejects_blank() {
         assert!(validate_non_empty("x", "   ").is_err());
     }
+
+    #[test]
+    fn validate_base_url_trims_trailing_slash() {
+        assert_eq!(
+            validate_base_url("https://ex.com/").unwrap(),
+            "https://ex.com"
+        );
+    }
+
+    #[test]
+    fn validate_base_url_rejects_empty() {
+        assert!(validate_base_url("   ").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_preserves_path() {
+        assert_eq!(
+            validate_base_url("https://ex.com/v1").unwrap(),
+            "https://ex.com/v1"
+        );
+    }
+
+    #[test]
+    fn validate_base_url_trims_whitespace() {
+        assert_eq!(
+            validate_base_url("  https://ex.com  ").unwrap(),
+            "https://ex.com"
+        );
+    }
 }

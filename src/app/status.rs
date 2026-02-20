@@ -3,24 +3,43 @@ use crate::config::Config;
 #[allow(clippy::too_many_lines)]
 pub fn render_status(config: &Config) -> String {
     let mut lines = vec![
-        "🦀 AsteronIris Status".to_string(),
+        format!("◆ {}", t!("status.title")),
         String::new(),
-        format!("Version:     {}", env!("CARGO_PKG_VERSION")),
-        format!("Workspace:   {}", config.workspace_dir.display()),
-        format!("Config:      {}", config.config_path.display()),
+        format!("{}     {}", t!("status.version"), env!("CARGO_PKG_VERSION")),
+        format!(
+            "{}   {}",
+            t!("status.workspace"),
+            config.workspace_dir.display()
+        ),
+        format!(
+            "{}      {}",
+            t!("status.config"),
+            config.config_path.display()
+        ),
         String::new(),
         format!(
-            "🤖 Provider:      {}",
+            "  {}      {}",
+            t!("status.provider"),
             config.default_provider.as_deref().unwrap_or("openrouter")
         ),
         format!(
-            "   Model:         {}",
+            "   {}         {}",
+            t!("status.model"),
             config.default_model.as_deref().unwrap_or("(default)")
         ),
-        format!("📊 Observability:  {}", config.observability.backend),
-        format!("🛡️  Autonomy:      {:?}", config.autonomy.level),
         format!(
-            "   External actions: {}",
+            "  {}  {}",
+            t!("status.observability"),
+            config.observability.backend
+        ),
+        format!(
+            "  {}      {:?}",
+            t!("status.autonomy"),
+            config.autonomy.level
+        ),
+        format!(
+            "   {} {}",
+            t!("status.external_actions"),
             match config.autonomy.external_action_execution {
                 crate::security::ExternalActionExecution::Disabled => "disabled",
                 crate::security::ExternalActionExecution::Enabled => "enabled",
@@ -30,11 +49,14 @@ pub fn render_status(config: &Config) -> String {
 
     let temperature_band = config.autonomy.selected_temperature_band();
     lines.push(format!(
-        "   Temperature band: [{:.2}, {:.2}]",
-        temperature_band.min, temperature_band.max
+        "   {} [{:.2}, {:.2}]",
+        t!("status.temperature_band"),
+        temperature_band.min,
+        temperature_band.max
     ));
     lines.push(format!(
-        "   Rollout stage: {}",
+        "   {} {}",
+        t!("status.rollout_stage"),
         match config.autonomy.rollout.stage {
             Some(crate::config::schema::AutonomyRolloutStage::ReadOnly) => "read-only",
             Some(crate::config::schema::AutonomyRolloutStage::Supervised) => "supervised",
@@ -43,7 +65,8 @@ pub fn render_status(config: &Config) -> String {
         }
     ));
     lines.push(format!(
-        "   Rollout policy: enabled={}, read_only_days={:?}, supervised_days={:?}",
+        "   {} enabled={}, read_only_days={:?}, supervised_days={:?}",
+        t!("status.rollout_policy"),
         if config.autonomy.rollout.enabled {
             "on"
         } else {
@@ -53,27 +76,29 @@ pub fn render_status(config: &Config) -> String {
         config.autonomy.rollout.supervised_days
     ));
     lines.push(format!(
-        "   Verify/repair caps: max_attempts={}, max_repair_depth={}",
-        config.autonomy.verify_repair_max_attempts, config.autonomy.verify_repair_max_repair_depth
+        "   {} max_attempts={}, max_repair_depth={}",
+        t!("status.verify_repair"),
+        config.autonomy.verify_repair_max_attempts,
+        config.autonomy.verify_repair_max_repair_depth
     ));
     lines.push(format!(
-        "   Autonomy lifecycle metrics: {}",
+        "   {} {}",
+        t!("status.autonomy_metrics"),
         if observability_backend_supports_autonomy_metrics(&config.observability.backend) {
             "enabled"
         } else {
             "disabled"
         }
     ));
-    lines.push(format!("⚙️  Runtime:       {}", config.runtime.kind));
-
-    if let Some(contract_note) =
-        crate::runtime::runtime_kind_contract_note(config.runtime.kind.as_str())
-    {
-        lines.push(format!("   Runtime contract: {contract_note}"));
-    }
+    lines.push(format!(
+        "  {}       {}",
+        t!("status.runtime"),
+        config.runtime.kind
+    ));
 
     lines.push(format!(
-        "💓 Heartbeat:      {}",
+        "  {}      {}",
+        t!("status.heartbeat"),
         if config.heartbeat.enabled {
             format!("every {}min", config.heartbeat.interval_minutes)
         } else {
@@ -81,17 +106,20 @@ pub fn render_status(config: &Config) -> String {
         }
     ));
     lines.push(format!(
-        "🧠 Memory:         {} (auto-save: {})",
+        "  {}         {} (auto-save: {})",
+        t!("status.memory"),
         config.memory.backend,
         if config.memory.auto_save { "on" } else { "off" }
     ));
 
     let (consolidation, conflict, revocation, governance) = memory_rollout_status(config);
     lines.push(format!(
-        "   Memory rollout: consolidation={consolidation}, conflict={conflict}, revocation={revocation}, governance={governance}"
+        "   {} consolidation={consolidation}, conflict={conflict}, revocation={revocation}, governance={governance}",
+        t!("status.memory_rollout"),
     ));
     lines.push(format!(
-        "   Memory lifecycle metrics: {}",
+        "   {} {}",
+        t!("status.memory_metrics"),
         if observability_backend_supports_memory_metrics(&config.observability.backend) {
             "enabled"
         } else {
@@ -101,23 +129,30 @@ pub fn render_status(config: &Config) -> String {
 
     lines.extend([
         String::new(),
-        "Security:".to_string(),
-        format!("  Workspace only:    {}", config.autonomy.workspace_only),
+        format!("{}", t!("status.security")),
         format!(
-            "  Allowed commands:  {}",
+            "  {}    {}",
+            t!("status.workspace_only"),
+            config.autonomy.workspace_only
+        ),
+        format!(
+            "  {}  {}",
+            t!("status.allowed_commands"),
             config.autonomy.allowed_commands.join(", ")
         ),
         format!(
-            "  Max actions/hour:  {}",
+            "  {}  {}",
+            t!("status.max_actions"),
             config.autonomy.max_actions_per_hour
         ),
         format!(
-            "  Max cost/day:      ${:.2}",
+            "  {}      ${:.2}",
+            t!("status.max_cost"),
             f64::from(config.autonomy.max_cost_per_day_cents) / 100.0
         ),
         String::new(),
-        "Channels:".to_string(),
-        "  CLI:      ✅ always".to_string(),
+        format!("{}", t!("status.channels")),
+        format!("  {}", t!("status.cli_always")),
     ]);
 
     for (name, configured) in [
@@ -129,9 +164,9 @@ pub fn render_status(config: &Config) -> String {
         lines.push(format!(
             "  {name:9} {}",
             if configured {
-                "✅ configured"
+                format!("✓ {}", t!("common.confirmed"))
             } else {
-                "❌ not configured"
+                format!("✗ {}", t!("common.not_configured"))
             }
         ));
     }

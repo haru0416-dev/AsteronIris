@@ -6,18 +6,18 @@ use dialoguer::{Confirm, Select};
 use super::super::view::print_bullet;
 
 pub fn setup_memory() -> Result<MemoryConfig> {
-    print_bullet("Choose how AsteronIris stores and searches memories.");
-    print_bullet("You can always change this later in config.toml.");
+    print_bullet(&t!("onboard.memory.intro"));
+    print_bullet(&t!("onboard.memory.later_hint"));
     println!();
 
     let options = vec![
-        "SQLite with Vector Search (recommended) — fast, hybrid search, embeddings",
-        "Markdown Files — simple, human-readable, no dependencies",
-        "None — disable persistent memory",
+        t!("onboard.memory.sqlite").to_string(),
+        t!("onboard.memory.markdown").to_string(),
+        t!("onboard.memory.none").to_string(),
     ];
 
     let choice = Select::new()
-        .with_prompt("  Select memory backend")
+        .with_prompt(format!("  {}", t!("onboard.memory.select_prompt")))
         .items(&options)
         .default(0)
         .interact()?;
@@ -25,30 +25,33 @@ pub fn setup_memory() -> Result<MemoryConfig> {
     let backend = match choice {
         1 => "markdown",
         2 => "none",
-        _ => "sqlite", // 0 and any unexpected value defaults to sqlite
+        _ => "sqlite",
     };
 
     let auto_save = if backend == "none" {
         false
     } else {
         let save = Confirm::new()
-            .with_prompt("  Auto-save conversations to memory?")
+            .with_prompt(format!("  {}", t!("onboard.memory.auto_save_prompt")))
             .default(true)
             .interact()?;
         save
     };
 
     println!(
-        "  {} Memory: {} (auto-save: {})",
+        "  {} {}",
         style("✓").green().bold(),
-        style(backend).green(),
-        if auto_save { "on" } else { "off" }
+        t!(
+            "onboard.memory.confirm",
+            backend = style(backend).green(),
+            auto_save = if auto_save { "on" } else { "off" }
+        )
     );
 
     Ok(MemoryConfig {
         backend: backend.to_string(),
         auto_save,
-        hygiene_enabled: backend == "sqlite", // Only enable hygiene for SQLite
+        hygiene_enabled: backend == "sqlite",
         archive_after_days: if backend == "sqlite" { 7 } else { 0 },
         purge_after_days: if backend == "sqlite" { 30 } else { 0 },
         conversation_retention_days: 30,

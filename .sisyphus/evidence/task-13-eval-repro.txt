@@ -1,0 +1,5 @@
+seed=2776498195
+summary_fingerprint=8654044261313886853
+columns=success-rate,cost,latency,retries
+suite=autonomy-regression success-rate=7500bps cost=10c latency=149ms retries=1500milli
+suite=injection-defense-regression success-rate=10000bps cost=10c latency=78ms retries=500milli

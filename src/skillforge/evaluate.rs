@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::scout::ScoutResult;
 
-// ---------------------------------------------------------------------------
-// Scoring dimensions
-// ---------------------------------------------------------------------------
+// ── Scoring dimensions ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scores {
@@ -25,9 +23,7 @@ impl Scores {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Recommendation
-// ---------------------------------------------------------------------------
+// ── Recommendation ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Recommendation {
@@ -39,9 +35,7 @@ pub enum Recommendation {
     Skip,
 }
 
-// ---------------------------------------------------------------------------
-// EvalResult
-// ---------------------------------------------------------------------------
+// ── EvalResult ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalResult {
@@ -51,9 +45,7 @@ pub struct EvalResult {
     pub recommendation: Recommendation,
 }
 
-// ---------------------------------------------------------------------------
-// Evaluator
-// ---------------------------------------------------------------------------
+// ── Evaluator ────────────────────────────────────────────────────────────────
 
 pub struct Evaluator {
     /// Minimum total score for auto-integration.
@@ -118,7 +110,7 @@ impl Evaluator {
         }
     }
 
-    // -- Dimension scorers --------------------------------------------------
+    // ── Dimension scorers ────────────────────────────────────────────────────
 
     /// Compatibility: favour Rust repos; penalise unknown languages.
     fn score_compatibility(c: &ScoutResult) -> f64 {
@@ -169,9 +161,7 @@ impl Evaluator {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+// ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

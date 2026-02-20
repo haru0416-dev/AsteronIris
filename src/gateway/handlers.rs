@@ -235,7 +235,6 @@ pub(super) async fn handle_whatsapp_message(
         }
     }
 
-    // Parse JSON body
     let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&body) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -243,7 +242,6 @@ pub(super) async fn handle_whatsapp_message(
         );
     };
 
-    // Parse messages from the webhook payload
     let messages = wa.parse_webhook_payload(&payload);
 
     if messages.is_empty() {
@@ -251,7 +249,6 @@ pub(super) async fn handle_whatsapp_message(
         return (StatusCode::OK, Json(serde_json::json!({"status": "ok"})));
     }
 
-    // Process each message
     for msg in &messages {
         tracing::info!(
             "WhatsApp message from {}: {}",
@@ -304,14 +301,12 @@ pub(super) async fn handle_whatsapp_message(
                 continue;
             }
 
-            // Call the LLM
             match state
                 .provider
                 .chat(&ingress.model_input, &state.model, state.temperature)
                 .await
             {
                 Ok(response) => {
-                    // Send reply via WhatsApp
                     if let Err(e) = wa.send(&response, &msg.sender).await {
                         tracing::error!("Failed to send WhatsApp reply: {e}");
                     }

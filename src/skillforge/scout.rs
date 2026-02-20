@@ -6,9 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-// ---------------------------------------------------------------------------
-// ScoutSource
-// ---------------------------------------------------------------------------
+// ── ScoutSource ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScoutSource {
@@ -33,9 +31,7 @@ impl std::str::FromStr for ScoutSource {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ScoutResult
-// ---------------------------------------------------------------------------
+// ── ScoutResult ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoutResult {
@@ -52,9 +48,7 @@ pub struct ScoutResult {
     pub has_license: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Scout trait
-// ---------------------------------------------------------------------------
+// ── Scout trait ──────────────────────────────────────────────────────────────
 
 #[async_trait]
 pub trait Scout: Send + Sync {
@@ -62,9 +56,7 @@ pub trait Scout: Send + Sync {
     async fn discover(&self) -> Result<Vec<ScoutResult>>;
 }
 
-// ---------------------------------------------------------------------------
-// GitHubScout
-// ---------------------------------------------------------------------------
+// ── Scouts ───────────────────────────────────────────────────────────────────
 
 /// Searches GitHub for repos matching skill-related queries.
 pub struct GitHubScout {
@@ -553,9 +545,7 @@ impl Scout for ClawHubScout {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Minimal percent-encoding for query strings (space → +).
 fn urlencoding(s: &str) -> String {
@@ -578,9 +568,7 @@ pub fn dedup(results: &mut Vec<ScoutResult>) {
     results.retain(|r| seen.insert(r.url.clone()));
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

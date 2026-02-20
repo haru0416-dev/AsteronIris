@@ -15,35 +15,62 @@ use super::prompts::{
 use super::scaffold::scaffold_workspace;
 use super::view::{print_step, print_summary, print_welcome_banner};
 
+/// Run the interactive wizard. Uses TUI if stdout is a terminal, falls back to dialoguer CLI.
 pub fn run_wizard() -> Result<Config> {
+    // Detect locale before anything else
+    if let Ok(lang) = std::env::var("ASTERONIRIS_LANG") {
+        if !lang.is_empty() {
+            rust_i18n::set_locale(&lang);
+        }
+    }
+
+    // TUI dispatch: use full-screen TUI if stdout is a terminal
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        match super::tui::run_tui_wizard() {
+            Ok(config) => {
+                print_summary(&config);
+                offer_launch_channels(&config)?;
+                return Ok(config);
+            }
+            Err(e) => {
+                // If TUI fails (e.g. terminal too small), fall back to CLI
+                tracing::warn!("TUI wizard failed, falling back to CLI: {e}");
+            }
+        }
+    }
+
+    run_wizard_cli()
+}
+
+/// CLI-based wizard using dialoguer (fallback for non-TTY or TUI failure).
+fn run_wizard_cli() -> Result<Config> {
     print_welcome_banner();
 
-    print_step(1, 8, "Workspace Setup");
+    print_step(1, 8, &t!("onboard.step.workspace"));
     let (workspace_dir, config_path) = setup_workspace()?;
 
-    print_step(2, 8, "AI Provider & API Key");
+    print_step(2, 8, &t!("onboard.step.provider"));
     let (provider, api_key, model) = setup_provider()?;
 
-    print_step(3, 8, "Channels (How You Talk to AsteronIris)");
+    print_step(3, 8, &t!("onboard.step.channels"));
     let channels_config = setup_channels()?;
 
-    print_step(4, 8, "Tunnel (Expose to Internet)");
+    print_step(4, 8, &t!("onboard.step.tunnel"));
     let tunnel_config = setup_tunnel()?;
 
-    print_step(5, 8, "Tool Mode & Security");
+    print_step(5, 8, &t!("onboard.step.tool_mode"));
     let (composio_config, secrets_config) = setup_tool_mode()?;
 
-    print_step(6, 8, "Memory Configuration");
+    print_step(6, 8, &t!("onboard.step.memory"));
     let memory_config = setup_memory()?;
 
-    print_step(7, 8, "Project Context (Personalize Your Agent)");
+    print_step(7, 8, &t!("onboard.step.context"));
     let project_ctx = setup_project_context()?;
 
-    print_step(8, 8, "Workspace Files");
+    print_step(8, 8, &t!("onboard.step.scaffold"));
     scaffold_workspace(&workspace_dir, &project_ctx)?;
 
     // ── Build config ──
-    // Defaults: SQLite memory, supervised autonomy, workspace-scoped, native runtime
     let config = Config {
         workspace_dir: workspace_dir.clone(),
         config_path: config_path.clone(),
@@ -61,7 +88,7 @@ pub fn run_wizard() -> Result<Config> {
         reliability: crate::config::ReliabilityConfig::default(),
         heartbeat: HeartbeatConfig::default(),
         channels_config,
-        memory: memory_config, // User-selected memory backend
+        memory: memory_config,
         tunnel: tunnel_config,
         gateway: crate::config::GatewayConfig::default(),
         composio: composio_config,
@@ -69,26 +96,33 @@ pub fn run_wizard() -> Result<Config> {
         browser: BrowserConfig::default(),
         persona: PersonaConfig::default(),
         identity: crate::config::IdentityConfig::default(),
+        locale: String::from("en"),
     };
 
     println!(
-        "  {} Security: {} | workspace-scoped",
+        "  {} {}",
         style("✓").green().bold(),
-        style("Supervised").green()
+        t!("onboard.security_confirm", level = "Supervised")
     );
     println!(
-        "  {} Memory: {} (auto-save: {})",
+        "  {} {}",
         style("✓").green().bold(),
-        style(&config.memory.backend).green(),
-        if config.memory.auto_save { "on" } else { "off" }
+        t!(
+            "onboard.memory_confirm",
+            backend = &config.memory.backend,
+            auto_save = if config.memory.auto_save { "on" } else { "off" }
+        )
     );
 
     config.save()?;
 
-    // ── Final summary ────────────────────────────────────────────
     print_summary(&config);
+    offer_launch_channels(&config)?;
 
-    // ── Offer to launch channels immediately ─────────────────────
+    Ok(config)
+}
+
+fn offer_launch_channels(config: &Config) -> Result<()> {
     let has_channels = config.channels_config.telegram.is_some()
         || config.channels_config.discord.is_some()
         || config.channels_config.slack.is_some()
@@ -98,85 +132,43 @@ pub fn run_wizard() -> Result<Config> {
 
     if has_channels && config.api_key.is_some() {
         let launch: bool = Confirm::new()
-            .with_prompt(format!(
-                "  {} Launch channels now? (connected channels → AI → reply)",
-                style("🚀").cyan()
-            ))
+            .with_prompt(format!("  › {}", t!("onboard.launch_prompt")))
             .default(true)
             .interact()?;
 
         if launch {
             println!();
-            println!(
-                "  {} {}",
-                style("⚡").cyan(),
-                style("Starting channel server...").white().bold()
-            );
+            println!("  › {}", style(t!("onboard.launching")).white().bold());
             println!();
-            // Signal to main.rs to call start_channels after wizard returns
             unsafe {
                 std::env::set_var("ASTERONIRIS_AUTOSTART_CHANNELS", "1");
             }
         }
     }
 
-    Ok(config)
+    Ok(())
 }
 
 /// Interactive repair flow: rerun channel setup only without redoing full onboarding.
 pub fn run_channels_repair_wizard() -> Result<Config> {
     print_welcome_banner();
-    println!(
-        "  {}",
-        style("Channels Repair — update channel tokens and allowlists only")
-            .white()
-            .bold()
-    );
+    println!("  {}", style(t!("onboard.repair.title")).white().bold());
     println!();
 
     let mut config = Config::load_or_init()?;
 
-    print_step(1, 1, "Channels (How You Talk to AsteronIris)");
+    print_step(1, 1, &t!("onboard.step.channels"));
     config.channels_config = setup_channels()?;
     config.save()?;
 
     println!();
     println!(
-        "  {} Channel config saved: {}",
+        "  {} {}",
         style("✓").green().bold(),
-        style(config.config_path.display()).green()
+        t!("onboard.repair.saved", path = config.config_path.display())
     );
 
-    let has_channels = config.channels_config.telegram.is_some()
-        || config.channels_config.discord.is_some()
-        || config.channels_config.slack.is_some()
-        || config.channels_config.imessage.is_some()
-        || config.channels_config.matrix.is_some()
-        || config.channels_config.email.is_some();
-
-    if has_channels && config.api_key.is_some() {
-        let launch: bool = Confirm::new()
-            .with_prompt(format!(
-                "  {} Launch channels now? (connected channels → AI → reply)",
-                style("🚀").cyan()
-            ))
-            .default(true)
-            .interact()?;
-
-        if launch {
-            println!();
-            println!(
-                "  {} {}",
-                style("⚡").cyan(),
-                style("Starting channel server...").white().bold()
-            );
-            println!();
-            // Signal to main.rs to call start_channels after wizard returns
-            unsafe {
-                std::env::set_var("ASTERONIRIS_AUTOSTART_CHANNELS", "1");
-            }
-        }
-    }
+    offer_launch_channels(&config)?;
 
     Ok(config)
 }
@@ -184,8 +176,6 @@ pub fn run_channels_repair_wizard() -> Result<Config> {
 // ── Quick setup (zero prompts) ───────────────────────────────────
 
 /// Non-interactive setup: generates a sensible default config instantly.
-/// Use `asteroniris onboard` or `asteroniris onboard --api-key sk-... --provider openrouter --memory sqlite`.
-/// Use `asteroniris onboard --interactive` for the full wizard.
 #[allow(clippy::too_many_lines)]
 pub fn run_quick_setup(
     api_key: Option<&str>,
@@ -193,12 +183,7 @@ pub fn run_quick_setup(
     memory_backend: Option<&str>,
 ) -> Result<Config> {
     print_welcome_banner();
-    println!(
-        "  {}",
-        style("Quick Setup — generating config with sensible defaults...")
-            .white()
-            .bold()
-    );
+    println!("  {}", style(t!("onboard.quick.title")).white().bold());
     println!();
 
     let home = directories::UserDirs::new()
@@ -214,7 +199,6 @@ pub fn run_quick_setup(
     let model = default_model_for_provider(&provider_name);
     let memory_backend_name = memory_backend.unwrap_or("sqlite").to_string();
 
-    // Create memory config based on backend choice
     let memory_config = MemoryConfig {
         backend: memory_backend_name.clone(),
         auto_save: memory_backend_name != "none",
@@ -270,6 +254,7 @@ pub fn run_quick_setup(
         browser: BrowserConfig::default(),
         persona: PersonaConfig::default(),
         identity: crate::config::IdentityConfig::default(),
+        locale: String::from("en"),
     };
 
     config.save()?;
@@ -286,37 +271,43 @@ pub fn run_quick_setup(
     scaffold_workspace(&workspace_dir, &default_ctx)?;
 
     println!(
-        "  {} Workspace:  {}",
+        "  {} {} {}",
         style("✓").green().bold(),
+        t!("onboard.quick.workspace"),
         style(workspace_dir.display()).green()
     );
     println!(
-        "  {} Provider:   {}",
+        "  {} {} {}",
         style("✓").green().bold(),
+        t!("onboard.quick.provider"),
         style(&provider_name).green()
     );
     println!(
-        "  {} Model:      {}",
+        "  {} {} {}",
         style("✓").green().bold(),
+        t!("onboard.quick.model"),
         style(&model).green()
     );
     println!(
-        "  {} API Key:    {}",
+        "  {} {} {}",
         style("✓").green().bold(),
+        t!("onboard.quick.api_key"),
         if api_key.is_some() {
-            style("set").green()
+            style(t!("onboard.quick.api_key_set")).green()
         } else {
-            style("not set (use --api-key or edit config.toml)").yellow()
+            style(t!("onboard.quick.api_key_not_set")).yellow()
         }
     );
     println!(
-        "  {} Security:   {}",
+        "  {} {} {}",
         style("✓").green().bold(),
-        style("Supervised (workspace-scoped)").green()
+        t!("onboard.quick.security"),
+        style(t!("onboard.quick.security_value")).green()
     );
     println!(
-        "  {} Memory:     {} (auto-save: {})",
+        "  {} {} {} (auto-save: {})",
         style("✓").green().bold(),
+        t!("onboard.quick.memory"),
         style(&memory_backend_name).green(),
         if memory_backend_name == "none" {
             "off"
@@ -325,33 +316,40 @@ pub fn run_quick_setup(
         }
     );
     println!(
-        "  {} Secrets:    {}",
+        "  {} {} {}",
         style("✓").green().bold(),
-        style("encrypted").green()
+        t!("onboard.quick.secrets"),
+        style(t!("onboard.quick.secrets_value")).green()
     );
     println!(
-        "  {} Gateway:    {}",
+        "  {} {} {}",
         style("✓").green().bold(),
-        style("pairing required (127.0.0.1:8080)").green()
+        t!("onboard.quick.gateway"),
+        style(t!("onboard.quick.gateway_value")).green()
     );
     println!(
-        "  {} Tunnel:     {}",
+        "  {} {} {}",
         style("✓").green().bold(),
-        style("none (local only)").dim()
+        t!("onboard.quick.tunnel"),
+        style(t!("onboard.quick.tunnel_value")).dim()
     );
     println!(
-        "  {} Composio:   {}",
+        "  {} {} {}",
         style("✓").green().bold(),
-        style("disabled (sovereign mode)").dim()
+        t!("onboard.quick.composio"),
+        style(t!("onboard.quick.composio_value")).dim()
     );
     println!();
     println!(
         "  {} {}",
-        style("Config saved:").white().bold(),
+        style(t!("onboard.quick.config_saved")).white().bold(),
         style(config_path.display()).green()
     );
     println!();
-    println!("  {}", style("Next steps:").white().bold());
+    println!(
+        "  {}",
+        style(t!("onboard.summary.next_steps")).white().bold()
+    );
     if api_key.is_none() {
         println!("    1. Set your API key:  export OPENROUTER_API_KEY=\"sk-...\"");
         println!("    2. Or edit:           ~/.asteroniris/config.toml");

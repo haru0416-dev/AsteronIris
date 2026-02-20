@@ -84,10 +84,10 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
         ));
     }
 
-    println!("🧠 AsteronIris daemon started");
-    println!("   Gateway:  http://{host}:{port}");
-    println!("   Components: gateway, channels, heartbeat, scheduler");
-    println!("   Ctrl+C to stop");
+    println!("◆ {}", t!("daemon.started"));
+    println!("   {}", t!("daemon.gateway_addr", host = host, port = port));
+    println!("   {}", t!("daemon.components"));
+    println!("   {}", t!("daemon.stop_hint"));
 
     tokio::signal::ctrl_c().await?;
     crate::health::mark_component_error("daemon", "shutdown requested");

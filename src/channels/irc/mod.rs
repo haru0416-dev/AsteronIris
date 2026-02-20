@@ -160,17 +160,17 @@ impl Channel for IrcChannel {
         let tls = self.connect().await?;
         let (reader, mut writer) = tokio::io::split(tls);
 
-        // --- SASL negotiation ---
+        // ── SASL negotiation ──
         if self.sasl_password.is_some() {
             Self::send_raw(&mut writer, "CAP REQ :sasl").await?;
         }
 
-        // --- Server password ---
+        // ── Server password ──
         if let Some(ref pass) = self.server_password {
             Self::send_raw(&mut writer, &format!("PASS {pass}")).await?;
         }
 
-        // --- Nick/User registration ---
+        // ── Nick/User registration ──
         Self::send_raw(&mut writer, &format!("NICK {current_nick}")).await?;
         Self::send_raw(
             &mut writer,

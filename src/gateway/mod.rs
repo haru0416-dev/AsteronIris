@@ -12,6 +12,8 @@ mod defense;
 mod handlers;
 mod signature;
 
+// Re-exported for integration tests (tests/persona/scope_regression.rs).
+#[allow(unused_imports)]
 pub use signature::verify_whatsapp_signature;
 
 #[cfg(test)]
@@ -133,7 +135,6 @@ pub async fn run_gateway_with_listener(
         &config.workspace_dir,
     ));
 
-    // Extract webhook secret for authentication
     let webhook_secret: Option<Arc<str>> = config
         .channels_config
         .webhook
@@ -182,50 +183,49 @@ pub async fn run_gateway_with_listener(
     let mut tunnel_url: Option<String> = None;
 
     if let Some(ref tun) = tunnel {
-        println!("🔗 Starting {} tunnel...", tun.name());
+        println!("› {}", t!("gateway.tunnel_starting", name = tun.name()));
         match tun.start(host, actual_port).await {
             Ok(url) => {
-                println!("🌐 Tunnel active: {url}");
+                println!("✓ {}", t!("gateway.tunnel_active", url = url));
                 tunnel_url = Some(url);
             }
             Err(e) => {
-                println!("⚠️  Tunnel failed to start: {e}");
-                println!("   Falling back to local-only mode.");
+                println!("! {}", t!("gateway.tunnel_failed", error = e));
+                println!("   {}", t!("gateway.tunnel_fallback"));
             }
         }
     }
 
-    println!("🦀 AsteronIris Gateway listening on http://{display_addr}");
+    println!("◆ {}", t!("gateway.listening", addr = display_addr));
     if let Some(ref url) = tunnel_url {
-        println!("  🌐 Public URL: {url}");
+        println!("  › {}", t!("gateway.public_url", url = url));
     }
-    println!("  POST /pair      — pair a new client (X-Pairing-Code header)");
-    println!("  POST /webhook   — {{\"message\": \"your prompt\"}}");
+    println!("  {}", t!("gateway.route_pair"));
+    println!("  {}", t!("gateway.route_webhook"));
     if whatsapp_channel.is_some() {
-        println!("  GET  /whatsapp  — Meta webhook verification");
-        println!("  POST /whatsapp  — WhatsApp message webhook");
+        println!("  {}", t!("gateway.route_whatsapp_get"));
+        println!("  {}", t!("gateway.route_whatsapp_post"));
     }
-    println!("  GET  /health    — health check");
+    println!("  {}", t!("gateway.route_health"));
     if let Some(code) = pairing.pairing_code() {
         println!();
-        println!("  🔐 PAIRING REQUIRED — use this one-time code:");
+        println!("  ✓ {}", t!("gateway.pairing_required"));
         println!("     ┌──────────────┐");
         println!("     │  {code}  │");
         println!("     └──────────────┘");
-        println!("     Send: POST /pair with header X-Pairing-Code: {code}");
+        println!("     {}", t!("gateway.pairing_send", code = code));
     } else if pairing.require_pairing() {
-        println!("  🔒 Pairing: ACTIVE (bearer token required)");
+        println!("  ✓ {}", t!("gateway.pairing_active"));
     } else {
-        println!("  ⚠️  Pairing: DISABLED (all requests accepted)");
+        println!("  ! {}", t!("gateway.pairing_disabled"));
     }
     if webhook_secret.is_some() {
-        println!("  🔒 Webhook secret: ENABLED");
+        println!("  ✓ {}", t!("gateway.webhook_secret_enabled"));
     }
-    println!("  Press Ctrl+C to stop.\n");
+    println!("  {}\n", t!("gateway.stop_hint"));
 
     crate::health::mark_component_ok("gateway");
 
-    // Build shared state
     let state = AppState {
         provider,
         model,
@@ -241,7 +241,6 @@ pub async fn run_gateway_with_listener(
         security,
     };
 
-    // Build router with middleware
     let app = Router::new()
         .route("/health", get(handle_health))
         .route("/pair", post(handle_pair))
@@ -255,7 +254,6 @@ pub async fn run_gateway_with_listener(
             Duration::from_secs(REQUEST_TIMEOUT_SECS),
         ));
 
-    // Run the server
     axum::serve(listener, app).await?;
 
     Ok(())
@@ -266,7 +264,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use axum::{
-        extract::State,
+        body::Bytes,
+        extract::{Query, State},
         http::HeaderMap,
         response::{IntoResponse, Json},
     };
@@ -570,5 +569,341 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // Defense helper tests
+    // ══════════════════════════════════════════════════════════
+
+    #[test]
+    fn policy_violation_reason_bearer() {
+        assert_eq!(
+            defense::PolicyViolation::MissingOrInvalidBearer.reason(),
+            "missing_or_invalid_bearer"
+        );
+    }
+
+    #[test]
+    fn policy_violation_reason_webhook_secret() {
+        assert_eq!(
+            defense::PolicyViolation::MissingOrInvalidWebhookSecret.reason(),
+            "missing_or_invalid_webhook_secret"
+        );
+    }
+
+    #[test]
+    fn policy_violation_enforce_bearer_returns_401() {
+        let (status, Json(body)) =
+            defense::PolicyViolation::MissingOrInvalidBearer.enforce_response();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body["error"].as_str().unwrap().contains("pair first"));
+    }
+
+    #[test]
+    fn policy_violation_enforce_secret_returns_401() {
+        let (status, Json(body)) =
+            defense::PolicyViolation::MissingOrInvalidWebhookSecret.enforce_response();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body["error"].as_str().unwrap().contains("X-Webhook-Secret"));
+    }
+
+    #[test]
+    fn policy_accounting_response_returns_429() {
+        let (status, Json(body)) = defense::policy_accounting_response("limit");
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body["error"].as_str().unwrap(), "limit");
+    }
+
+    #[test]
+    fn effective_defense_mode_kill_switch_forces_audit() {
+        let tmp = TempDir::new().unwrap();
+        let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let state = AppState {
+            provider: Arc::new(CountingProvider {
+                calls: calls.clone(),
+            }),
+            model: "test".to_string(),
+            temperature: 0.0,
+            mem,
+            auto_save: false,
+            webhook_secret: None,
+            pairing: Arc::new(PairingGuard::new(false, &[])),
+            whatsapp: None,
+            whatsapp_app_secret: None,
+            defense_mode: GatewayDefenseMode::Enforce,
+            defense_kill_switch: true,
+            security: Arc::new(SecurityPolicy::default()),
+        };
+        assert!(matches!(
+            defense::effective_defense_mode(&state),
+            GatewayDefenseMode::Audit
+        ));
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // Autosave builder tests
+    // ══════════════════════════════════════════════════════════
+
+    #[test]
+    fn autosave_entity_id_is_default() {
+        assert_eq!(autosave::GATEWAY_AUTOSAVE_ENTITY_ID, "default");
+    }
+
+    #[test]
+    fn gateway_runtime_policy_context_is_disabled() {
+        let ctx = autosave::gateway_runtime_policy_context();
+        assert!(ctx
+            .enforce_recall_scope(autosave::GATEWAY_AUTOSAVE_ENTITY_ID)
+            .is_ok());
+    }
+
+    #[test]
+    fn webhook_autosave_event_fields() {
+        use crate::memory::traits::MemoryLayer;
+
+        let event = autosave::gateway_webhook_autosave_event("test summary".to_string());
+        assert_eq!(event.entity_id, "default");
+        assert_eq!(event.slot_key, "external.gateway.webhook");
+        assert_eq!(event.value, "test summary");
+        assert_eq!(event.layer, MemoryLayer::Working);
+        assert!((event.confidence - 0.95).abs() < f64::EPSILON);
+        assert!((event.importance - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn whatsapp_autosave_event_includes_sender() {
+        let event =
+            autosave::gateway_whatsapp_autosave_event("1234567890", "wa summary".to_string());
+        assert!(event.slot_key.contains("1234567890"));
+        assert!((event.importance - 0.6).abs() < f64::EPSILON);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // Health handler tests
+    // ══════════════════════════════════════════════════════════
+
+    fn make_test_state(pairing: PairingGuard) -> AppState {
+        let tmp = TempDir::new().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        AppState {
+            provider: Arc::new(CountingProvider {
+                calls: calls.clone(),
+            }),
+            model: "test-model".to_string(),
+            temperature: 0.0,
+            mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
+            auto_save: false,
+            webhook_secret: None,
+            pairing: Arc::new(pairing),
+            whatsapp: None,
+            whatsapp_app_secret: None,
+            defense_mode: GatewayDefenseMode::Enforce,
+            defense_kill_switch: false,
+            security: Arc::new(SecurityPolicy::default()),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_health_returns_ok_with_unpaired_state() {
+        let state = make_test_state(PairingGuard::new(false, &[]));
+        let response = handle_health(State(state)).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["paired"], false);
+    }
+
+    #[tokio::test]
+    async fn handle_health_reflects_paired_when_tokens_exist() {
+        let state = make_test_state(PairingGuard::new(true, &["tok".to_string()]));
+        let response = handle_health(State(state)).await.into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["paired"], true);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // WhatsApp verify handler tests
+    // ══════════════════════════════════════════════════════════
+
+    fn make_whatsapp_state() -> AppState {
+        let tmp = TempDir::new().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        AppState {
+            provider: Arc::new(CountingProvider {
+                calls: calls.clone(),
+            }),
+            model: "test-model".to_string(),
+            temperature: 0.0,
+            mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
+            auto_save: false,
+            webhook_secret: None,
+            pairing: Arc::new(PairingGuard::new(false, &[])),
+            whatsapp: Some(Arc::new(WhatsAppChannel::new(
+                "access-token".to_string(),
+                "phone-id".to_string(),
+                "my-verify-token".to_string(),
+                vec![],
+            ))),
+            whatsapp_app_secret: Some(Arc::from("test-app-secret")),
+            defense_mode: GatewayDefenseMode::Enforce,
+            defense_kill_switch: false,
+            security: Arc::new(SecurityPolicy::default()),
+        }
+    }
+
+    #[tokio::test]
+    async fn whatsapp_verify_returns_challenge_on_valid() {
+        let state = make_whatsapp_state();
+        let response = handle_whatsapp_verify(
+            State(state),
+            Query(WhatsAppVerifyQuery {
+                mode: Some("subscribe".to_string()),
+                verify_token: Some("my-verify-token".to_string()),
+                challenge: Some("challenge123".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(std::str::from_utf8(&body).unwrap(), "challenge123");
+    }
+
+    #[tokio::test]
+    async fn whatsapp_verify_rejects_wrong_token() {
+        let state = make_whatsapp_state();
+        let response = handle_whatsapp_verify(
+            State(state),
+            Query(WhatsAppVerifyQuery {
+                mode: Some("subscribe".to_string()),
+                verify_token: Some("wrong-token".to_string()),
+                challenge: Some("c".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn whatsapp_verify_rejects_wrong_mode() {
+        let state = make_whatsapp_state();
+        let response = handle_whatsapp_verify(
+            State(state),
+            Query(WhatsAppVerifyQuery {
+                mode: Some("unsubscribe".to_string()),
+                verify_token: Some("my-verify-token".to_string()),
+                challenge: Some("c".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn whatsapp_verify_rejects_missing_challenge() {
+        let state = make_whatsapp_state();
+        let response = handle_whatsapp_verify(
+            State(state),
+            Query(WhatsAppVerifyQuery {
+                mode: Some("subscribe".to_string()),
+                verify_token: Some("my-verify-token".to_string()),
+                challenge: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn whatsapp_verify_returns_404_when_not_configured() {
+        let state = make_test_state(PairingGuard::new(false, &[]));
+        let response = handle_whatsapp_verify(
+            State(state),
+            Query(WhatsAppVerifyQuery {
+                mode: Some("subscribe".to_string()),
+                verify_token: Some("t".to_string()),
+                challenge: Some("c".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // WhatsApp message handler tests
+    // ══════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn whatsapp_message_404_when_not_configured() {
+        let state = make_test_state(PairingGuard::new(false, &[]));
+        let response = handle_whatsapp_message(State(state), HeaderMap::new(), Bytes::new())
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("not configured"));
+    }
+
+    #[tokio::test]
+    async fn whatsapp_message_rejects_invalid_signature() {
+        let state = make_whatsapp_state();
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Hub-Signature-256", "sha256=bad".parse().unwrap());
+        let response = handle_whatsapp_message(State(state), headers, Bytes::from_static(b"{}"))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn whatsapp_message_rejects_invalid_json() {
+        let state = make_whatsapp_state();
+        let payload = b"not json";
+        let sig = compute_whatsapp_signature_header("test-app-secret", payload);
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Hub-Signature-256", sig.parse().unwrap());
+        let response = handle_whatsapp_message(State(state), headers, Bytes::from_static(payload))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn whatsapp_message_ack_empty_messages() {
+        let state = make_whatsapp_state();
+        // Status update payload — no actual messages
+        let payload = br#"{"entry":[{"changes":[{"value":{"statuses":[{"id":"wamid.xxx","status":"delivered"}]}}]}]}"#;
+        let sig = compute_whatsapp_signature_header("test-app-secret", payload.as_slice());
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Hub-Signature-256", sig.parse().unwrap());
+        let response = handle_whatsapp_message(
+            State(state),
+            headers,
+            Bytes::from_static(payload.as_slice()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
     }
 }

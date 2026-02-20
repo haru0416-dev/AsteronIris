@@ -457,7 +457,7 @@ fn normalize_and_deduplicate(
 mod tests {
     use super::*;
 
-    use crate::config::Config;
+    use crate::config::{ChannelsConfig, Config};
     use crate::integrations::registry;
 
     #[test]
@@ -550,9 +550,8 @@ mod tests {
                     continue;
                 }
 
-                let match_arm = match candidate.split("=>").next() {
-                    Some(arm) => arm,
-                    None => continue,
+                let Some(match_arm) = candidate.split("=>").next() else {
+                    continue;
                 };
 
                 for segment in match_arm.split('|') {
@@ -672,8 +671,10 @@ mod tests {
         matrix.entries.retain(|entry| entry.name != "Shell");
 
         let entries = registry::all_integrations();
-        let mut config = Config::default();
-        config.channels_config = Default::default();
+        let config = Config {
+            channels_config: ChannelsConfig::default(),
+            ..Config::default()
+        };
 
         let result = validate_integration_status_against_matrix(&matrix, &entries, &config)
             .expect_err("matrix missing implemented entry should fail");

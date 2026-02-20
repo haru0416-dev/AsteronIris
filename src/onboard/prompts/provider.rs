@@ -9,16 +9,16 @@ use super::super::view::print_bullet;
 pub fn setup_provider() -> Result<(String, String, String)> {
     // ── Tier selection ──
     let tiers = vec![
-        "⭐ Recommended (OpenRouter, Venice, Anthropic, OpenAI, Gemini)",
-        "⚡ Fast inference (Groq, Fireworks, Together AI)",
-        "🌐 Gateway / proxy (Vercel AI, Cloudflare AI, Amazon Bedrock)",
-        "🔬 Specialized (Moonshot/Kimi, GLM/Zhipu, MiniMax, Qianfan, Z.AI, Synthetic, OpenCode Zen, Cohere)",
-        "🏠 Local / private (Ollama — no API key needed)",
-        "🔧 Custom — bring your own OpenAI-compatible API",
+        format!("› {}", t!("onboard.provider.tier_recommended")),
+        format!("› {}", t!("onboard.provider.tier_fast")),
+        format!("› {}", t!("onboard.provider.tier_gateway")),
+        format!("› {}", t!("onboard.provider.tier_specialized")),
+        format!("› {}", t!("onboard.provider.tier_local")),
+        format!("› {}", t!("onboard.provider.tier_custom")),
     ];
 
     let tier_idx = Select::new()
-        .with_prompt("  Select provider category")
+        .with_prompt(format!("  {}", t!("onboard.provider.select_category")))
         .items(&tiers)
         .default(0)
         .interact()?;
@@ -70,38 +70,39 @@ pub fn setup_provider() -> Result<(String, String, String)> {
         println!();
         println!(
             "  {} {}",
-            style("Custom Provider Setup").white().bold(),
-            style("— any OpenAI-compatible API").dim()
+            style(t!("onboard.provider.custom_title")).white().bold(),
+            style(format!("— {}", t!("onboard.provider.custom_subtitle"))).dim()
         );
-        print_bullet(
-            "AsteronIris works with ANY API that speaks the OpenAI chat completions format.",
-        );
-        print_bullet("Examples: LiteLLM, LocalAI, vLLM, text-generation-webui, LM Studio, etc.");
+        print_bullet(&t!("onboard.provider.custom_desc"));
+        print_bullet(&t!("onboard.provider.custom_examples"));
         println!();
 
         let base_url: String = Input::new()
-            .with_prompt("  API base URL (e.g. http://localhost:1234 or https://my-api.com)")
+            .with_prompt(format!("  {}", t!("onboard.provider.base_url_prompt")))
             .interact_text()?;
 
         let base_url = validate_base_url(&base_url)?;
 
         let api_key: String = Input::new()
-            .with_prompt("  API key (or Enter to skip if not needed)")
+            .with_prompt(format!("  {}", t!("onboard.provider.api_key_prompt")))
             .allow_empty(true)
             .interact_text()?;
 
         let model: String = Input::new()
-            .with_prompt("  Model name (e.g. llama3, gpt-4o, mistral)")
+            .with_prompt(format!("  {}", t!("onboard.provider.model_prompt")))
             .default("default".into())
             .interact_text()?;
 
         let provider_name = format!("custom:{base_url}");
 
         println!(
-            "  {} Provider: {} | Model: {}",
+            "  {} {}",
             style("✓").green().bold(),
-            style(&provider_name).green(),
-            style(&model).green()
+            t!(
+                "onboard.provider.confirm",
+                provider = style(&provider_name).green(),
+                model = style(&model).green()
+            )
         );
 
         return Ok((provider_name, api_key, model));
@@ -110,7 +111,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
     let provider_labels: Vec<&str> = providers.iter().map(|(_, label)| *label).collect();
 
     let provider_idx = Select::new()
-        .with_prompt("  Select your AI provider")
+        .with_prompt(format!("  {}", t!("onboard.provider.select_provider")))
         .items(&provider_labels)
         .default(0)
         .interact()?;
@@ -119,52 +120,60 @@ pub fn setup_provider() -> Result<(String, String, String)> {
 
     // ── API key ──
     let api_key = if provider_name == "ollama" {
-        print_bullet("Ollama runs locally — no API key needed!");
+        print_bullet(&t!("onboard.provider.ollama_no_key"));
         String::new()
     } else if provider_name == "gemini"
         || provider_name == "google"
         || provider_name == "google-gemini"
     {
-        // Special handling for Gemini: check for CLI auth first
         if crate::providers::gemini::GeminiProvider::has_cli_credentials() {
             print_bullet(&format!(
-                "{} Gemini CLI credentials detected! You can skip the API key.",
-                style("✓").green().bold()
+                "{} {}",
+                style("✓").green().bold(),
+                t!("onboard.provider.gemini_cli_detected")
             ));
-            print_bullet("AsteronIris will reuse your existing Gemini CLI authentication.");
+            print_bullet(&t!("onboard.provider.gemini_cli_reuse"));
             println!();
 
             let use_cli: bool = dialoguer::Confirm::new()
-                .with_prompt("  Use existing Gemini CLI authentication?")
+                .with_prompt(format!("  {}", t!("onboard.provider.gemini_use_cli")))
                 .default(true)
                 .interact()?;
 
             if use_cli {
                 println!(
-                    "  {} Using Gemini CLI OAuth tokens",
-                    style("✓").green().bold()
+                    "  {} {}",
+                    style("✓").green().bold(),
+                    t!("onboard.provider.gemini_using_cli")
                 );
-                String::new() // Empty key = will use CLI tokens
+                String::new()
             } else {
-                print_bullet("Get your API key at: https://aistudio.google.com/app/apikey");
+                print_bullet(&t!("onboard.provider.gemini_api_key_url"));
                 Input::new()
-                    .with_prompt("  Paste your Gemini API key")
+                    .with_prompt(format!(
+                        "  {}",
+                        t!("onboard.provider.gemini_api_key_prompt")
+                    ))
                     .allow_empty(true)
                     .interact_text()?
             }
         } else if std::env::var("GEMINI_API_KEY").is_ok() {
             print_bullet(&format!(
-                "{} GEMINI_API_KEY environment variable detected!",
-                style("✓").green().bold()
+                "{} {}",
+                style("✓").green().bold(),
+                t!("onboard.provider.gemini_env_detected")
             ));
             String::new()
         } else {
-            print_bullet("Get your API key at: https://aistudio.google.com/app/apikey");
-            print_bullet("Or run `gemini` CLI to authenticate (tokens will be reused).");
+            print_bullet(&t!("onboard.provider.gemini_api_key_url"));
+            print_bullet(&t!("onboard.provider.gemini_cli_hint"));
             println!();
 
             Input::new()
-                .with_prompt("  Paste your Gemini API key (or press Enter to skip)")
+                .with_prompt(format!(
+                    "  {}",
+                    t!("onboard.provider.gemini_api_key_skip_prompt")
+                ))
                 .allow_empty(true)
                 .interact_text()?
         }
@@ -193,24 +202,24 @@ pub fn setup_provider() -> Result<(String, String, String)> {
 
         println!();
         if !key_url.is_empty() {
-            print_bullet(&format!(
-                "Get your API key at: {}",
-                style(key_url).cyan().underlined()
+            print_bullet(&t!(
+                "onboard.provider.api_key_url",
+                url = style(key_url).cyan().underlined()
             ));
         }
-        print_bullet("You can also set it later via env var or config file.");
+        print_bullet(&t!("onboard.provider.api_key_later"));
         println!();
 
         let key: String = Input::new()
-            .with_prompt("  Paste your API key (or press Enter to skip)")
+            .with_prompt(format!("  {}", t!("onboard.provider.paste_key")))
             .allow_empty(true)
             .interact_text()?;
 
         if key.is_empty() {
             let env_var = provider_env_var(provider_name);
-            print_bullet(&format!(
-                "Skipped. Set {} or edit config.toml later.",
-                style(env_var).yellow()
+            print_bullet(&t!(
+                "onboard.provider.key_skipped",
+                env_var = style(env_var).yellow()
             ));
         }
 
@@ -344,7 +353,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
     let model_labels: Vec<&str> = models.iter().map(|(_, label)| *label).collect();
 
     let model_idx = Select::new()
-        .with_prompt("  Select your default model")
+        .with_prompt(format!("  {}", t!("onboard.provider.select_model")))
         .items(&model_labels)
         .default(0)
         .interact()?;
@@ -352,10 +361,13 @@ pub fn setup_provider() -> Result<(String, String, String)> {
     let model = models[model_idx].0.to_string();
 
     println!(
-        "  {} Provider: {} | Model: {}",
+        "  {} {}",
         style("✓").green().bold(),
-        style(provider_name).green(),
-        style(&model).green()
+        t!(
+            "onboard.provider.confirm",
+            provider = style(provider_name).green(),
+            model = style(&model).green()
+        )
     );
 
     Ok((provider_name.to_string(), api_key, model))

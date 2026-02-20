@@ -13,13 +13,13 @@ pub fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
         .context("Could not find home directory")?;
     let default_dir = home.join(".asteroniris");
 
-    print_bullet(&format!(
-        "Default location: {}",
-        style(default_dir.display()).green()
+    print_bullet(&t!(
+        "onboard.workspace.default_location",
+        path = style(default_dir.display()).green()
     ));
 
     let use_default = Confirm::new()
-        .with_prompt("  Use default workspace location?")
+        .with_prompt(format!("  {}", t!("onboard.workspace.use_default")))
         .default(true)
         .interact()?;
 
@@ -36,9 +36,12 @@ pub fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
     fs::create_dir_all(&workspace_dir).context("Failed to create workspace directory")?;
 
     println!(
-        "  {} Workspace: {}",
+        "  {} {}",
         style("✓").green().bold(),
-        style(workspace_dir.display()).green()
+        t!(
+            "onboard.workspace.confirm",
+            path = style(workspace_dir.display()).green()
+        )
     );
 
     Ok((workspace_dir, config_path))
@@ -47,7 +50,7 @@ pub fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
 #[allow(clippy::too_many_lines)]
 fn input_workspace_path() -> Result<String> {
     let custom: String = Input::new()
-        .with_prompt("  Enter workspace path")
+        .with_prompt(format!("  {}", t!("onboard.workspace.enter_path")))
         .interact_text()?;
     let expanded = shellexpand::tilde(&custom).to_string();
     validate_non_empty("workspace path", &expanded)

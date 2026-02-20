@@ -62,5 +62,5 @@ jobs:
       - name: Verify image (PR only)
         if: github.event_name == 'pull_request'
         run: |
-          docker build -t zeroclaw-test .
-          docker run --rm zeroclaw-test --version
+          docker build -t asteroniris-test .
+          docker run --rm asteroniris-test --version

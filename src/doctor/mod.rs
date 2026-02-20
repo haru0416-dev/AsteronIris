@@ -12,9 +12,12 @@ const CHANNEL_STALE_SECONDS: i64 = 300;
 pub fn run(config: &Config) -> Result<()> {
     let state_file = crate::daemon::state_file_path(config);
     if !state_file.exists() {
-        println!("🩺 AsteronIris Doctor");
-        println!("  ❌ daemon state file not found: {}", state_file.display());
-        println!("  💡 Start daemon with: asteroniris daemon");
+        println!("◆ {}", t!("doctor.title"));
+        println!(
+            "  ✗ {}",
+            t!("doctor.state_not_found", path = state_file.display())
+        );
+        println!("  › {}", t!("doctor.start_hint"));
         return Ok(());
     }
 
@@ -23,8 +26,8 @@ pub fn run(config: &Config) -> Result<()> {
     let snapshot: serde_json::Value = serde_json::from_str(&raw)
         .with_context(|| format!("Failed to parse {}", state_file.display()))?;
 
-    println!("🩺 AsteronIris Doctor");
-    println!("  State file: {}", state_file.display());
+    println!("◆ {}", t!("doctor.title"));
+    println!("  {}", t!("doctor.state_file", path = state_file.display()));
 
     let updated_at = snapshot
         .get("updated_at")
@@ -36,12 +39,12 @@ pub fn run(config: &Config) -> Result<()> {
             .signed_duration_since(ts.with_timezone(&Utc))
             .num_seconds();
         if age <= DAEMON_STALE_SECONDS {
-            println!("  ✅ daemon heartbeat fresh ({age}s ago)");
+            println!("  ✓ {}", t!("doctor.heartbeat_fresh", age = age));
         } else {
-            println!("  ❌ daemon heartbeat stale ({age}s ago)");
+            println!("  ✗ {}", t!("doctor.heartbeat_stale", age = age));
         }
     } else {
-        println!("  ❌ invalid daemon timestamp: {updated_at}");
+        println!("  ✗ {}", t!("doctor.timestamp_invalid", value = updated_at));
     }
 
     let mut channel_count = 0_u32;
@@ -66,14 +69,22 @@ pub fn run(config: &Config) -> Result<()> {
                 });
 
             if scheduler_ok && scheduler_last_ok <= SCHEDULER_STALE_SECONDS {
-                println!("  ✅ scheduler healthy (last ok {scheduler_last_ok}s ago)");
+                println!(
+                    "  ✓ {}",
+                    t!("doctor.scheduler_healthy", age = scheduler_last_ok)
+                );
             } else {
                 println!(
-                    "  ❌ scheduler unhealthy/stale (status_ok={scheduler_ok}, age={scheduler_last_ok}s)"
+                    "  ✗ {}",
+                    t!(
+                        "doctor.scheduler_unhealthy",
+                        ok = scheduler_ok,
+                        age = scheduler_last_ok
+                    )
                 );
             }
         } else {
-            println!("  ❌ scheduler component missing");
+            println!("  ✗ {}", t!("doctor.scheduler_missing"));
         }
 
         for (name, component) in components {
@@ -95,35 +106,43 @@ pub fn run(config: &Config) -> Result<()> {
                 });
 
             if status_ok && age <= CHANNEL_STALE_SECONDS {
-                println!("  ✅ {name} fresh (last ok {age}s ago)");
+                println!("  ✓ {}", t!("doctor.channel_fresh", name = name, age = age));
             } else {
                 stale_channels += 1;
-                println!("  ❌ {name} stale/unhealthy (status_ok={status_ok}, age={age}s)");
+                println!(
+                    "  ✗ {}",
+                    t!(
+                        "doctor.channel_stale",
+                        name = name,
+                        ok = status_ok,
+                        age = age
+                    )
+                );
             }
         }
     }
 
     if channel_count == 0 {
-        println!("  ℹ️ no channel components tracked in state yet");
+        println!("  › {}", t!("doctor.no_channels"));
     } else {
-        println!("  Channel summary: {channel_count} total, {stale_channels} stale");
+        println!(
+            "  {}",
+            t!(
+                "doctor.channel_summary",
+                total = channel_count,
+                stale = stale_channels
+            )
+        );
     }
 
-    println!("  Autonomy governance:");
+    println!("  {}", t!("doctor.autonomy_governance"));
     for line in autonomy_governance_lines(config) {
         println!("    {line}");
     }
 
-    println!("  Memory rollout:");
+    println!("  {}", t!("doctor.memory_rollout"));
     for line in memory_rollout_lines(config, &snapshot) {
         println!("    {line}");
-    }
-
-    if let Some(runtime_note) =
-        crate::runtime::runtime_kind_contract_note(config.runtime.kind.as_str())
-    {
-        println!("  Runtime contract:");
-        println!("    runtime.kind='{}': {runtime_note}", config.runtime.kind);
     }
 
     Ok(())

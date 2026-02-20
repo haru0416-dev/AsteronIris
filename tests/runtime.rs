@@ -1,5 +1,3 @@
-#[path = "runtime/adapter_cloudflare.rs"]
-mod adapter_cloudflare;
 #[path = "runtime/adapter_docker.rs"]
 mod adapter_docker;
 #[path = "runtime/adapter_native.rs"]

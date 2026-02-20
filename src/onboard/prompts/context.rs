@@ -13,15 +13,16 @@ pub struct ProjectContext {
 }
 
 pub fn setup_project_context() -> Result<ProjectContext> {
-    print_bullet("Let's personalize your agent. You can always update these later.");
-    print_bullet("Press Enter to accept defaults.");
+    print_bullet(&t!("onboard.context.intro"));
+    print_bullet(&t!("onboard.context.defaults_hint"));
     println!();
 
     let user_name: String = Input::new()
-        .with_prompt("  Your name")
+        .with_prompt(format!("  {}", t!("onboard.context.name_prompt")))
         .default("User".into())
         .interact_text()?;
 
+    let tz_other = t!("onboard.context.tz_other").to_string();
     let tz_options = vec![
         "US/Eastern (EST/EDT)",
         "US/Central (CST/CDT)",
@@ -31,22 +32,21 @@ pub fn setup_project_context() -> Result<ProjectContext> {
         "Europe/Berlin (CET/CEST)",
         "Asia/Tokyo (JST)",
         "UTC",
-        "Other (type manually)",
+        &tz_other,
     ];
 
     let tz_idx = Select::new()
-        .with_prompt("  Your timezone")
+        .with_prompt(format!("  {}", t!("onboard.context.tz_prompt")))
         .items(&tz_options)
         .default(0)
         .interact()?;
 
     let timezone = if tz_idx == tz_options.len() - 1 {
         Input::new()
-            .with_prompt("  Enter timezone (e.g. America/New_York)")
+            .with_prompt(format!("  {}", t!("onboard.context.tz_manual_prompt")))
             .default("UTC".into())
             .interact_text()?
     } else {
-        // Extract the short label before the parenthetical
         tz_options[tz_idx]
             .split('(')
             .next()
@@ -56,22 +56,22 @@ pub fn setup_project_context() -> Result<ProjectContext> {
     };
 
     let agent_name: String = Input::new()
-        .with_prompt("  Agent name")
+        .with_prompt(format!("  {}", t!("onboard.context.agent_name_prompt")))
         .default("AsteronIris".into())
         .interact_text()?;
 
     let style_options = vec![
-        "Direct & concise — skip pleasantries, get to the point",
-        "Friendly & casual — warm, human, and helpful",
-        "Professional & polished — calm, confident, and clear",
-        "Expressive & playful — more personality + natural emojis",
-        "Technical & detailed — thorough explanations, code-first",
-        "Balanced — adapt to the situation",
-        "Custom — write your own style guide",
+        t!("onboard.context.style_direct").to_string(),
+        t!("onboard.context.style_friendly").to_string(),
+        t!("onboard.context.style_professional").to_string(),
+        t!("onboard.context.style_expressive").to_string(),
+        t!("onboard.context.style_technical").to_string(),
+        t!("onboard.context.style_balanced").to_string(),
+        t!("onboard.context.style_custom").to_string(),
     ];
 
     let style_idx = Select::new()
-        .with_prompt("  Communication style")
+        .with_prompt(format!("  {}", t!("onboard.context.style_prompt")))
         .items(&style_options)
         .default(1)
         .interact()?;
@@ -84,7 +84,7 @@ pub fn setup_project_context() -> Result<ProjectContext> {
         4 => "Be technical and detailed. Thorough explanations, code-first.".to_string(),
         5 => "Adapt to the situation. Default to warm and clear communication; be concise when needed, thorough when it matters.".to_string(),
         _ => Input::new()
-            .with_prompt("  Custom communication style")
+            .with_prompt(format!("  {}", t!("onboard.context.custom_style_prompt")))
             .default(
                 "Be warm, natural, and clear. Use occasional relevant emojis (1-2 max) and avoid robotic phrasing.".into(),
             )
@@ -92,12 +92,15 @@ pub fn setup_project_context() -> Result<ProjectContext> {
     };
 
     println!(
-        "  {} Context: {} | {} | {} | {}",
+        "  {} {}",
         style("✓").green().bold(),
-        style(&user_name).green(),
-        style(&timezone).green(),
-        style(&agent_name).green(),
-        style(&communication_style).green().dim()
+        t!(
+            "onboard.context.confirm",
+            name = style(&user_name).green(),
+            tz = style(&timezone).green(),
+            agent = style(&agent_name).green(),
+            style = style(&communication_style).green().dim()
+        )
     );
 
     Ok(ProjectContext {

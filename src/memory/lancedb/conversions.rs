@@ -1,4 +1,4 @@
-use super::super::traits::{MemoryCategory, MemorySource, PrivacyLevel, MemoryLayer};
+use super::super::traits::{MemoryCategory, MemoryLayer, MemorySource, PrivacyLevel};
 use super::LanceDbMemory;
 
 #[allow(

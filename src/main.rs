@@ -8,6 +8,11 @@
     dead_code
 )]
 
+#[macro_use]
+extern crate rust_i18n;
+
+i18n!("locales", fallback = "en");
+
 use anyhow::Result;
 use clap::Parser;
 use tracing::Level;

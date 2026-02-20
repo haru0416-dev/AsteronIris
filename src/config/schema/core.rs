@@ -62,6 +62,43 @@ pub struct Config {
 
     #[serde(default)]
     pub identity: IdentityConfig,
+
+    #[serde(default = "default_locale")]
+    pub locale: String,
+}
+
+fn default_locale() -> String {
+    "en".into()
+}
+
+/// Detect locale: `ASTERONIRIS_LANG` env → config value → system `LANG` → `"en"`.
+fn detect_locale(config_locale: &str) -> String {
+    if let Ok(lang) = std::env::var("ASTERONIRIS_LANG") {
+        let lang = lang.trim().to_lowercase();
+        if !lang.is_empty() {
+            return normalise_locale(&lang);
+        }
+    }
+
+    if config_locale != "en" && !config_locale.is_empty() {
+        return normalise_locale(config_locale);
+    }
+
+    if let Ok(lang) = std::env::var("LANG").or_else(|_| std::env::var("LC_MESSAGES")) {
+        let lang = lang.trim().to_lowercase();
+        if !lang.is_empty() {
+            return normalise_locale(&lang);
+        }
+    }
+
+    "en".into()
+}
+
+/// Normalise `"ja_JP.UTF-8"` → `"ja"`, `"en_US"` → `"en"`, passthrough `"ja"`.
+fn normalise_locale(raw: &str) -> String {
+    let base = raw.split('.').next().unwrap_or(raw);
+    let lang = base.split('_').next().unwrap_or(base);
+    lang.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,20 +238,29 @@ impl Default for PersonaConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeConfig {
-    pub kind: String,
-    #[serde(default)]
-    pub enable_docker_runtime: bool,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeKind {
+    #[default]
+    Native,
+    Docker,
 }
 
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            kind: "native".into(),
-            enable_docker_runtime: false,
+impl std::fmt::Display for RuntimeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Native => f.write_str("native"),
+            Self::Docker => f.write_str("docker"),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    #[serde(default)]
+    pub kind: RuntimeKind,
+    #[serde(default)]
+    pub enable_docker_runtime: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,6 +429,7 @@ impl Default for Config {
             browser: BrowserConfig::default(),
             persona: PersonaConfig::default(),
             identity: IdentityConfig::default(),
+            locale: default_locale(),
         }
     }
 }
@@ -571,6 +618,12 @@ impl Config {
             config.save()?;
             Ok(config)
         }
+    }
+
+    /// Detect locale from env → config → system, then set `rust_i18n::set_locale`.
+    pub fn apply_locale(&self) {
+        let locale = detect_locale(&self.locale);
+        rust_i18n::set_locale(&locale);
     }
 
     pub fn apply_env_overrides(&mut self) {

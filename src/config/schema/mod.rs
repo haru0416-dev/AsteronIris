@@ -15,7 +15,7 @@ pub use channels::{
 };
 pub use core::{
     BrowserConfig, ComposioConfig, Config, HeartbeatConfig, IdentityConfig, PersonaConfig,
-    ReliabilityConfig, RuntimeConfig, SecretsConfig,
+    ReliabilityConfig, RuntimeConfig, RuntimeKind, SecretsConfig,
 };
 pub use gateway::{GatewayConfig, GatewayDefenseMode};
 pub use memory::MemoryConfig;

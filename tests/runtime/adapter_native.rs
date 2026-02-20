@@ -1,4 +1,4 @@
-use asteroniris::config::RuntimeConfig;
+use asteroniris::config::{RuntimeConfig, RuntimeKind};
 use asteroniris::runtime::{create_runtime, RuntimeAdapter};
 
 fn assert_native_contract(adapter: &dyn RuntimeAdapter) {
@@ -19,7 +19,7 @@ fn assert_native_contract(adapter: &dyn RuntimeAdapter) {
 #[test]
 fn native_runtime_adapter_satisfies_contract() {
     let config = RuntimeConfig {
-        kind: "native".to_string(),
+        kind: RuntimeKind::Native,
         enable_docker_runtime: false,
     };
 
@@ -30,7 +30,7 @@ fn native_runtime_adapter_satisfies_contract() {
 #[test]
 fn native_runtime_contract_is_deterministic_across_instances() {
     let config = RuntimeConfig {
-        kind: "native".to_string(),
+        kind: RuntimeKind::Native,
         enable_docker_runtime: false,
     };
 

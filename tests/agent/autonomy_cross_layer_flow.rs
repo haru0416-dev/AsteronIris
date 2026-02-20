@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use asteroniris::agent::loop_::run_main_session_turn_for_integration;
+use asteroniris::agent::loop_::{
+    run_main_session_turn_for_integration, run_main_session_turn_for_integration_with_policy,
+};
 use asteroniris::config::{Config, PersonaConfig};
 use asteroniris::cron::{self, CronJobKind, CronJobOrigin};
 use asteroniris::memory::{
@@ -15,6 +17,7 @@ use asteroniris::persona::state_header::StateHeaderV1;
 use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use asteroniris::providers::Provider;
 use asteroniris::security::external_content::{prepare_external_content, ExternalAction};
+use asteroniris::security::policy::TenantPolicyContext;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::tools::{ActionIntent, ActionOperator, NoopOperator};
 use async_trait::async_trait;
@@ -339,4 +342,140 @@ async fn external_content_injection_is_blocked_and_raw_payload_not_replayed_from
         captured[0]
     );
     assert_eq!(captured[0].matches(attack).count(), 1);
+}
+
+// ══════════════════════════════════════════════════════════
+// Public integration turn API tests
+// ══════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn public_integration_turn_happy_path() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let mut config = test_config(&workspace);
+    config.persona.enabled_main_session = false;
+
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let provider = SequenceProvider::new(vec![Ok("hello-response".to_string())]);
+    let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+    let response = run_main_session_turn_for_integration(
+        &config,
+        &security,
+        mem,
+        &provider,
+        &provider,
+        "system",
+        "test-model",
+        0.5,
+        "hello",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response, "hello-response");
+}
+
+#[tokio::test]
+async fn public_integration_turn_propagates_error() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let mut config = test_config(&workspace);
+    config.persona.enabled_main_session = false;
+    config.autonomy.max_actions_per_hour = 2;
+
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let provider = SequenceProvider::new(vec![
+        Err(anyhow::anyhow!("provider-failure")),
+        Err(anyhow::anyhow!("provider-failure")),
+    ]);
+    let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+    let err = run_main_session_turn_for_integration(
+        &config,
+        &security,
+        mem,
+        &provider,
+        &provider,
+        "system",
+        "test-model",
+        0.5,
+        "fail-me",
+    )
+    .await
+    .unwrap_err();
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("reason=non_retryable_failure") || msg.contains("failure_class"),
+        "expected error propagation, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn public_integration_turn_with_policy_happy_path() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let mut config = test_config(&workspace);
+    config.persona.enabled_main_session = false;
+
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let provider = SequenceProvider::new(vec![Ok("policy-ok".to_string())]);
+    let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+    let response = run_main_session_turn_for_integration_with_policy(
+        &config,
+        &security,
+        mem,
+        &provider,
+        &provider,
+        "system",
+        "test-model",
+        0.5,
+        "tenant-a",
+        TenantPolicyContext::enabled("tenant-a"),
+        "hello with policy",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response, "policy-ok");
+}
+
+#[tokio::test]
+async fn public_integration_turn_with_policy_scope_mismatch() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let mut config = test_config(&workspace);
+    config.persona.enabled_main_session = false;
+
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let provider = SequenceProvider::new(vec![Ok("should-not-reach".to_string())]);
+    let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+    // entity_id "other-tenant" does not match tenant_id "tenant-a"
+    let result = run_main_session_turn_for_integration_with_policy(
+        &config,
+        &security,
+        mem,
+        &provider,
+        &provider,
+        "system",
+        "test-model",
+        0.5,
+        "other-tenant",
+        TenantPolicyContext::enabled("tenant-a"),
+        "cross-tenant attempt",
+    )
+    .await;
+
+    assert!(result.is_err(), "scope mismatch should produce an error");
 }

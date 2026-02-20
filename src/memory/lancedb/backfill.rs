@@ -1,7 +1,7 @@
 use super::batch::{build_row_batch, parse_rows};
 use super::{
-    LanceDbInner, LanceDbMemory, EMBEDDING_STATUS_FAILED, EMBEDDING_STATUS_READY,
-    MAX_BACKFILL_RETRIES, BASE_BACKOFF_MS, MAX_BACKOFF_MS,
+    LanceDbInner, LanceDbMemory, BASE_BACKOFF_MS, EMBEDDING_STATUS_FAILED, EMBEDDING_STATUS_READY,
+    MAX_BACKFILL_RETRIES, MAX_BACKOFF_MS,
 };
 
 use arrow_array::RecordBatchIterator;

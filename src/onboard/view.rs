@@ -3,29 +3,11 @@ use console::style;
 
 use super::domain::provider_env_var;
 
-const BANNER: &str = r"
-    ===============================================
-
-      A S T E R O N I R I S
-
-      Secure by default. Extensible by design. Built in Rust.
-
-    ===============================================
-";
-
 pub fn print_welcome_banner() {
-    println!("{}", style(BANNER).cyan().bold());
+    println!("{}", style(t!("onboard.banner.art")).cyan().bold());
 
-    println!(
-        "  {}",
-        style("Welcome to AsteronIris — a secure, extensible AI assistant.")
-            .white()
-            .bold()
-    );
-    println!(
-        "  {}",
-        style("This wizard will configure your agent in under 60 seconds.").dim()
-    );
+    println!("  {}", style(t!("onboard.banner.welcome")).white().bold());
+    println!("  {}", style(t!("onboard.banner.subtitle")).dim());
     println!();
 }
 
@@ -56,40 +38,39 @@ pub fn print_summary(config: &Config) {
         "  {}",
         style("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").cyan()
     );
-    println!(
-        "  {}  {}",
-        style("⚡").cyan(),
-        style("AsteronIris is ready!").white().bold()
-    );
+    println!("  ◆  {}", style(t!("onboard.summary.ready")).white().bold());
     println!(
         "  {}",
         style("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").cyan()
     );
     println!();
 
-    println!("  {}", style("Configuration saved to:").dim());
+    println!("  {}", style(t!("onboard.summary.config_saved")).dim());
     println!("    {}", style(config.config_path.display()).green());
     println!();
 
-    println!("  {}", style("Quick summary:").white().bold());
     println!(
-        "    {} Provider:      {}",
-        style("🤖").cyan(),
+        "  {}",
+        style(t!("onboard.summary.quick_summary")).white().bold()
+    );
+    println!(
+        "    › {} {}",
+        t!("onboard.summary.provider"),
         config.default_provider.as_deref().unwrap_or("openrouter")
     );
     println!(
-        "    {} Model:         {}",
-        style("🧠").cyan(),
+        "    › {} {}",
+        t!("onboard.summary.model"),
         config.default_model.as_deref().unwrap_or("(default)")
     );
     println!(
-        "    {} Autonomy:      {:?}",
-        style("🛡️").cyan(),
+        "    › {} {:?}",
+        t!("onboard.summary.autonomy"),
         config.autonomy.level
     );
     println!(
-        "    {} Memory:        {} (auto-save: {})",
-        style("🧠").cyan(),
+        "    › {} {} (auto-save: {})",
+        t!("onboard.summary.memory"),
         config.memory.backend,
         if config.memory.auto_save { "on" } else { "off" }
     );
@@ -118,18 +99,18 @@ pub fn print_summary(config: &Config) {
         channels.push("Webhook");
     }
     println!(
-        "    {} Channels:      {}",
-        style("📡").cyan(),
+        "    › {} {}",
+        t!("onboard.summary.channels"),
         channels.join(", ")
     );
 
     println!(
-        "    {} API Key:       {}",
-        style("🔑").cyan(),
+        "    › {} {}",
+        t!("onboard.summary.api_key"),
         if config.api_key.is_some() {
-            style("configured").green().to_string()
+            style(t!("onboard.summary.api_key_set")).green().to_string()
         } else {
-            style("not set (set via env var or config)")
+            style(t!("onboard.summary.api_key_not_set"))
                 .yellow()
                 .to_string()
         }
@@ -137,10 +118,10 @@ pub fn print_summary(config: &Config) {
 
     // Tunnel
     println!(
-        "    {} Tunnel:        {}",
-        style("🌐").cyan(),
+        "    › {} {}",
+        t!("onboard.summary.tunnel"),
         if config.tunnel.provider == "none" || config.tunnel.provider.is_empty() {
-            "none (local only)".to_string()
+            t!("onboard.summary.tunnel_none").to_string()
         } else {
             config.tunnel.provider.clone()
         }
@@ -148,39 +129,48 @@ pub fn print_summary(config: &Config) {
 
     // Composio
     println!(
-        "    {} Composio:      {}",
-        style("🔗").cyan(),
+        "    › {} {}",
+        t!("onboard.summary.composio"),
         if config.composio.enabled {
-            style("enabled (1000+ OAuth apps)").green().to_string()
+            style(t!("onboard.summary.composio_enabled"))
+                .green()
+                .to_string()
         } else {
-            "disabled (sovereign mode)".to_string()
+            t!("onboard.summary.composio_disabled").to_string()
         }
     );
 
     // Secrets
     println!(
-        "    {} Secrets:       {}",
-        style("🔒").cyan(),
+        "    › {} {}",
+        t!("onboard.summary.secrets"),
         if config.secrets.encrypt {
-            style("encrypted").green().to_string()
+            style(t!("onboard.summary.secrets_encrypted"))
+                .green()
+                .to_string()
         } else {
-            style("plaintext").yellow().to_string()
+            style(t!("onboard.summary.secrets_plaintext"))
+                .yellow()
+                .to_string()
         }
     );
 
     // Gateway
     println!(
-        "    {} Gateway:       {}",
-        style("🚪").cyan(),
+        "    › {} {}",
+        t!("onboard.summary.gateway"),
         if config.gateway.require_pairing {
-            "pairing required (secure)"
+            t!("onboard.summary.gateway_pairing")
         } else {
-            "pairing disabled"
+            t!("onboard.summary.gateway_no_pairing")
         }
     );
 
     println!();
-    println!("  {}", style("Next steps:").white().bold());
+    println!(
+        "  {}",
+        style(t!("onboard.summary.next_steps")).white().bold()
+    );
     println!();
 
     let mut step = 1u8;
@@ -188,8 +178,9 @@ pub fn print_summary(config: &Config) {
     if config.api_key.is_none() {
         let env_var = provider_env_var(config.default_provider.as_deref().unwrap_or("openrouter"));
         println!(
-            "    {} Set your API key:",
-            style(format!("{step}.")).cyan().bold()
+            "    {} {}",
+            style(format!("{step}.")).cyan().bold(),
+            t!("onboard.summary.set_api_key")
         );
         println!(
             "       {}",
@@ -202,9 +193,10 @@ pub fn print_summary(config: &Config) {
     // If channels are configured, show channel start as the primary next step
     if has_channels {
         println!(
-            "    {} {} (connected channels → AI → reply):",
+            "    {} {} {}",
             style(format!("{step}.")).cyan().bold(),
-            style("Launch your channels").white().bold()
+            style(t!("onboard.summary.launch_channels")).white().bold(),
+            t!("onboard.summary.launch_channels_hint")
         );
         println!("       {}", style("asteroniris channel start").yellow());
         println!();
@@ -212,8 +204,9 @@ pub fn print_summary(config: &Config) {
     }
 
     println!(
-        "    {} Send a quick message:",
-        style(format!("{step}.")).cyan().bold()
+        "    {} {}",
+        style(format!("{step}.")).cyan().bold(),
+        t!("onboard.summary.send_message")
     );
     println!(
         "       {}",
@@ -223,24 +216,25 @@ pub fn print_summary(config: &Config) {
     step += 1;
 
     println!(
-        "    {} Start interactive CLI mode:",
-        style(format!("{step}.")).cyan().bold()
+        "    {} {}",
+        style(format!("{step}.")).cyan().bold(),
+        t!("onboard.summary.interactive_cli")
     );
     println!("       {}", style("asteroniris agent").yellow());
     println!();
     step += 1;
 
     println!(
-        "    {} Check full status:",
-        style(format!("{step}.")).cyan().bold()
+        "    {} {}",
+        style(format!("{step}.")).cyan().bold(),
+        t!("onboard.summary.check_status")
     );
     println!("       {}", style("asteroniris status").yellow());
 
     println!();
     println!(
-        "  {} {}",
-        style("⚡").cyan(),
-        style("Happy hacking! 🦀").white().bold()
+        "  ◆ {}",
+        style(t!("onboard.summary.happy_hacking")).white().bold()
     );
     println!();
 }

@@ -16,9 +16,7 @@ use self::evaluate::{EvalResult, Evaluator, Recommendation};
 use self::integrate::Integrator;
 use self::scout::{ClawHubScout, GitHubScout, HuggingFaceScout, Scout, ScoutResult, ScoutSource};
 
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
+// ── Configuration ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SkillForgeConfig {
@@ -92,9 +90,7 @@ impl std::fmt::Debug for SkillForgeConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ForgeReport — summary of a single pipeline run
-// ---------------------------------------------------------------------------
+// ── ForgeReport — summary of a single pipeline run ───────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForgeReport {
@@ -106,9 +102,7 @@ pub struct ForgeReport {
     pub results: Vec<EvalResult>,
 }
 
-// ---------------------------------------------------------------------------
-// SkillForge
-// ---------------------------------------------------------------------------
+// ── SkillForge ───────────────────────────────────────────────────────────────
 
 pub struct SkillForge {
     config: SkillForgeConfig,
@@ -142,7 +136,7 @@ impl SkillForge {
             });
         }
 
-        // --- Scout ----------------------------------------------------------
+        // ── Scout ────────────────────────────────────────────────────────────
         let mut candidates: Vec<ScoutResult> = Vec::new();
 
         for src in &self.config.sources {
@@ -198,14 +192,14 @@ impl SkillForge {
         let discovered = candidates.len();
         info!(discovered, "Total unique candidates after dedup");
 
-        // --- Evaluate -------------------------------------------------------
+        // ── Evaluate ─────────────────────────────────────────────────────────
         let results: Vec<EvalResult> = candidates
             .into_iter()
             .map(|c| self.evaluator.evaluate(c))
             .collect();
         let evaluated = results.len();
 
-        // --- Integrate ------------------------------------------------------
+        // ── Integrate ────────────────────────────────────────────────────────
         let mut auto_integrated = 0usize;
         let mut manual_review = 0usize;
         let mut skipped = 0usize;
@@ -256,18 +250,16 @@ impl SkillForge {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+// ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use tokio::sync::Mutex;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    static HF_ENV_LOCK: Mutex<()> = Mutex::new(());
+    static HF_ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
     #[tokio::test]
     async fn disabled_forge_returns_empty_report() {
@@ -381,7 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn skillforge_hf_discover() {
-        let _guard = HF_ENV_LOCK.lock().unwrap();
+        let _guard = HF_ENV_LOCK.lock().await;
         let server = MockServer::start().await;
         let response = serde_json::json!([
             {
@@ -436,7 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn skillforge_hf_rate_limit_handling() {
-        let _guard = HF_ENV_LOCK.lock().unwrap();
+        let _guard = HF_ENV_LOCK.lock().await;
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))

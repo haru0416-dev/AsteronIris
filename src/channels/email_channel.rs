@@ -445,3 +445,98 @@ impl Channel for EmailChannel {
         .unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_email_channel(senders: Vec<String>) -> EmailChannel {
+        EmailChannel::new(EmailConfig {
+            allowed_senders: senders,
+            ..EmailConfig::default()
+        })
+    }
+
+    // ── is_sender_allowed tests ──────────────────────────────
+
+    #[test]
+    fn is_sender_allowed_denies_when_empty() {
+        let ch = make_email_channel(vec![]);
+        assert!(!ch.is_sender_allowed("anyone@example.com"));
+    }
+
+    #[test]
+    fn is_sender_allowed_wildcard_allows_any() {
+        let ch = make_email_channel(vec!["*".to_string()]);
+        assert!(ch.is_sender_allowed("anyone@anywhere.net"));
+    }
+
+    #[test]
+    fn is_sender_allowed_exact_match() {
+        let ch = make_email_channel(vec!["alice@example.com".to_string()]);
+        assert!(ch.is_sender_allowed("alice@example.com"));
+        assert!(!ch.is_sender_allowed("bob@example.com"));
+    }
+
+    #[test]
+    fn is_sender_allowed_domain_with_at_prefix() {
+        let ch = make_email_channel(vec!["@example.com".to_string()]);
+        assert!(ch.is_sender_allowed("alice@example.com"));
+        assert!(!ch.is_sender_allowed("alice@other.com"));
+    }
+
+    #[test]
+    fn is_sender_allowed_domain_without_at_prefix() {
+        let ch = make_email_channel(vec!["example.com".to_string()]);
+        assert!(ch.is_sender_allowed("alice@example.com"));
+        assert!(!ch.is_sender_allowed("alice@other.com"));
+    }
+
+    #[test]
+    fn is_sender_allowed_case_insensitive() {
+        let ch = make_email_channel(vec!["Alice@Example.COM".to_string()]);
+        assert!(ch.is_sender_allowed("alice@example.com"));
+        assert!(ch.is_sender_allowed("ALICE@EXAMPLE.COM"));
+    }
+
+    // ── strip_html tests ─────────────────────────────────────
+
+    #[test]
+    fn strip_html_removes_tags() {
+        assert_eq!(
+            EmailChannel::strip_html("<p>Hello <b>world</b></p>"),
+            "Hello world"
+        );
+    }
+
+    #[test]
+    fn strip_html_nested_tags() {
+        assert_eq!(
+            EmailChannel::strip_html("<div><span>text</span></div>"),
+            "text"
+        );
+    }
+
+    #[test]
+    fn strip_html_collapses_whitespace() {
+        assert_eq!(
+            EmailChannel::strip_html("<p>  hello   world  </p>"),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn strip_html_empty_input() {
+        assert_eq!(EmailChannel::strip_html(""), "");
+    }
+
+    #[test]
+    fn strip_html_no_tags() {
+        assert_eq!(EmailChannel::strip_html("plain text"), "plain text");
+    }
+
+    #[test]
+    fn strip_html_preserves_entities() {
+        assert_eq!(EmailChannel::strip_html("<p>&amp; &lt;</p>"), "&amp; &lt;");
+    }
+}

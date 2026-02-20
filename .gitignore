@@ -1,12 +1,48 @@
+# Rust build output
 /target
+
+# SQLite databases and WAL files
 *.db
 *.db-journal
-.DS_Store
-.wt-pr37/
+*.db-wal
+*.db-shm
 
-# Private development materials (keep local, exclude from GitHub)
-.sisyphus/
-AGENTS.md
-GAP_ANALYSIS_*.md
-SPEC_*.md
-docs/operations/
+# Rust backup files
+**/*.rs.bk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Vim
+*.swp
+*.swo
+
+# JetBrains IDEs
+.idea/
+*.iml
+
+# direnv
+.direnv/
+
+# Profiling
+perf.data
+perf.data.old
+*.profdata
+flamegraph.svg
+
+# Local environment overrides (copy from .env.example)
+.env
+.env.local
+
+# Git worktrees (created by EnterWorktree)
+.wt-*/

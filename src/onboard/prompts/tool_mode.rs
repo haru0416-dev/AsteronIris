@@ -6,17 +6,17 @@ use dialoguer::{Confirm, Input, Select};
 use super::super::view::print_bullet;
 
 pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
-    print_bullet("Choose how AsteronIris connects to external apps.");
-    print_bullet("You can always change this later in config.toml.");
+    print_bullet(&t!("onboard.tool_mode.intro"));
+    print_bullet(&t!("onboard.tool_mode.later_hint"));
     println!();
 
     let options = vec![
-        "Sovereign (local only) — you manage API keys, full privacy (default)",
-        "Composio (managed OAuth) — 1000+ apps via OAuth, no raw keys shared",
+        t!("onboard.tool_mode.sovereign").to_string(),
+        t!("onboard.tool_mode.composio").to_string(),
     ];
 
     let choice = Select::new()
-        .with_prompt("  Select tool mode")
+        .with_prompt(format!("  {}", t!("onboard.tool_mode.select_prompt")))
         .items(&options)
         .default(0)
         .interact()?;
@@ -25,29 +25,30 @@ pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
         println!();
         println!(
             "  {} {}",
-            style("Composio Setup").white().bold(),
-            style("— 1000+ OAuth integrations (Gmail, Notion, GitHub, Slack, ...)").dim()
+            style(t!("onboard.tool_mode.composio_title")).white().bold(),
+            style(format!("— {}", t!("onboard.tool_mode.composio_subtitle"))).dim()
         );
-        print_bullet("Get your API key at: https://app.composio.dev/settings");
-        print_bullet("AsteronIris uses Composio as a tool — your core agent stays local.");
+        print_bullet(&t!("onboard.tool_mode.composio_url_hint"));
+        print_bullet(&t!("onboard.tool_mode.composio_desc"));
         println!();
 
         let api_key: String = Input::new()
-            .with_prompt("  Composio API key (or Enter to skip)")
+            .with_prompt(format!("  {}", t!("onboard.tool_mode.composio_key_prompt")))
             .allow_empty(true)
             .interact_text()?;
 
         if api_key.trim().is_empty() {
             println!(
-                "  {} Skipped — set composio.api_key in config.toml later",
-                style("→").dim()
+                "  {} {}",
+                style("→").dim(),
+                t!("onboard.tool_mode.composio_skipped")
             );
             ComposioConfig::default()
         } else {
             println!(
-                "  {} Composio: {} (1000+ OAuth tools available)",
+                "  {} {}",
                 style("✓").green().bold(),
-                style("enabled").green()
+                t!("onboard.tool_mode.composio_confirm")
             );
             ComposioConfig {
                 enabled: true,
@@ -57,20 +58,20 @@ pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
         }
     } else {
         println!(
-            "  {} Tool mode: {} — full privacy, you own every key",
+            "  {} {}",
             style("✓").green().bold(),
-            style("Sovereign (local only)").green()
+            t!("onboard.tool_mode.sovereign_confirm")
         );
         ComposioConfig::default()
     };
 
     // ── Encrypted secrets ──
     println!();
-    print_bullet("AsteronIris can encrypt API keys stored in config.toml.");
-    print_bullet("A local key file protects against plaintext exposure and accidental leaks.");
+    print_bullet(&t!("onboard.tool_mode.encrypt_intro"));
+    print_bullet(&t!("onboard.tool_mode.encrypt_desc"));
 
     let encrypt = Confirm::new()
-        .with_prompt("  Enable encrypted secret storage?")
+        .with_prompt(format!("  {}", t!("onboard.tool_mode.encrypt_prompt")))
         .default(true)
         .interact()?;
 
@@ -78,15 +79,15 @@ pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
 
     if encrypt {
         println!(
-            "  {} Secrets: {} — keys encrypted with local key file",
+            "  {} {}",
             style("✓").green().bold(),
-            style("encrypted").green()
+            t!("onboard.tool_mode.encrypt_on")
         );
     } else {
         println!(
-            "  {} Secrets: {} — keys stored as plaintext (not recommended)",
+            "  {} {}",
             style("✓").green().bold(),
-            style("plaintext").yellow()
+            t!("onboard.tool_mode.encrypt_off")
         );
     }
 

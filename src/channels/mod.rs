@@ -49,8 +49,8 @@ pub fn handle_command(command: crate::ChannelCommands, config: &Config) -> Resul
             anyhow::bail!("Doctor must be handled in main.rs (requires async runtime)")
         }
         crate::ChannelCommands::List => {
-            println!("Channels:");
-            println!("  ✅ CLI (always available)");
+            println!("{}", t!("channels.list_header"));
+            println!("  ✓ {}", t!("channels.cli_always"));
             for (name, configured) in [
                 ("Telegram", config.channels_config.telegram.is_some()),
                 ("Discord", config.channels_config.discord.is_some()),
@@ -62,11 +62,11 @@ pub fn handle_command(command: crate::ChannelCommands, config: &Config) -> Resul
                 ("Email", config.channels_config.email.is_some()),
                 ("IRC", config.channels_config.irc.is_some()),
             ] {
-                println!("  {} {name}", if configured { "✅" } else { "❌" });
+                println!("  {} {name}", if configured { "✓" } else { "✗" });
             }
-            println!("\nTo start channels: asteroniris channel start");
-            println!("To check health:    asteroniris channel doctor");
-            println!("To configure:      asteroniris onboard");
+            println!("\n{}", t!("channels.to_start"));
+            println!("{}", t!("channels.to_check"));
+            println!("{}", t!("channels.to_configure"));
             Ok(())
         }
         crate::ChannelCommands::Add {
@@ -190,11 +190,11 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
     }
 
     if channels.is_empty() {
-        println!("No real-time channels configured. Run `asteroniris onboard` first.");
+        println!("{}", t!("channels.no_channels_doctor"));
         return Ok(());
     }
 
-    println!("🩺 AsteronIris Channel Doctor");
+    println!("◆ {}", t!("channels.doctor_title"));
     println!();
 
     let mut healthy = 0_u32;
@@ -208,25 +208,33 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
         match state {
             ChannelHealthState::Healthy => {
                 healthy += 1;
-                println!("  ✅ {name:<9} healthy");
+                println!("  ✓ {name:<9} {}", t!("channels.healthy"));
             }
             ChannelHealthState::Unhealthy => {
                 unhealthy += 1;
-                println!("  ❌ {name:<9} unhealthy (auth/config/network)");
+                println!("  ✗ {name:<9} {}", t!("channels.unhealthy"));
             }
             ChannelHealthState::Timeout => {
                 timeout += 1;
-                println!("  ⏱️  {name:<9} timed out (>10s)");
+                println!("  ! {name:<9} {}", t!("channels.timed_out"));
             }
         }
     }
 
     if config.channels_config.webhook.is_some() {
-        println!("  ℹ️  Webhook   check via `asteroniris gateway` then GET /health");
+        println!("  › {}", t!("channels.webhook_hint"));
     }
 
     println!();
-    println!("Summary: {healthy} healthy, {unhealthy} unhealthy, {timeout} timed out");
+    println!(
+        "{}",
+        t!(
+            "channels.doctor_summary",
+            healthy = healthy,
+            unhealthy = unhealthy,
+            timeout = timeout
+        )
+    );
     Ok(())
 }
 
@@ -299,7 +307,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
 
     if !skills.is_empty() {
         println!(
-            "  🧩 Skills:   {}",
+            "  › {} {}",
+            t!("channels.skills"),
             skills
                 .iter()
                 .map(|s| s.name.as_str())
@@ -375,19 +384,21 @@ pub async fn start_channels(config: Config) -> Result<()> {
     }
 
     if channels.is_empty() {
-        println!("No channels configured. Run `asteroniris onboard` to set up channels.");
+        println!("{}", t!("channels.no_channels"));
         return Ok(());
     }
 
-    println!("🦀 AsteronIris Channel Server");
-    println!("  🤖 Model:    {model}");
+    println!("◆ {}", t!("channels.server_title"));
+    println!("  › {} {model}", t!("channels.model"));
     println!(
-        "  🧠 Memory:   {} (auto-save: {})",
+        "  › {} {} (auto-save: {})",
+        t!("channels.memory"),
         config.memory.backend,
         if config.memory.auto_save { "on" } else { "off" }
     );
     println!(
-        "  📡 Channels: {}",
+        "  › {} {}",
+        t!("channels.channels"),
         channels
             .iter()
             .map(|c| c.name())
@@ -395,7 +406,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
             .join(", ")
     );
     println!();
-    println!("  Listening for messages... (Ctrl+C to stop)");
+    println!("  {}", t!("channels.listening"));
     println!();
 
     crate::health::mark_component_ok("channels");
@@ -417,10 +428,13 @@ pub async fn start_channels(config: Config) -> Result<()> {
 
     while let Some(msg) = rx.recv().await {
         println!(
-            "  💬 [{}] from {}: {}",
-            msg.channel,
-            msg.sender,
-            truncate_with_ellipsis(&msg.content, 80)
+            "  › {}",
+            t!(
+                "channels.message_in",
+                channel = msg.channel,
+                sender = msg.sender,
+                content = truncate_with_ellipsis(&msg.content, 80)
+            )
         );
 
         let source = format!("channel:{}", msg.channel);
@@ -470,21 +484,28 @@ pub async fn start_channels(config: Config) -> Result<()> {
             .await
         {
             Ok(response) => {
-                println!("  🤖 Reply: {}", truncate_with_ellipsis(&response, 80));
+                println!(
+                    "  › {} {}",
+                    t!("channels.reply"),
+                    truncate_with_ellipsis(&response, 80)
+                );
                 for ch in &channels {
                     if ch.name() == msg.channel {
                         if let Err(e) = ch.send(&response, &msg.sender).await {
-                            eprintln!("  ❌ Failed to reply on {}: {e}", ch.name());
+                            eprintln!(
+                                "  ✗ {}",
+                                t!("channels.reply_fail", channel = ch.name(), error = e)
+                            );
                         }
                         break;
                     }
                 }
             }
             Err(e) => {
-                eprintln!("  ❌ LLM error: {e}");
+                eprintln!("  ✗ {}", t!("channels.llm_error", error = e));
                 for ch in &channels {
                     if ch.name() == msg.channel {
-                        let _ = ch.send(&format!("⚠️ Error: {e}"), &msg.sender).await;
+                        let _ = ch.send(&format!("! Error: {e}"), &msg.sender).await;
                         break;
                     }
                 }

@@ -2,6 +2,7 @@ pub mod domain;
 pub mod flow;
 pub mod prompts;
 pub mod scaffold;
+pub mod tui;
 pub mod view;
 pub mod wizard;
 

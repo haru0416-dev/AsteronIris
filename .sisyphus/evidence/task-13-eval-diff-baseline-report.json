@@ -1,0 +1,22 @@
+{
+  "seed": 2776498196,
+  "suites": [
+    {
+      "suite": "autonomy-regression",
+      "case_count": 4,
+      "success_rate_bps": 10000,
+      "avg_cost_cents": 13,
+      "avg_latency_ms": 110,
+      "avg_retries_milli": 1250
+    },
+    {
+      "suite": "injection-defense-regression",
+      "case_count": 4,
+      "success_rate_bps": 10000,
+      "avg_cost_cents": 10,
+      "avg_latency_ms": 84,
+      "avg_retries_milli": 250
+    }
+  ],
+  "summary_fingerprint": 3769698221218929972
+}
