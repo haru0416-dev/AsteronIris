@@ -1,49 +1,55 @@
-# Rust build output
+# ── Rust ──────────────────────────────────────────────────────
 /target
+**/*.rs.bk
 
-# SQLite databases and WAL files
+# ── SQLite databases and WAL files ────────────────────────────
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 
-# Rust backup files
-**/*.rs.bk
+# ── Environment / secrets (copy from .env.example) ────────────
+.env
+.env.local
+.env.*.local
 
+# ── OS generated ──────────────────────────────────────────────
 # macOS
 .DS_Store
 .AppleDouble
 .LSOverride
-
 # Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
-
 # Linux
 *~
 
+# ── Editors / IDEs ────────────────────────────────────────────
 # Vim
 *.swp
 *.swo
-
-# JetBrains IDEs
+# JetBrains
 .idea/
 *.iml
+# VS Code
+.vscode/
 
-# direnv
-.direnv/
-
-# Profiling
+# ── Profiling / coverage ─────────────────────────────────────
 perf.data
 perf.data.old
 *.profdata
+*.profraw
 flamegraph.svg
+coverage/
+lcov.info
 
-# Local environment overrides (copy from .env.example)
-.env
-.env.local
+# ── Dev environment ───────────────────────────────────────────
+.direnv/
+playground/
 
-# Git worktrees (created by EnterWorktree)
+# ── Git worktrees ─────────────────────────────────────────────
 .wt-*/
+
+# ── Samples (local-only test data) ────────────────────────────
 sample/

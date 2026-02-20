@@ -1,65 +1,66 @@
-# Git history (may contain old secrets)
+# ── Version control ───────────────────────────────────────────
 .git
 .gitignore
 .githooks
+.github
 
-# Rust build artifacts (can be multiple GB)
+# ── Build artifacts ───────────────────────────────────────────
 target
 
-# Documentation and examples (not needed for runtime)
+# ── Documentation (not needed for runtime) ────────────────────
 docs
 examples
+*.md
+LICENSE
+
+# ── Tests (not needed for runtime) ────────────────────────────
 tests
 
-# Markdown files (README, CHANGELOG, etc.)
-*.md
+# ── Dev tooling (not needed for runtime) ──────────────────────
+dev
+scripts
+sample
+playground
+.cargo
+.editorconfig
+deny.toml
+rust-toolchain.toml
+docker-compose.yml
 
-# Images (unnecessary for build)
+# ── Images ────────────────────────────────────────────────────
 *.png
 *.svg
 *.jpg
 *.jpeg
 *.gif
 
-# SQLite databases (conversation history, cron jobs)
+# ── Databases ─────────────────────────────────────────────────
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 
-# macOS artifacts
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# CI/CD configs (not needed in image)
-.github
-
-# Cargo deny config (lint tool, not runtime)
-deny.toml
-
-# License file (not needed for runtime)
-LICENSE
-
-# Temporary files
-.tmp_*
-*.tmp
-*.bak
-*.swp
-*~
-
-# IDE and editor configs
-.idea
-.vscode
-*.iml
-
-# Windsurf workflows
-.windsurf
-
-# Environment files (may contain secrets)
+# ── Environment / secrets ─────────────────────────────────────
 .env
 .env.*
 !.env.example
 
-# Coverage and profiling
+# ── OS / editor artifacts ─────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+.idea
+.vscode
+*.iml
+*.swp
+*~
+
+# ── Temporary files ───────────────────────────────────────────
+.tmp_*
+*.tmp
+*.bak
+
+# ── Profiling / coverage ─────────────────────────────────────
 *.profraw
 *.profdata
 coverage
