@@ -52,6 +52,10 @@ impl Channel for SlackChannel {
         "slack"
     }
 
+    fn max_message_length(&self) -> usize {
+        3000
+    }
+
     async fn send(&self, message: &str, channel: &str) -> anyhow::Result<()> {
         let body = serde_json::json!({
             "channel": channel,
@@ -168,6 +172,7 @@ impl Channel for SlackChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        attachments: Vec::new(),
                     };
 
                     if tx.send(channel_msg).await.is_err() {

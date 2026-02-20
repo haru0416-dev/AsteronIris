@@ -95,6 +95,10 @@ impl Channel for IMessageChannel {
         "imessage"
     }
 
+    fn max_message_length(&self) -> usize {
+        20_000
+    }
+
     async fn send(&self, message: &str, target: &str) -> anyhow::Result<()> {
         // Defense-in-depth: validate target format before any interpolation
         if !is_valid_imessage_target(target) {
@@ -178,6 +182,7 @@ end tell"#
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs(),
+                            attachments: Vec::new(),
                         };
 
                         if tx.send(msg).await.is_err() {

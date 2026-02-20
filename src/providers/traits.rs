@@ -1,3 +1,4 @@
+use super::response::ProviderResponse;
 use async_trait::async_trait;
 
 #[async_trait]
@@ -19,5 +20,18 @@ pub trait Provider: Send + Sync {
     /// Default implementation is a no-op; providers with HTTP clients should override.
     async fn warmup(&self) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn chat_with_system_full(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let text = self
+            .chat_with_system(system_prompt, message, model, temperature)
+            .await?;
+        Ok(ProviderResponse::text_only(text))
     }
 }

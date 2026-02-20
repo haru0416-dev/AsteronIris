@@ -6,8 +6,10 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod reliable;
+pub mod response;
 pub mod traits;
 
+pub use response::ProviderResponse;
 pub use traits::Provider;
 
 use compatible::{AuthStyle, OpenAiCompatibleProvider};

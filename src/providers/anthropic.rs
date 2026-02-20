@@ -1,4 +1,4 @@
-use crate::providers::traits::Provider;
+use crate::providers::{ProviderResponse, traits::Provider};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,14 @@ struct Message {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     content: Vec<ContentBlock>,
+    usage: Option<Usage>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Usage {
+    input_tokens: u64,
+    output_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,24 +69,14 @@ impl AnthropicProvider {
     fn is_setup_token(token: &str) -> bool {
         token.starts_with("sk-ant-oat01-")
     }
-}
 
-#[async_trait]
-impl Provider for AnthropicProvider {
-    async fn chat_with_system(
-        &self,
+    fn build_request(
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
-        let credential = self.credential.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Anthropic credentials not set. Set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN (setup-token)."
-            )
-        })?;
-
-        let request = ChatRequest {
+    ) -> ChatRequest {
+        ChatRequest {
             model: model.to_string(),
             max_tokens: 4096,
             system: system_prompt.map(ToString::to_string),
@@ -87,7 +85,31 @@ impl Provider for AnthropicProvider {
                 content: message.to_string(),
             }],
             temperature,
-        };
+        }
+    }
+
+    fn extract_text(chat_response: &ChatResponse) -> anyhow::Result<String> {
+        chat_response
+            .content
+            .first()
+            .map(|c| c.text.clone())
+            .ok_or_else(|| anyhow::anyhow!("No response from Anthropic"))
+    }
+
+    async fn call_api(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        let credential = self.credential.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Anthropic credentials not set. Set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN (setup-token)."
+            )
+        })?;
+
+        let request = Self::build_request(system_prompt, message, model, temperature);
 
         let mut request = self
             .client
@@ -108,14 +130,45 @@ impl Provider for AnthropicProvider {
             return Err(super::api_error("Anthropic", response).await);
         }
 
-        let chat_response: ChatResponse = response.json().await?;
+        response.json().await.map_err(anyhow::Error::msg)
+    }
+}
 
-        chat_response
-            .content
-            .into_iter()
-            .next()
-            .map(|c| c.text)
-            .ok_or_else(|| anyhow::anyhow!("No response from Anthropic"))
+#[async_trait]
+impl Provider for AnthropicProvider {
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<String> {
+        let chat_response = self
+            .call_api(system_prompt, message, model, temperature)
+            .await?;
+        Self::extract_text(&chat_response)
+    }
+
+    async fn chat_with_system_full(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let chat_response = self
+            .call_api(system_prompt, message, model, temperature)
+            .await?;
+        let text = Self::extract_text(&chat_response)?;
+        let mut provider_response = if let Some(usage) = chat_response.usage {
+            ProviderResponse::with_usage(text, usage.input_tokens, usage.output_tokens)
+        } else {
+            ProviderResponse::text_only(text)
+        };
+        if let Some(api_model) = chat_response.model {
+            provider_response = provider_response.with_model(api_model);
+        }
+        Ok(provider_response)
     }
 }
 

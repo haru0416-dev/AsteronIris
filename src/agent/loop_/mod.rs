@@ -83,6 +83,7 @@ impl TurnCallAccounting {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TurnExecutionOutcome {
     response: String,
+    tokens_used: Option<u64>,
     accounting: TurnCallAccounting,
 }
 
@@ -125,6 +126,7 @@ impl RuntimeMemoryWriteContext {
     }
 }
 
+#[cfg(test)]
 async fn execute_main_session_turn(
     config: &Config,
     security: &SecurityPolicy,
@@ -133,7 +135,20 @@ async fn execute_main_session_turn(
     user_message: &str,
     observer: &Arc<dyn Observer>,
 ) -> Result<String> {
-    execute_main_session_turn_with_policy(
+    execute_main_session_turn_with_metrics(config, security, mem, params, user_message, observer)
+        .await
+        .map(|outcome| outcome.response)
+}
+
+async fn execute_main_session_turn_with_metrics(
+    config: &Config,
+    security: &SecurityPolicy,
+    mem: Arc<dyn Memory>,
+    params: &MainSessionTurnParams<'_>,
+    user_message: &str,
+    observer: &Arc<dyn Observer>,
+) -> Result<TurnExecutionOutcome> {
+    execute_main_session_turn_with_policy_outcome(
         config,
         security,
         mem,
@@ -145,7 +160,7 @@ async fn execute_main_session_turn(
     .await
 }
 
-async fn execute_main_session_turn_with_policy(
+async fn execute_main_session_turn_with_policy_outcome(
     config: &Config,
     security: &SecurityPolicy,
     mem: Arc<dyn Memory>,
@@ -153,7 +168,7 @@ async fn execute_main_session_turn_with_policy(
     user_message: &str,
     write_context: RuntimeMemoryWriteContext,
     observer: &Arc<dyn Observer>,
-) -> Result<String> {
+) -> Result<TurnExecutionOutcome> {
     let caps = VerifyRepairCaps::from_config(config);
     let mut attempts = 0_u32;
     let mut repair_depth = 0_u32;
@@ -171,7 +186,7 @@ async fn execute_main_session_turn_with_policy(
         )
         .await
         {
-            Ok(outcome) => return Ok(outcome.response),
+            Ok(outcome) => return Ok(outcome),
             Err(error) => {
                 let analysis = analyze_verify_failure(&error);
                 if let Some(escalation) =
@@ -200,6 +215,28 @@ async fn execute_main_session_turn_with_policy(
             }
         }
     }
+}
+
+async fn execute_main_session_turn_with_policy(
+    config: &Config,
+    security: &SecurityPolicy,
+    mem: Arc<dyn Memory>,
+    params: &MainSessionTurnParams<'_>,
+    user_message: &str,
+    write_context: RuntimeMemoryWriteContext,
+    observer: &Arc<dyn Observer>,
+) -> Result<String> {
+    execute_main_session_turn_with_policy_outcome(
+        config,
+        security,
+        mem,
+        params,
+        user_message,
+        write_context,
+        observer,
+    )
+    .await
+    .map(|outcome| outcome.response)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -338,15 +375,17 @@ async fn execute_main_session_turn_with_accounting(
             "temperature clamped to autonomy band"
         );
     }
-    let response = params
+    let response_full = params
         .answer_provider
-        .chat_with_system(
+        .chat_with_system_full(
             Some(params.system_prompt),
             &enriched,
             params.model_name,
             clamped_temperature,
         )
         .await?;
+    let tokens_used = response_full.total_tokens();
+    let response = response_full.text;
 
     if config.persona.enabled_main_session {
         security
@@ -418,6 +457,7 @@ async fn execute_main_session_turn_with_accounting(
 
     Ok(TurnExecutionOutcome {
         response,
+        tokens_used,
         accounting,
     })
 }
@@ -551,9 +591,11 @@ pub async fn run(
 
     // ── Execute ──────────────────────────────────────────────────
     let start = Instant::now();
+    let mut token_sum = 0_u64;
+    let mut saw_token_usage = false;
 
     if let Some(msg) = message {
-        let response = execute_main_session_turn(
+        let outcome = execute_main_session_turn_with_metrics(
             &config,
             security.as_ref(),
             mem.clone(),
@@ -562,7 +604,11 @@ pub async fn run(
             &observer,
         )
         .await?;
-        println!("{response}");
+        if let Some(tokens) = outcome.tokens_used {
+            token_sum = token_sum.saturating_add(tokens);
+            saw_token_usage = true;
+        }
+        println!("{}", outcome.response);
     } else {
         println!("🦀 AsteronIris Interactive Mode");
         println!("Type /quit to exit.\n");
@@ -576,7 +622,7 @@ pub async fn run(
         });
 
         while let Some(msg) = rx.recv().await {
-            let response = execute_main_session_turn(
+            let outcome = execute_main_session_turn_with_metrics(
                 &config,
                 security.as_ref(),
                 mem.clone(),
@@ -585,7 +631,11 @@ pub async fn run(
                 &observer,
             )
             .await?;
-            println!("\n{response}\n");
+            if let Some(tokens) = outcome.tokens_used {
+                token_sum = token_sum.saturating_add(tokens);
+                saw_token_usage = true;
+            }
+            println!("\n{}\n", outcome.response);
         }
 
         listen_handle.abort();
@@ -594,7 +644,7 @@ pub async fn run(
     let duration = start.elapsed();
     observer.record_event(&ObserverEvent::AgentEnd {
         duration,
-        tokens_used: None,
+        tokens_used: saw_token_usage.then_some(token_sum),
     });
 
     Ok(())

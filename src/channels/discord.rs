@@ -83,6 +83,10 @@ impl Channel for DiscordChannel {
         "discord"
     }
 
+    fn max_message_length(&self) -> usize {
+        2000
+    }
+
     async fn send(&self, message: &str, channel_id: &str) -> anyhow::Result<()> {
         let url = format!("https://discord.com/api/v10/channels/{channel_id}/messages");
         let body = json!({ "content": message });
@@ -282,6 +286,7 @@ impl Channel for DiscordChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        attachments: Vec::new(),
                     };
 
                     if tx.send(channel_msg).await.is_err() {

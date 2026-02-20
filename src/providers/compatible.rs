@@ -3,7 +3,7 @@
 //! This module provides a single implementation that works for all of them.
 
 use super::sanitize_api_error;
-use crate::providers::traits::Provider;
+use crate::providers::{ProviderResponse, traits::Provider};
 use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -85,6 +85,14 @@ struct Message {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    usage: Option<ChatUsage>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatUsage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,6 +179,14 @@ fn extract_responses_text(response: &ResponsesResponse) -> Option<String> {
     None
 }
 
+fn extract_chat_text(response: &ChatResponse, provider_name: &str) -> anyhow::Result<String> {
+    response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.clone())
+        .ok_or_else(|| anyhow::anyhow!("No response from {provider_name}"))
+}
+
 impl OpenAiCompatibleProvider {
     fn apply_auth_header(
         &self,
@@ -190,7 +206,7 @@ impl OpenAiCompatibleProvider {
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<ProviderResponse> {
         let request = ResponsesRequest {
             model: model.to_string(),
             input: vec![ResponsesInput {
@@ -220,20 +236,49 @@ impl OpenAiCompatibleProvider {
             .await
             .with_context(|| format!("{} Responses API JSON decode failed", self.name))?;
 
-        extract_responses_text(&responses)
-            .ok_or_else(|| anyhow::anyhow!("No response from {} Responses API", self.name))
+        let text = extract_responses_text(&responses)
+            .ok_or_else(|| anyhow::anyhow!("No response from {} Responses API", self.name))?;
+        Ok(ProviderResponse::text_only(text))
     }
-}
 
-#[async_trait]
-impl Provider for OpenAiCompatibleProvider {
-    async fn chat_with_system(
+    async fn call_chat_completions(
+        &self,
+        api_key: &str,
+        request: &ChatRequest,
+    ) -> anyhow::Result<ChatResponse> {
+        let url = self.chat_completions_url();
+
+        let response = self
+            .apply_auth_header(self.client.post(&url).json(request), api_key)
+            .send()
+            .await
+            .with_context(|| format!("{} chat completions request failed", self.name))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error = response.text().await?;
+            let sanitized_error = sanitize_api_error(&error);
+
+            if status == reqwest::StatusCode::NOT_FOUND {
+                anyhow::bail!("NOT_FOUND_FALLBACK::{sanitized_error}");
+            }
+
+            anyhow::bail!("{} API error: {sanitized_error}", self.name);
+        }
+
+        response
+            .json()
+            .await
+            .with_context(|| format!("{} chat completions JSON decode failed", self.name))
+    }
+
+    async fn chat_with_system_internal(
         &self,
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<ProviderResponse> {
         let api_key = self.api_key.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "{} API key not set. Run `asteroniris onboard` or set the appropriate env var.",
@@ -261,45 +306,64 @@ impl Provider for OpenAiCompatibleProvider {
             temperature,
         };
 
-        let url = self.chat_completions_url();
+        match self.call_chat_completions(api_key, &request).await {
+            Ok(chat_response) => {
+                let text = extract_chat_text(&chat_response, &self.name)?;
+                let mut provider_response = if let Some(usage) = chat_response.usage {
+                    ProviderResponse::with_usage(text, usage.prompt_tokens, usage.completion_tokens)
+                } else {
+                    ProviderResponse::text_only(text)
+                };
 
-        let response = self
-            .apply_auth_header(self.client.post(&url).json(&request), api_key)
-            .send()
-            .await
-            .with_context(|| format!("{} chat completions request failed", self.name))?;
+                if let Some(api_model) = chat_response.model {
+                    provider_response = provider_response.with_model(api_model);
+                }
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error = response.text().await?;
-            let sanitized_error = sanitize_api_error(&error);
-
-            if status == reqwest::StatusCode::NOT_FOUND {
-                return self
-                    .chat_via_responses(api_key, system_prompt, message, model)
-                    .await
-                    .map_err(|responses_err| {
-                        anyhow::anyhow!(
-                            "{} API error: {sanitized_error} (chat completions unavailable; responses fallback failed: {responses_err})",
-                            self.name
-                        )
-                    });
+                Ok(provider_response)
             }
+            Err(error) => {
+                let error_text = error.to_string();
+                if let Some((_, sanitized_error)) = error_text.split_once("NOT_FOUND_FALLBACK::") {
+                    return self
+                        .chat_via_responses(api_key, system_prompt, message, model)
+                        .await
+                        .map_err(|responses_err| {
+                            anyhow::anyhow!(
+                                "{} API error: {sanitized_error} (chat completions unavailable; responses fallback failed: {responses_err})",
+                                self.name
+                            )
+                        });
+                }
 
-            anyhow::bail!("{} API error: {sanitized_error}", self.name);
+                Err(error)
+            }
         }
+    }
+}
 
-        let chat_response: ChatResponse = response
-            .json()
+#[async_trait]
+impl Provider for OpenAiCompatibleProvider {
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<String> {
+        self.chat_with_system_internal(system_prompt, message, model, temperature)
             .await
-            .with_context(|| format!("{} chat completions JSON decode failed", self.name))?;
+            .map(|response| response.text)
+    }
 
-        chat_response
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("No response from {}", self.name))
+    async fn chat_with_system_full(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        self.chat_with_system_internal(system_prompt, message, model, temperature)
+            .await
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod chunker;
 pub mod cli;
 pub mod discord;
 #[cfg(feature = "email")]
@@ -486,7 +487,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
             for ch in &channels {
                 if ch.name() == msg.channel {
                     let _ = ch
-                        .send(
+                        .send_chunked(
                             "⚠️ External content was blocked by safety policy.",
                             &msg.sender,
                         )
@@ -514,7 +515,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
                 );
                 for ch in &channels {
                     if ch.name() == msg.channel {
-                        if let Err(e) = ch.send(&response, &msg.sender).await {
+                        if let Err(e) = ch.send_chunked(&response, &msg.sender).await {
                             eprintln!(
                                 "  ✗ {}",
                                 t!("channels.reply_fail", channel = ch.name(), error = e)
@@ -528,7 +529,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
                 eprintln!("  ✗ {}", t!("channels.llm_error", error = e));
                 for ch in &channels {
                     if ch.name() == msg.channel {
-                        let _ = ch.send(&format!("! Error: {e}"), &msg.sender).await;
+                        let _ = ch.send_chunked(&format!("! Error: {e}"), &msg.sender).await;
                         break;
                     }
                 }

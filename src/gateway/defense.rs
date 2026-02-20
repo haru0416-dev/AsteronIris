@@ -1,5 +1,5 @@
 use crate::config::GatewayDefenseMode;
-use crate::security::external_content::{prepare_external_content, ExternalAction};
+use crate::security::external_content::{ExternalAction, prepare_external_content};
 use axum::{http::StatusCode, response::Json};
 
 use super::AppState;

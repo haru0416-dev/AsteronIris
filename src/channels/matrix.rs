@@ -117,6 +117,10 @@ impl Channel for MatrixChannel {
         "matrix"
     }
 
+    fn max_message_length(&self) -> usize {
+        60_000
+    }
+
     async fn send(&self, message: &str, _target: &str) -> anyhow::Result<()> {
         let txn_id = format!("zc_{}", chrono::Utc::now().timestamp_millis());
         let url = format!(
@@ -236,6 +240,7 @@ impl Channel for MatrixChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        attachments: Vec::new(),
                     };
 
                     if tx.send(msg).await.is_err() {

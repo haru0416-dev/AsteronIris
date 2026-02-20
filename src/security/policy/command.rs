@@ -1,5 +1,5 @@
-use super::types::AutonomyLevel;
 use super::SecurityPolicy;
+use super::types::AutonomyLevel;
 
 /// Skip leading environment variable assignments (e.g. `FOO=bar cmd args`).
 /// Returns the remainder starting at the first non-assignment word.

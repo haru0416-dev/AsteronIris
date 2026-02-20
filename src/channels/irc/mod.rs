@@ -129,6 +129,10 @@ impl Channel for IrcChannel {
         "irc"
     }
 
+    fn max_message_length(&self) -> usize {
+        400
+    }
+
     async fn send(&self, message: &str, recipient: &str) -> anyhow::Result<()> {
         let mut guard = self.writer.lock().await;
         let writer = guard
@@ -347,6 +351,7 @@ impl Channel for IrcChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        attachments: Vec::new(),
                     };
 
                     if tx.send(channel_msg).await.is_err() {

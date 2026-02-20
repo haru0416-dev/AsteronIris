@@ -9,8 +9,11 @@
 
 mod autosave;
 mod defense;
+mod events;
 mod handlers;
+pub mod openai_compat;
 mod signature;
+mod websocket;
 
 // Re-exported for integration tests (tests/persona/scope_regression.rs).
 #[allow(unused_imports)]
@@ -21,6 +24,7 @@ use defense::apply_external_ingress_policy;
 use handlers::{
     handle_health, handle_pair, handle_webhook, handle_whatsapp_message, handle_whatsapp_verify,
 };
+use websocket::ws_handler;
 
 use crate::auth::AuthBroker;
 use crate::channels::WhatsAppChannel;
@@ -52,6 +56,7 @@ pub struct AppState {
     pub provider: Arc<dyn Provider>,
     pub model: String,
     pub temperature: f64,
+    pub openai_compat_api_keys: Option<Vec<String>>,
     pub mem: Arc<dyn Memory>,
     pub auto_save: bool,
     pub webhook_secret: Option<Arc<str>>,
@@ -202,6 +207,7 @@ pub async fn run_gateway_with_listener(
     }
     println!("  {}", t!("gateway.route_pair"));
     println!("  {}", t!("gateway.route_webhook"));
+    println!("  GET /ws → WebSocket");
     if whatsapp_channel.is_some() {
         println!("  {}", t!("gateway.route_whatsapp_get"));
         println!("  {}", t!("gateway.route_whatsapp_post"));
@@ -230,6 +236,7 @@ pub async fn run_gateway_with_listener(
         provider,
         model,
         temperature,
+        openai_compat_api_keys: None,
         mem,
         auto_save: config.memory.auto_save,
         webhook_secret,
@@ -245,6 +252,11 @@ pub async fn run_gateway_with_listener(
         .route("/health", get(handle_health))
         .route("/pair", post(handle_pair))
         .route("/webhook", post(handle_webhook))
+        .route("/ws", get(ws_handler))
+        .route(
+            "/v1/chat/completions",
+            post(openai_compat::handle_chat_completions),
+        )
         .route("/whatsapp", get(handle_whatsapp_verify))
         .route("/whatsapp", post(handle_whatsapp_message))
         .with_state(state)
@@ -543,6 +555,7 @@ mod tests {
             provider,
             model: "test-model".to_string(),
             temperature: 0.0,
+            openai_compat_api_keys: None,
             mem,
             auto_save: false,
             webhook_secret: Some(Arc::from("test-secret")),
@@ -628,6 +641,7 @@ mod tests {
             }),
             model: "test".to_string(),
             temperature: 0.0,
+            openai_compat_api_keys: None,
             mem,
             auto_save: false,
             webhook_secret: None,
@@ -696,6 +710,7 @@ mod tests {
             }),
             model: "test-model".to_string(),
             temperature: 0.0,
+            openai_compat_api_keys: None,
             mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
             auto_save: false,
             webhook_secret: None,
@@ -745,6 +760,7 @@ mod tests {
             }),
             model: "test-model".to_string(),
             temperature: 0.0,
+            openai_compat_api_keys: None,
             mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
             auto_save: false,
             webhook_secret: None,

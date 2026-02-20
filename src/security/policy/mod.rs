@@ -6,8 +6,8 @@ mod types;
 
 #[allow(unused_imports)]
 pub use tenant::{
-    TenantPolicyContext, TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR,
-    TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR,
+    TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR, TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR,
+    TenantPolicyContext,
 };
 pub use trackers::{ActionTracker, CostTracker};
 pub use types::{ActionPolicyVerdict, AutonomyLevel, ExternalActionExecution};
@@ -702,9 +702,11 @@ mod tests {
     #[test]
     fn tenant_policy_context_allows_same_tenant_recall_scope() {
         let context = TenantPolicyContext::enabled("tenant-alpha");
-        assert!(context
-            .enforce_recall_scope("tenant-alpha:user-123")
-            .is_ok());
+        assert!(
+            context
+                .enforce_recall_scope("tenant-alpha:user-123")
+                .is_ok()
+        );
         assert!(context.enforce_recall_scope("tenant-alpha/session").is_ok());
     }
 

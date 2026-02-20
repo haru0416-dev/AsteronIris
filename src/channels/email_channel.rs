@@ -382,6 +382,10 @@ impl Channel for EmailChannel {
         "email"
     }
 
+    fn max_message_length(&self) -> usize {
+        usize::MAX
+    }
+
     async fn send(&self, message: &str, recipient: &str) -> Result<()> {
         let (subject, body) = if message.starts_with("Subject: ") {
             if let Some(pos) = message.find('\n') {
@@ -437,6 +441,7 @@ impl Channel for EmailChannel {
                             content,
                             channel: "email".to_string(),
                             timestamp: ts,
+                            attachments: Vec::new(),
                         };
                         if tx.send(msg).await.is_err() {
                             return Ok(());

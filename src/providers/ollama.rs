@@ -1,4 +1,4 @@
-use crate::providers::traits::Provider;
+use crate::providers::{ProviderResponse, traits::Provider};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,9 @@ struct Options {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     message: ResponseMessage,
+    prompt_eval_count: Option<u64>,
+    eval_count: Option<u64>,
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,17 +54,13 @@ impl OllamaProvider {
                 .unwrap_or_else(|_| Client::new()),
         }
     }
-}
 
-#[async_trait]
-impl Provider for OllamaProvider {
-    async fn chat_with_system(
-        &self,
+    fn build_request(
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
+    ) -> ChatRequest {
         let mut messages = Vec::new();
 
         if let Some(sys) = system_prompt {
@@ -76,13 +75,22 @@ impl Provider for OllamaProvider {
             content: message.to_string(),
         });
 
-        let request = ChatRequest {
+        ChatRequest {
             model: model.to_string(),
             messages,
             stream: false,
             options: Options { temperature },
-        };
+        }
+    }
 
+    async fn call_api(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        let request = Self::build_request(system_prompt, message, model, temperature);
         let url = format!("{}/api/chat", self.base_url);
 
         let response = self.client.post(&url).json(&request).send().await?;
@@ -92,8 +100,47 @@ impl Provider for OllamaProvider {
             anyhow::bail!("{err}. Is Ollama running? (brew install ollama && ollama serve)");
         }
 
-        let chat_response: ChatResponse = response.json().await?;
+        response.json().await.map_err(anyhow::Error::msg)
+    }
+}
+
+#[async_trait]
+impl Provider for OllamaProvider {
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<String> {
+        let chat_response = self
+            .call_api(system_prompt, message, model, temperature)
+            .await?;
         Ok(chat_response.message.content)
+    }
+
+    async fn chat_with_system_full(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let chat_response = self
+            .call_api(system_prompt, message, model, temperature)
+            .await?;
+        let text = chat_response.message.content;
+        let mut provider_response =
+            match (chat_response.prompt_eval_count, chat_response.eval_count) {
+                (Some(input_tokens), Some(output_tokens)) => {
+                    ProviderResponse::with_usage(text, input_tokens, output_tokens)
+                }
+                _ => ProviderResponse::text_only(text),
+            };
+        if let Some(api_model) = chat_response.model {
+            provider_response = provider_response.with_model(api_model);
+        }
+        Ok(provider_response)
     }
 }
 

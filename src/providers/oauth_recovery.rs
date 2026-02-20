@@ -1,4 +1,4 @@
-use super::{Provider, sanitize_api_error};
+use super::{Provider, ProviderResponse, sanitize_api_error};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -136,6 +136,45 @@ impl Provider for OAuthRecoveryProvider {
                 let provider = self.inner.read().await.clone();
                 provider
                     .chat_with_system(system_prompt, message, model, temperature)
+                    .await
+            }
+            Ok(false) => Err(first_error),
+            Err(recovery_error) => {
+                tracing::warn!(
+                    provider = %self.provider_name,
+                    "OAuth recovery failed: {}",
+                    sanitize_api_error(&recovery_error.to_string())
+                );
+                Err(first_error)
+            }
+        }
+    }
+
+    async fn chat_with_system_full(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> Result<ProviderResponse> {
+        let provider = self.inner.read().await.clone();
+        let first_attempt = provider
+            .chat_with_system_full(system_prompt, message, model, temperature)
+            .await;
+
+        let Err(first_error) = first_attempt else {
+            return first_attempt;
+        };
+
+        if !Self::is_auth_error(&first_error) {
+            return Err(first_error);
+        }
+
+        match self.attempt_recovery().await {
+            Ok(true) => {
+                let provider = self.inner.read().await.clone();
+                provider
+                    .chat_with_system_full(system_prompt, message, model, temperature)
                     .await
             }
             Ok(false) => Err(first_error),

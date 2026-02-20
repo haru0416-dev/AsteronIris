@@ -123,6 +123,7 @@ impl WhatsAppChannel {
                         content,
                         channel: "whatsapp".to_string(),
                         timestamp,
+                        attachments: Vec::new(),
                     });
                 }
             }
@@ -136,6 +137,10 @@ impl WhatsAppChannel {
 impl Channel for WhatsAppChannel {
     fn name(&self) -> &str {
         "whatsapp"
+    }
+
+    fn max_message_length(&self) -> usize {
+        4096
     }
 
     async fn send(&self, message: &str, recipient: &str) -> anyhow::Result<()> {

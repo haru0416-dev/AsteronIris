@@ -1,4 +1,4 @@
-use crate::providers::traits::Provider;
+use crate::providers::{ProviderResponse, traits::Provider};
 use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -25,6 +25,14 @@ struct Message {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    usage: Option<Usage>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Usage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,21 +56,13 @@ impl OpenAiProvider {
                 .unwrap_or_else(|_| Client::new()),
         }
     }
-}
 
-#[async_trait]
-impl Provider for OpenAiProvider {
-    async fn chat_with_system(
-        &self,
+    fn build_request(
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
-        })?;
-
+    ) -> ChatRequest {
         let mut messages = Vec::new();
 
         if let Some(sys) = system_prompt {
@@ -77,11 +77,33 @@ impl Provider for OpenAiProvider {
             content: message.to_string(),
         });
 
-        let request = ChatRequest {
+        ChatRequest {
             model: model.to_string(),
             messages,
             temperature,
-        };
+        }
+    }
+
+    fn extract_text(chat_response: &ChatResponse) -> anyhow::Result<String> {
+        chat_response
+            .choices
+            .first()
+            .map(|c| c.message.content.clone())
+            .ok_or_else(|| anyhow::anyhow!("No response from OpenAI"))
+    }
+
+    async fn call_api(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        let api_key = self.api_key.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
+        })?;
+
+        let request = Self::build_request(system_prompt, message, model, temperature);
 
         let response = self
             .client
@@ -96,17 +118,48 @@ impl Provider for OpenAiProvider {
             return Err(super::api_error("OpenAI", response).await);
         }
 
-        let chat_response: ChatResponse = response
+        response
             .json()
             .await
-            .context("OpenAI response JSON decode failed")?;
+            .context("OpenAI response JSON decode failed")
+    }
+}
 
-        chat_response
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenAI"))
+#[async_trait]
+impl Provider for OpenAiProvider {
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<String> {
+        let chat_response = self
+            .call_api(system_prompt, message, model, temperature)
+            .await?;
+        Self::extract_text(&chat_response)
+    }
+
+    async fn chat_with_system_full(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let chat_response = self
+            .call_api(system_prompt, message, model, temperature)
+            .await?;
+        let text = Self::extract_text(&chat_response)?;
+        let mut provider_response = if let Some(usage) = chat_response.usage {
+            ProviderResponse::with_usage(text, usage.prompt_tokens, usage.completion_tokens)
+        } else {
+            ProviderResponse::text_only(text)
+        };
+        if let Some(api_model) = chat_response.model {
+            provider_response = provider_response.with_model(api_model);
+        }
+        Ok(provider_response)
     }
 }
 

@@ -1,4 +1,4 @@
-use super::Provider;
+use super::{Provider, ProviderResponse};
 use async_trait::async_trait;
 use std::time::Duration;
 
@@ -74,6 +74,69 @@ impl Provider for ReliableProvider {
             for attempt in 0..=self.max_retries {
                 match provider
                     .chat_with_system(system_prompt, message, model, temperature)
+                    .await
+                {
+                    Ok(resp) => {
+                        if attempt > 0 {
+                            tracing::info!(
+                                provider = provider_name,
+                                attempt,
+                                "Provider recovered after retries"
+                            );
+                        }
+                        return Ok(resp);
+                    }
+                    Err(e) => {
+                        let non_retryable = is_non_retryable(&e);
+                        failures.push(format!(
+                            "{provider_name} attempt {}/{}: {e}",
+                            attempt + 1,
+                            self.max_retries + 1
+                        ));
+
+                        if non_retryable {
+                            tracing::warn!(
+                                provider = provider_name,
+                                "Non-retryable error, switching provider"
+                            );
+                            break;
+                        }
+
+                        if attempt < self.max_retries {
+                            tracing::warn!(
+                                provider = provider_name,
+                                attempt = attempt + 1,
+                                max_retries = self.max_retries,
+                                "Provider call failed, retrying"
+                            );
+                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                            backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                        }
+                    }
+                }
+            }
+
+            tracing::warn!(provider = provider_name, "Switching to fallback provider");
+        }
+
+        anyhow::bail!("All providers failed. Attempts:\n{}", failures.join("\n"))
+    }
+
+    async fn chat_with_system_full(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let mut failures = Vec::new();
+
+        for (provider_name, provider) in &self.providers {
+            let mut backoff_ms = self.base_backoff_ms;
+
+            for attempt in 0..=self.max_retries {
+                match provider
+                    .chat_with_system_full(system_prompt, message, model, temperature)
                     .await
                 {
                     Ok(resp) => {

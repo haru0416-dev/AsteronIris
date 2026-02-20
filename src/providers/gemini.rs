@@ -3,7 +3,7 @@
 //! - Gemini CLI OAuth tokens (reuse existing ~/.gemini/ authentication)
 //! - Google Cloud ADC (`GOOGLE_APPLICATION_CREDENTIALS`)
 
-use crate::providers::traits::Provider;
+use crate::providers::{ProviderResponse, traits::Provider};
 use async_trait::async_trait;
 use directories::UserDirs;
 use reqwest::Client;
@@ -52,6 +52,18 @@ struct GenerationConfig {
 struct GenerateContentResponse {
     candidates: Option<Vec<Candidate>>,
     error: Option<ApiError>,
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: Option<UsageMetadata>,
+    #[serde(rename = "modelVersion")]
+    model_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageMetadata {
+    #[serde(rename = "promptTokenCount")]
+    prompt_token_count: u64,
+    #[serde(rename = "candidatesTokenCount")]
+    candidates_token_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,28 +182,12 @@ impl GeminiProvider {
         }
         "config"
     }
-}
 
-#[async_trait]
-impl Provider for GeminiProvider {
-    async fn chat_with_system(
-        &self,
+    fn build_request(
         system_prompt: Option<&str>,
         message: &str,
-        model: &str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Gemini API key not found. Options:\n\
-                 1. Set GEMINI_API_KEY env var\n\
-                 2. Run `gemini` CLI to authenticate (tokens will be reused)\n\
-                 3. Get an API key from https://aistudio.google.com/app/apikey\n\
-             4. Run `asteroniris onboard` to configure"
-            )
-        })?;
-
-        // Build request
+    ) -> GenerateContentRequest {
         let system_instruction = system_prompt.map(|sys| Content {
             role: None,
             parts: vec![Part {
@@ -199,7 +195,7 @@ impl Provider for GeminiProvider {
             }],
         });
 
-        let request = GenerateContentRequest {
+        GenerateContentRequest {
             contents: vec![Content {
                 role: Some("user".to_string()),
                 parts: vec![Part {
@@ -211,16 +207,47 @@ impl Provider for GeminiProvider {
                 temperature,
                 max_output_tokens: 8192,
             },
-        };
+        }
+    }
 
-        // Gemini API endpoint
-        // Model format: gemini-2.0-flash, gemini-1.5-pro, etc.
-        let model_name = if model.starts_with("models/") {
+    fn model_name(model: &str) -> String {
+        if model.starts_with("models/") {
             model.to_string()
         } else {
             format!("models/{model}")
-        };
+        }
+    }
 
+    fn extract_text(result: &GenerateContentResponse) -> anyhow::Result<String> {
+        result
+            .candidates
+            .as_ref()
+            .and_then(|c| c.first())
+            .and_then(|c| c.content.parts.first())
+            .and_then(|p| p.text.as_ref())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))
+    }
+
+    async fn call_api(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<GenerateContentResponse> {
+        let api_key = self.api_key.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Gemini API key not found. Options:\n\
+                 1. Set GEMINI_API_KEY env var\n\
+                 2. Run `gemini` CLI to authenticate (tokens will be reused)\n\
+                 3. Get an API key from https://aistudio.google.com/app/apikey\n\
+             4. Run `asteroniris onboard` to configure"
+            )
+        })?;
+
+        let request = Self::build_request(system_prompt, message, temperature);
+        let model_name = Self::model_name(model);
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
         );
@@ -235,18 +262,53 @@ impl Provider for GeminiProvider {
 
         let result: GenerateContentResponse = response.json().await?;
 
-        // Check for API error in response body
-        if let Some(err) = result.error {
+        if let Some(err) = result.error.as_ref() {
             anyhow::bail!("Gemini API error: {}", err.message);
         }
 
-        // Extract text from response
-        result
-            .candidates
-            .and_then(|c| c.into_iter().next())
-            .and_then(|c| c.content.parts.into_iter().next())
-            .and_then(|p| p.text)
-            .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))
+        Ok(result)
+    }
+}
+
+#[async_trait]
+impl Provider for GeminiProvider {
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<String> {
+        let result = self
+            .call_api(system_prompt, message, model, temperature)
+            .await?;
+        Self::extract_text(&result)
+    }
+
+    async fn chat_with_system_full(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderResponse> {
+        let result = self
+            .call_api(system_prompt, message, model, temperature)
+            .await?;
+        let text = Self::extract_text(&result)?;
+        let mut provider_response = if let Some(usage) = result.usage_metadata {
+            ProviderResponse::with_usage(
+                text,
+                usage.prompt_token_count,
+                usage.candidates_token_count,
+            )
+        } else {
+            ProviderResponse::text_only(text)
+        };
+        if let Some(model_version) = result.model_version {
+            provider_response = provider_response.with_model(model_version);
+        }
+        Ok(provider_response)
     }
 }
 

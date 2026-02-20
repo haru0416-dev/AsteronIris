@@ -18,6 +18,10 @@ impl Channel for CliChannel {
         "cli"
     }
 
+    fn max_message_length(&self) -> usize {
+        usize::MAX
+    }
+
     async fn send(&self, message: &str, _recipient: &str) -> anyhow::Result<()> {
         println!("{message}");
         Ok(())
@@ -46,6 +50,7 @@ impl Channel for CliChannel {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
+                attachments: Vec::new(),
             };
 
             if tx.send(msg).await.is_err() {
@@ -93,6 +98,7 @@ mod tests {
             content: "hello".into(),
             channel: "cli".into(),
             timestamp: 1_234_567_890,
+            attachments: Vec::new(),
         };
         assert_eq!(msg.id, "test-id");
         assert_eq!(msg.sender, "user");
@@ -109,6 +115,7 @@ mod tests {
             content: "c".into(),
             channel: "ch".into(),
             timestamp: 0,
+            attachments: Vec::new(),
         };
         let cloned = msg.clone();
         assert_eq!(cloned.id, msg.id);

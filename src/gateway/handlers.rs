@@ -115,8 +115,7 @@ pub(super) async fn handle_webhook(
     // and no webhook secret is set.
     if !state.pairing.is_paired()
         && state.webhook_secret.is_none()
-        && let Some(response) =
-            policy_violation_response(&state, PolicyViolation::NoAuthConfigured)
+        && let Some(response) = policy_violation_response(&state, PolicyViolation::NoAuthConfigured)
     {
         return response;
     }
@@ -167,11 +166,11 @@ pub(super) async fn handle_webhook(
 
     match state
         .provider
-        .chat(&ingress.model_input, &state.model, state.temperature)
+        .chat_with_system_full(None, &ingress.model_input, &state.model, state.temperature)
         .await
     {
         Ok(response) => {
-            let body = serde_json::json!({"response": response, "model": state.model});
+            let body = serde_json::json!({"response": response.text, "model": state.model});
             (StatusCode::OK, Json(body))
         }
         Err(e) => {
@@ -295,7 +294,7 @@ pub(super) async fn handle_whatsapp_message(
                     "blocked high-risk external content at whatsapp ingress"
                 );
                 let _ = wa
-                    .send(
+                    .send_chunked(
                         "I could not process that external content safely.",
                         &msg.sender,
                     )
@@ -305,7 +304,7 @@ pub(super) async fn handle_whatsapp_message(
 
             if let Err(policy_error) = state.security.consume_action_and_cost(0) {
                 let _ = wa
-                    .send(
+                    .send_chunked(
                         "I cannot respond right now due to policy limits.",
                         &msg.sender,
                     )
@@ -316,18 +315,18 @@ pub(super) async fn handle_whatsapp_message(
 
             match state
                 .provider
-                .chat(&ingress.model_input, &state.model, state.temperature)
+                .chat_with_system_full(None, &ingress.model_input, &state.model, state.temperature)
                 .await
             {
                 Ok(response) => {
-                    if let Err(e) = wa.send(&response, &msg.sender).await {
+                    if let Err(e) = wa.send_chunked(&response.text, &msg.sender).await {
                         tracing::error!("Failed to send WhatsApp reply: {e}");
                     }
                 }
                 Err(e) => {
                     tracing::error!("LLM error for WhatsApp message: {e:#}");
                     let _ = wa
-                        .send(
+                        .send_chunked(
                             "Sorry, I couldn't process your message right now.",
                             &msg.sender,
                         )
@@ -342,7 +341,7 @@ pub(super) async fn handle_whatsapp_message(
         if ingress.blocked {
             tracing::warn!("blocked high-risk external content at whatsapp ingress");
             let _ = wa
-                .send(
+                .send_chunked(
                     "I could not process that external content safely.",
                     &msg.sender,
                 )
@@ -352,7 +351,7 @@ pub(super) async fn handle_whatsapp_message(
 
         if let Err(policy_error) = state.security.consume_action_and_cost(0) {
             let _ = wa
-                .send(
+                .send_chunked(
                     "I cannot respond right now due to policy limits.",
                     &msg.sender,
                 )
@@ -363,18 +362,18 @@ pub(super) async fn handle_whatsapp_message(
 
         match state
             .provider
-            .chat(&ingress.model_input, &state.model, state.temperature)
+            .chat_with_system_full(None, &ingress.model_input, &state.model, state.temperature)
             .await
         {
             Ok(response) => {
-                if let Err(e) = wa.send(&response, &msg.sender).await {
+                if let Err(e) = wa.send_chunked(&response.text, &msg.sender).await {
                     tracing::error!("Failed to send WhatsApp reply: {e}");
                 }
             }
             Err(e) => {
                 tracing::error!("LLM error for WhatsApp message: {e:#}");
                 let _ = wa
-                    .send(
+                    .send_chunked(
                         "Sorry, I couldn't process your message right now.",
                         &msg.sender,
                     )
