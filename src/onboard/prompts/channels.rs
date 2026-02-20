@@ -4,8 +4,9 @@ use crate::config::{
     WebhookConfig,
 };
 use anyhow::Result;
-use console::style;
 use dialoguer::{Confirm, Input, Select};
+
+use crate::ui::style as ui;
 
 use super::super::view::print_bullet;
 
@@ -151,10 +152,10 @@ pub fn setup_channels() -> Result<ChannelsConfig> {
 
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!(
             "onboard.channels.summary",
-            channels = style(active.join(", ")).green()
+            channels = ui::value(active.join(", "))
         )
     );
 
@@ -165,8 +166,8 @@ fn setup_telegram(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.channels.telegram_setup")).white().bold(),
-        style(format!("— {}", t!("onboard.channels.telegram_subtitle"))).dim()
+        ui::header(t!("onboard.channels.telegram_setup")),
+        ui::dim(format!("— {}", t!("onboard.channels.telegram_subtitle")))
     );
     print_bullet(&t!("onboard.channels.telegram_step1"));
     print_bullet(&t!("onboard.channels.telegram_step2"));
@@ -181,7 +182,7 @@ fn setup_telegram(config: &mut ChannelsConfig) -> Result<()> {
         .interact_text()?;
 
     if token.trim().is_empty() {
-        println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+        println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
         return Ok(());
     }
 
@@ -238,8 +239,8 @@ fn setup_discord(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.channels.discord_setup")).white().bold(),
-        style(format!("— {}", t!("onboard.channels.discord_subtitle"))).dim()
+        ui::header(t!("onboard.channels.discord_setup")),
+        ui::dim(format!("— {}", t!("onboard.channels.discord_subtitle")))
     );
     print_bullet(&t!("onboard.channels.discord_step1"));
     print_bullet(&t!("onboard.channels.discord_step2"));
@@ -252,7 +253,7 @@ fn setup_discord(config: &mut ChannelsConfig) -> Result<()> {
         .interact_text()?;
 
     if token.trim().is_empty() {
-        println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+        println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
         return Ok(());
     }
 
@@ -313,8 +314,8 @@ fn setup_slack(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.channels.slack_setup")).white().bold(),
-        style(format!("— {}", t!("onboard.channels.slack_subtitle"))).dim()
+        ui::header(t!("onboard.channels.slack_setup")),
+        ui::dim(format!("— {}", t!("onboard.channels.slack_subtitle")))
     );
     print_bullet(&t!("onboard.channels.slack_step1"));
     print_bullet(&t!("onboard.channels.slack_step2"));
@@ -326,7 +327,7 @@ fn setup_slack(config: &mut ChannelsConfig) -> Result<()> {
         .interact_text()?;
 
     if token.trim().is_empty() {
-        println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+        println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
         return Ok(());
     }
 
@@ -417,8 +418,8 @@ fn setup_imessage(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.channels.imessage_setup")).white().bold(),
-        style(format!("— {}", t!("onboard.channels.imessage_subtitle"))).dim()
+        ui::header(t!("onboard.channels.imessage_setup")),
+        ui::dim(format!("— {}", t!("onboard.channels.imessage_subtitle")))
     );
 
     if !cfg!(target_os = "macos") {
@@ -451,7 +452,7 @@ fn setup_imessage(config: &mut ChannelsConfig) -> Result<()> {
         "  ✓ {}",
         t!(
             "onboard.channels.imessage_confirm",
-            contacts = style(&contacts_str).cyan()
+            contacts = ui::cyan(&contacts_str)
         )
     );
 
@@ -462,8 +463,8 @@ fn setup_matrix(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.channels.matrix_setup")).white().bold(),
-        style(format!("— {}", t!("onboard.channels.matrix_subtitle"))).dim()
+        ui::header(t!("onboard.channels.matrix_setup")),
+        ui::dim(format!("— {}", t!("onboard.channels.matrix_subtitle")))
     );
     print_bullet(&t!("onboard.channels.matrix_desc"));
     print_bullet(&t!("onboard.channels.matrix_token_hint"));
@@ -477,7 +478,7 @@ fn setup_matrix(config: &mut ChannelsConfig) -> Result<()> {
         .interact_text()?;
 
     if homeserver.trim().is_empty() {
-        println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+        println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
         return Ok(());
     }
 
@@ -488,7 +489,7 @@ fn setup_matrix(config: &mut ChannelsConfig) -> Result<()> {
     if access_token.trim().is_empty() {
         println!(
             "  {} {}",
-            style("→").dim(),
+            ui::dim("→"),
             t!("onboard.channels.matrix_token_required")
         );
         return Ok(());
@@ -548,8 +549,8 @@ fn setup_whatsapp(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.channels.whatsapp_setup")).white().bold(),
-        style(format!("— {}", t!("onboard.channels.whatsapp_subtitle"))).dim()
+        ui::header(t!("onboard.channels.whatsapp_setup")),
+        ui::dim(format!("— {}", t!("onboard.channels.whatsapp_subtitle")))
     );
     print_bullet(&t!("onboard.channels.whatsapp_step1"));
     print_bullet(&t!("onboard.channels.whatsapp_step2"));
@@ -565,7 +566,7 @@ fn setup_whatsapp(config: &mut ChannelsConfig) -> Result<()> {
         .interact_text()?;
 
     if access_token.trim().is_empty() {
-        println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+        println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
         return Ok(());
     }
 
@@ -579,7 +580,7 @@ fn setup_whatsapp(config: &mut ChannelsConfig) -> Result<()> {
     if phone_number_id.trim().is_empty() {
         println!(
             "  {} {}",
-            style("→").dim(),
+            ui::dim("→"),
             t!("onboard.channels.whatsapp_phone_required")
         );
         return Ok(());
@@ -646,8 +647,8 @@ fn setup_irc(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.channels.irc_setup")).white().bold(),
-        style(format!("— {}", t!("onboard.channels.irc_subtitle"))).dim()
+        ui::header(t!("onboard.channels.irc_setup")),
+        ui::dim(format!("— {}", t!("onboard.channels.irc_subtitle")))
     );
     print_bullet(&t!("onboard.channels.irc_desc"));
     print_bullet(&t!("onboard.channels.irc_sasl"));
@@ -658,7 +659,7 @@ fn setup_irc(config: &mut ChannelsConfig) -> Result<()> {
         .interact_text()?;
 
     if server.trim().is_empty() {
-        println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+        println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
         return Ok(());
     }
 
@@ -672,7 +673,7 @@ fn setup_irc(config: &mut ChannelsConfig) -> Result<()> {
     } else {
         println!(
             "  {} {}",
-            style("→").dim(),
+            ui::dim("→"),
             t!("onboard.channels.irc_port_invalid")
         );
         6697
@@ -685,7 +686,7 @@ fn setup_irc(config: &mut ChannelsConfig) -> Result<()> {
     if nickname.trim().is_empty() {
         println!(
             "  {} {}",
-            style("→").dim(),
+            ui::dim("→"),
             t!("onboard.channels.irc_nick_required")
         );
         return Ok(());
@@ -750,9 +751,9 @@ fn setup_irc(config: &mut ChannelsConfig) -> Result<()> {
         "  ✓ {}",
         t!(
             "onboard.channels.irc_confirm",
-            nick = style(&nickname).cyan(),
-            server = style(&server).cyan(),
-            port = style(port).cyan()
+            nick = ui::cyan(&nickname),
+            server = ui::cyan(&server),
+            port = ui::cyan(port)
         )
     );
 
@@ -792,8 +793,8 @@ fn setup_webhook(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.channels.webhook_setup")).white().bold(),
-        style(format!("— {}", t!("onboard.channels.webhook_subtitle"))).dim()
+        ui::header(t!("onboard.channels.webhook_setup")),
+        ui::dim(format!("— {}", t!("onboard.channels.webhook_subtitle")))
     );
 
     let port: String = Input::new()
@@ -819,10 +820,7 @@ fn setup_webhook(config: &mut ChannelsConfig) -> Result<()> {
     });
     println!(
         "  ✓ {}",
-        t!(
-            "onboard.channels.webhook_confirm",
-            port = style(&port).cyan()
-        )
+        t!("onboard.channels.webhook_confirm", port = ui::cyan(&port))
     );
 
     Ok(())

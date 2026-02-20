@@ -3,8 +3,8 @@ use asteroniris::memory::{
     SqliteMemory,
 };
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
-use asteroniris::tools::traits::Tool;
 use asteroniris::tools::MemoryGovernanceTool;
+use asteroniris::tools::traits::Tool;
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;

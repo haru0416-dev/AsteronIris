@@ -1,7 +1,7 @@
 use chrono::Utc;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize)]
@@ -23,7 +23,7 @@ pub struct HealthSnapshot {
 
 struct HealthRegistry {
     started_at: Instant,
-    components: Mutex<BTreeMap<String, ComponentHealth>>,
+    components: RwLock<BTreeMap<String, ComponentHealth>>,
 }
 
 static REGISTRY: OnceLock<HealthRegistry> = OnceLock::new();
@@ -31,7 +31,7 @@ static REGISTRY: OnceLock<HealthRegistry> = OnceLock::new();
 fn registry() -> &'static HealthRegistry {
     REGISTRY.get_or_init(|| HealthRegistry {
         started_at: Instant::now(),
-        components: Mutex::new(BTreeMap::new()),
+        components: RwLock::new(BTreeMap::new()),
     })
 }
 
@@ -43,7 +43,7 @@ fn upsert_component<F>(component: &str, update: F)
 where
     F: FnOnce(&mut ComponentHealth),
 {
-    if let Ok(mut map) = registry().components.lock() {
+    if let Ok(mut map) = registry().components.write() {
         let now = now_rfc3339();
         let entry = map
             .entry(component.to_string())
@@ -85,7 +85,7 @@ pub fn bump_component_restart(component: &str) {
 pub fn snapshot() -> HealthSnapshot {
     let components = registry()
         .components
-        .lock()
+        .read()
         .map_or_else(|_| BTreeMap::new(), |map| map.clone());
 
     HealthSnapshot {

@@ -7,7 +7,7 @@ use asteroniris::persona::state_persistence::{
     BackendCanonicalStateHeaderPersistence, CANONICAL_STATE_HEADER_KEY,
 };
 use asteroniris::security::writeback_guard::{
-    validate_writeback_payload, ImmutableStateHeader, WritebackGuardVerdict,
+    ImmutableStateHeader, WritebackGuardVerdict, validate_writeback_payload,
 };
 use serde_json::json;
 use tempfile::TempDir;

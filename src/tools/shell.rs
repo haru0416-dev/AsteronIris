@@ -161,10 +161,12 @@ mod tests {
         let tool = ShellTool::new(test_security(AutonomyLevel::Supervised));
         let schema = tool.parameters_schema();
         assert!(schema["properties"]["command"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("command")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("command"))
+        );
     }
 
     #[tokio::test]
@@ -319,9 +321,11 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .is_some_and(|msg| msg.contains("action limit")));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .is_some_and(|msg| msg.contains("action limit"))
+        );
     }
 }

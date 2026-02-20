@@ -1,13 +1,13 @@
 use crate::config::Config;
-use console::style;
+use crate::ui::style as ui;
 
 use super::domain::provider_env_var;
 
 pub fn print_welcome_banner() {
-    println!("{}", style(t!("onboard.banner.art")).cyan().bold());
+    println!("{}", ui::accent(t!("onboard.banner.art")));
 
-    println!("  {}", style(t!("onboard.banner.welcome")).white().bold());
-    println!("  {}", style(t!("onboard.banner.subtitle")).dim());
+    println!("  {}", ui::header(t!("onboard.banner.welcome")));
+    println!("  {}", ui::dim(t!("onboard.banner.subtitle")));
     println!();
 }
 
@@ -15,14 +15,14 @@ pub fn print_step(current: u8, total: u8, title: &str) {
     println!();
     println!(
         "  {} {}",
-        style(format!("[{current}/{total}]")).cyan().bold(),
-        style(title).white().bold()
+        ui::accent(format!("[{current}/{total}]")),
+        ui::header(title)
     );
-    println!("  {}", style("─".repeat(50)).dim());
+    println!("  {}", ui::dim("─".repeat(50)));
 }
 
 pub fn print_bullet(text: &str) {
-    println!("  {} {}", style("›").cyan(), text);
+    println!("  {} {}", ui::cyan("›"), text);
 }
 #[allow(clippy::too_many_lines)]
 pub fn print_summary(config: &Config) {
@@ -36,23 +36,20 @@ pub fn print_summary(config: &Config) {
     println!();
     println!(
         "  {}",
-        style("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").cyan()
+        ui::cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     );
-    println!("  ◆  {}", style(t!("onboard.summary.ready")).white().bold());
+    println!("  ◆  {}", ui::header(t!("onboard.summary.ready")));
     println!(
         "  {}",
-        style("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").cyan()
+        ui::cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     );
     println!();
 
-    println!("  {}", style(t!("onboard.summary.config_saved")).dim());
-    println!("    {}", style(config.config_path.display()).green());
+    println!("  {}", ui::dim(t!("onboard.summary.config_saved")));
+    println!("    {}", ui::value(config.config_path.display()));
     println!();
 
-    println!(
-        "  {}",
-        style(t!("onboard.summary.quick_summary")).white().bold()
-    );
+    println!("  {}", ui::header(t!("onboard.summary.quick_summary")));
     println!(
         "    › {} {}",
         t!("onboard.summary.provider"),
@@ -108,11 +105,9 @@ pub fn print_summary(config: &Config) {
         "    › {} {}",
         t!("onboard.summary.api_key"),
         if config.api_key.is_some() {
-            style(t!("onboard.summary.api_key_set")).green().to_string()
+            ui::value(t!("onboard.summary.api_key_set"))
         } else {
-            style(t!("onboard.summary.api_key_not_set"))
-                .yellow()
-                .to_string()
+            ui::yellow(t!("onboard.summary.api_key_not_set"))
         }
     );
 
@@ -132,9 +127,7 @@ pub fn print_summary(config: &Config) {
         "    › {} {}",
         t!("onboard.summary.composio"),
         if config.composio.enabled {
-            style(t!("onboard.summary.composio_enabled"))
-                .green()
-                .to_string()
+            ui::value(t!("onboard.summary.composio_enabled"))
         } else {
             t!("onboard.summary.composio_disabled").to_string()
         }
@@ -145,13 +138,9 @@ pub fn print_summary(config: &Config) {
         "    › {} {}",
         t!("onboard.summary.secrets"),
         if config.secrets.encrypt {
-            style(t!("onboard.summary.secrets_encrypted"))
-                .green()
-                .to_string()
+            ui::value(t!("onboard.summary.secrets_encrypted"))
         } else {
-            style(t!("onboard.summary.secrets_plaintext"))
-                .yellow()
-                .to_string()
+            ui::yellow(t!("onboard.summary.secrets_plaintext"))
         }
     );
 
@@ -167,10 +156,7 @@ pub fn print_summary(config: &Config) {
     );
 
     println!();
-    println!(
-        "  {}",
-        style(t!("onboard.summary.next_steps")).white().bold()
-    );
+    println!("  {}", ui::header(t!("onboard.summary.next_steps")));
     println!();
 
     let mut step = 1u8;
@@ -179,12 +165,12 @@ pub fn print_summary(config: &Config) {
         let env_var = provider_env_var(config.default_provider.as_deref().unwrap_or("openrouter"));
         println!(
             "    {} {}",
-            style(format!("{step}.")).cyan().bold(),
+            ui::accent(format!("{step}.")),
             t!("onboard.summary.set_api_key")
         );
         println!(
             "       {}",
-            style(format!("export {env_var}=\"sk-...\"")).yellow()
+            ui::yellow(format!("export {env_var}=\"sk-...\""))
         );
         println!();
         step += 1;
@@ -194,47 +180,44 @@ pub fn print_summary(config: &Config) {
     if has_channels {
         println!(
             "    {} {} {}",
-            style(format!("{step}.")).cyan().bold(),
-            style(t!("onboard.summary.launch_channels")).white().bold(),
+            ui::accent(format!("{step}.")),
+            ui::header(t!("onboard.summary.launch_channels")),
             t!("onboard.summary.launch_channels_hint")
         );
-        println!("       {}", style("asteroniris channel start").yellow());
+        println!("       {}", ui::yellow("asteroniris channel start"));
         println!();
         step += 1;
     }
 
     println!(
         "    {} {}",
-        style(format!("{step}.")).cyan().bold(),
+        ui::accent(format!("{step}.")),
         t!("onboard.summary.send_message")
     );
     println!(
         "       {}",
-        style("asteroniris agent -m \"Hello, AsteronIris!\"").yellow()
+        ui::yellow("asteroniris agent -m \"Hello, AsteronIris!\"")
     );
     println!();
     step += 1;
 
     println!(
         "    {} {}",
-        style(format!("{step}.")).cyan().bold(),
+        ui::accent(format!("{step}.")),
         t!("onboard.summary.interactive_cli")
     );
-    println!("       {}", style("asteroniris agent").yellow());
+    println!("       {}", ui::yellow("asteroniris agent"));
     println!();
     step += 1;
 
     println!(
         "    {} {}",
-        style(format!("{step}.")).cyan().bold(),
+        ui::accent(format!("{step}.")),
         t!("onboard.summary.check_status")
     );
-    println!("       {}", style("asteroniris status").yellow());
+    println!("       {}", ui::yellow("asteroniris status"));
 
     println!();
-    println!(
-        "  ◆ {}",
-        style(t!("onboard.summary.happy_hacking")).white().bold()
-    );
+    println!("  ◆ {}", ui::header(t!("onboard.summary.happy_hacking")));
     println!();
 }

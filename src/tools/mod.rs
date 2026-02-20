@@ -72,10 +72,10 @@ pub fn all_tools(
         )));
     }
 
-    if let Some(key) = composio_key {
-        if !key.is_empty() {
-            tools.push(Box::new(ComposioTool::new(key)));
-        }
+    if let Some(key) = composio_key
+        && !key.is_empty()
+    {
+        tools.push(Box::new(ComposioTool::new(key)));
     }
 
     tools

@@ -8,15 +8,15 @@ use tempfile::TempDir;
 use super::memory_harness;
 
 use super::memory_harness::{
-    append_test_event, assert_event_count_parity, capture_recall_items_as_csv,
+    ParityRelation, append_test_event, assert_event_count_parity, capture_recall_items_as_csv,
     find_degraded_backends, forget_hard, format_capability_evidence, lancedb_fixture,
     markdown_memory_from_path, memory_count, recall_scoped_values, resolve_slot_value,
-    sqlite_fixture, sqlite_memory_from_path, ParityRelation,
+    sqlite_fixture, sqlite_memory_from_path,
 };
 use asteroniris::memory::{
-    capability_matrix_for_memory, ensure_forget_mode_supported, CapabilitySupport, ForgetMode,
-    MarkdownMemory, Memory, MemoryCategory, MemoryRecallItem, MemorySource, PrivacyLevel,
-    SqliteMemory,
+    CapabilitySupport, ForgetMode, MarkdownMemory, Memory, MemoryCategory, MemoryRecallItem,
+    MemorySource, PrivacyLevel, SqliteMemory, capability_matrix_for_memory,
+    ensure_forget_mode_supported,
 };
 
 // ── Helpers ────────────────────────────────────────────────────

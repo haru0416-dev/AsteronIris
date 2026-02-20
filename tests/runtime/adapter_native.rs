@@ -1,5 +1,5 @@
 use asteroniris::config::{RuntimeConfig, RuntimeKind};
-use asteroniris::runtime::{create_runtime, RuntimeAdapter};
+use asteroniris::runtime::{RuntimeAdapter, create_runtime};
 
 fn assert_native_contract(adapter: &dyn RuntimeAdapter) {
     assert_eq!(adapter.name(), "native");

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::cron::{due_jobs, reschedule_after_run, CronJob};
+use crate::cron::{CronJob, due_jobs, reschedule_after_run};
 use crate::security::SecurityPolicy;
 use anyhow::Result;
 use chrono::Utc;
@@ -249,8 +249,8 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::cron::{
-        add_job_with_metadata, due_jobs, list_jobs, CronJobKind, CronJobMetadata, CronJobOrigin,
-        AGENT_PENDING_CAP,
+        AGENT_PENDING_CAP, CronJobKind, CronJobMetadata, CronJobOrigin, add_job_with_metadata,
+        due_jobs, list_jobs,
     };
     use crate::security::SecurityPolicy;
     use chrono::Duration as ChronoDuration;
@@ -463,9 +463,10 @@ mod tests {
             &agent_metadata(expires_at),
         )
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("agent-origin queue cap reached (5 pending jobs)"));
+        assert!(
+            err.to_string()
+                .contains("agent-origin queue cap reached (5 pending jobs)")
+        );
     }
 
     #[test]

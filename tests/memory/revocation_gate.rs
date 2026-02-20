@@ -8,7 +8,7 @@ use asteroniris::memory::{
 use asteroniris::security::policy::TenantPolicyContext;
 use async_trait::async_trait;
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 fn insert_stale_belief_slot(conn: &Connection, entity_id: &str, slot_key: &str, value: &str) {
     let now = Utc::now().to_rfc3339();

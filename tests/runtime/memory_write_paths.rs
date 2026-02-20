@@ -6,10 +6,10 @@ use asteroniris::channels::build_system_prompt;
 use asteroniris::config::Config;
 use asteroniris::memory::{Memory, SqliteMemory};
 use asteroniris::providers::Provider;
-use asteroniris::security::policy::TenantPolicyContext;
 use asteroniris::security::SecurityPolicy;
+use asteroniris::security::policy::TenantPolicyContext;
 use async_trait::async_trait;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use tempfile::TempDir;
 
 struct FixedResponseProvider {

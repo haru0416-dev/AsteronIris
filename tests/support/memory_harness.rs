@@ -9,9 +9,9 @@ use tempfile::TempDir;
 
 use asteroniris::memory::embeddings::EmbeddingProvider;
 use asteroniris::memory::{
-    backend_capability_matrix, CapabilitySupport, ForgetMode, LanceDbMemory, MarkdownMemory,
-    Memory, MemoryCapabilityMatrix, MemoryCategory, MemoryEventInput, MemoryEventType,
-    MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery, SqliteMemory,
+    CapabilitySupport, ForgetMode, LanceDbMemory, MarkdownMemory, Memory, MemoryCapabilityMatrix,
+    MemoryCategory, MemoryEventInput, MemoryEventType, MemoryRecallItem, MemorySource,
+    PrivacyLevel, RecallQuery, SqliteMemory, backend_capability_matrix,
 };
 
 pub const LANCEDB_EMBEDDING_DIMS: usize = 8;

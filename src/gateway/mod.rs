@@ -27,13 +27,13 @@ use crate::channels::WhatsAppChannel;
 use crate::config::{Config, GatewayDefenseMode};
 use crate::memory::{self, Memory};
 use crate::providers::{self, Provider};
-use crate::security::pairing::{is_public_bind, PairingGuard};
 use crate::security::SecurityPolicy;
+use crate::security::pairing::{PairingGuard, is_public_bind};
 use anyhow::Result;
 use axum::{
+    Router,
     http::StatusCode,
     routing::{get, post},
-    Router,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -545,7 +545,7 @@ mod tests {
             temperature: 0.0,
             mem,
             auto_save: false,
-            webhook_secret: None,
+            webhook_secret: Some(Arc::from("test-secret")),
             pairing: Arc::new(PairingGuard::new(false, &[])),
             whatsapp: None,
             whatsapp_app_secret: None,
@@ -557,9 +557,12 @@ mod tests {
             }),
         };
 
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Webhook-Secret", "test-secret".parse().unwrap());
+
         let response = handle_webhook(
             State(state),
-            HeaderMap::new(),
+            headers,
             Ok(Json(WebhookBody {
                 message: "hello".to_string(),
             })),
@@ -653,9 +656,10 @@ mod tests {
     #[test]
     fn gateway_runtime_policy_context_is_disabled() {
         let ctx = autosave::gateway_runtime_policy_context();
-        assert!(ctx
-            .enforce_recall_scope(autosave::GATEWAY_AUTOSAVE_ENTITY_ID)
-            .is_ok());
+        assert!(
+            ctx.enforce_recall_scope(autosave::GATEWAY_AUTOSAVE_ENTITY_ID)
+                .is_ok()
+        );
     }
 
     #[test]

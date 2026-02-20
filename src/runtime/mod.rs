@@ -8,8 +8,7 @@ pub use traits::RuntimeAdapter;
 
 use crate::config::{RuntimeConfig, RuntimeKind};
 
-pub const DOCKER_ROLLOUT_GATE_MESSAGE: &str =
-    "runtime.kind='docker' is disabled by rollout gate. Set runtime.enable_docker_runtime=true to enable experimental docker runtime.";
+pub const DOCKER_ROLLOUT_GATE_MESSAGE: &str = "runtime.kind='docker' is disabled by rollout gate. Set runtime.enable_docker_runtime=true to enable experimental docker runtime.";
 
 /// Factory: create the right runtime from config
 pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeAdapter>> {

@@ -96,8 +96,9 @@ const fn default_contradiction_layer() -> MemoryLayer {
     MemoryLayer::Episodic
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, strum::Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum MemoryEventType {
     FactAdded,
     FactUpdated,
@@ -109,24 +110,6 @@ pub enum MemoryEventType {
     HardDeleted,
     TombstoneWritten,
     SummaryCompacted,
-}
-
-impl std::fmt::Display for MemoryEventType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let label = match self {
-            Self::FactAdded => "fact_added",
-            Self::FactUpdated => "fact_updated",
-            Self::PreferenceSet => "preference_set",
-            Self::PreferenceUnset => "preference_unset",
-            Self::InferredClaim => "inferred_claim",
-            Self::ContradictionMarked => "contradiction_marked",
-            Self::SoftDeleted => "soft_deleted",
-            Self::HardDeleted => "hard_deleted",
-            Self::TombstoneWritten => "tombstone_written",
-            Self::SummaryCompacted => "summary_compacted",
-        };
-        write!(f, "{label}")
-    }
 }
 
 impl std::str::FromStr for MemoryEventType {
@@ -266,10 +249,10 @@ fn validate_provenance(source: MemorySource, provenance: &MemoryProvenance) -> a
         anyhow::bail!("memory_event_input.provenance.reference must be <= 256 chars");
     }
 
-    if let Some(uri) = &provenance.evidence_uri {
-        if uri.trim().is_empty() {
-            anyhow::bail!("memory_event_input.provenance.evidence_uri must not be empty");
-        }
+    if let Some(uri) = &provenance.evidence_uri
+        && uri.trim().is_empty()
+    {
+        anyhow::bail!("memory_event_input.provenance.evidence_uri must not be empty");
     }
 
     Ok(())
@@ -713,8 +696,9 @@ impl MemoryCapabilityMatrix {
 }
 
 /// Memory categories for organization
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, strum::Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum MemoryCategory {
     /// Long-term facts, preferences, decisions
     Core,
@@ -723,18 +707,8 @@ pub enum MemoryCategory {
     /// Conversation context
     Conversation,
     /// User-defined custom category
+    #[strum(to_string = "{0}")]
     Custom(String),
-}
-
-impl std::fmt::Display for MemoryCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Core => write!(f, "core"),
-            Self::Daily => write!(f, "daily"),
-            Self::Conversation => write!(f, "conversation"),
-            Self::Custom(name) => write!(f, "{name}"),
-        }
-    }
 }
 
 #[async_trait]

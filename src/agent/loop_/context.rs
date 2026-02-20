@@ -1,7 +1,7 @@
 use crate::memory::{Memory, MemoryRecallItem, RecallQuery};
 use crate::security::external_content::{
-    decide_external_action, detect_injection_signals, sanitize_marker_collision,
-    wrap_external_content, ExternalAction,
+    ExternalAction, decide_external_action, detect_injection_signals, sanitize_marker_collision,
+    wrap_external_content,
 };
 use crate::security::policy::TenantPolicyContext;
 use anyhow::Result;
@@ -46,6 +46,7 @@ async fn allow_context_replay_item(mem: &dyn Memory, entry: &MemoryRecallItem) -
     matches!(resolved, Ok(Some(slot)) if slot.value == entry.value)
 }
 
+#[cfg(test)]
 async fn build_context(mem: &dyn Memory, user_msg: &str) -> String {
     build_context_with_policy(mem, "default", user_msg, TenantPolicyContext::disabled())
         .await

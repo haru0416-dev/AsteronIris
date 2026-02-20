@@ -15,10 +15,10 @@ use async_trait::async_trait;
 
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 
-use lancedb::index::scalar::FtsIndexBuilder;
-use lancedb::index::Index;
 use lancedb::Table;
-use tokio::sync::{mpsc, OnceCell};
+use lancedb::index::Index;
+use lancedb::index::scalar::FtsIndexBuilder;
+use tokio::sync::{OnceCell, mpsc};
 use tokio::task::JoinHandle;
 
 use std::path::Path;
@@ -72,7 +72,8 @@ struct ProjectionEntry {
     id: String,
     key: String,
     content: String,
-    category: MemoryCategory,
+    #[allow(dead_code)]
+    category: MemoryCategory, // retained for deserialization completeness
     timestamp: String,
     source: MemorySource,
     confidence: f64,
@@ -261,7 +262,7 @@ mod tests {
     use super::super::traits::MemoryLayer;
     use super::*;
     use tempfile::TempDir;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
 
     async fn test_upsert(mem: &LanceDbMemory, key: &str, content: &str, category: MemoryCategory) {
         mem.upsert_projection_entry(

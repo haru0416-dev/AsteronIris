@@ -398,6 +398,7 @@ impl MarkdownMemory {
             .find(|e| e.key == key || e.content.contains(key)))
     }
 
+    #[allow(dead_code)]
     async fn list_projection_entries(
         &self,
         category: Option<&MemoryCategory>,
@@ -702,9 +703,11 @@ mod tests {
 
         let results = mem.search_projection("Rust", 10).await.unwrap();
         assert!(results.len() >= 2);
-        assert!(results
-            .iter()
-            .all(|r| r.content.to_lowercase().contains("rust")));
+        assert!(
+            results
+                .iter()
+                .all(|r| r.content.to_lowercase().contains("rust"))
+        );
     }
 
     #[tokio::test]

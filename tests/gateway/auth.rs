@@ -6,8 +6,8 @@ use asteroniris::observability::traits::{Observer, ObserverEvent, ObserverMetric
 use asteroniris::security::pairing::PairingGuard;
 use reqwest::StatusCode;
 use serde_json::Value;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -114,10 +114,12 @@ async fn gateway_auth_enforces_deny_and_allows_authorized_path() {
         .json()
         .await
         .expect("unauthorized response should be json");
-    assert!(no_bearer_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("pair first")));
+    assert!(
+        no_bearer_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("pair first"))
+    );
 
     let no_secret = client
         .post(server.url("/webhook"))
@@ -131,10 +133,12 @@ async fn gateway_auth_enforces_deny_and_allows_authorized_path() {
         .json()
         .await
         .expect("invalid secret response should be json");
-    assert!(no_secret_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("X-Webhook-Secret")));
+    assert!(
+        no_secret_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("X-Webhook-Secret"))
+    );
 
     let authorized_bad_json = client
         .post(server.url("/webhook"))
@@ -149,10 +153,12 @@ async fn gateway_auth_enforces_deny_and_allows_authorized_path() {
         .json()
         .await
         .expect("bad json response should be json");
-    assert!(authorized_bad_json_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("Invalid JSON")));
+    assert!(
+        authorized_bad_json_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("Invalid JSON"))
+    );
 }
 
 #[tokio::test]
@@ -178,10 +184,11 @@ async fn gateway_audit_mode_records_violations_without_blocking() {
         .json()
         .await
         .expect("audit mode response should be json");
-    assert!(body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("Invalid JSON")));
+    assert!(
+        body.get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("Invalid JSON"))
+    );
 }
 
 #[tokio::test]
@@ -238,10 +245,11 @@ async fn gateway_kill_switch_forces_non_blocking_path() {
         .json()
         .await
         .expect("kill-switch response should be json");
-    assert!(body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("Invalid JSON")));
+    assert!(
+        body.get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("Invalid JSON"))
+    );
 }
 
 #[test]
@@ -317,10 +325,12 @@ async fn gateway_pair_endpoint_enforces_retry_after_lockout() {
         .json()
         .await
         .expect("lockout response should be json");
-    assert!(lockout_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("Too many failed attempts")));
+    assert!(
+        lockout_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("Too many failed attempts"))
+    );
     let retry_after = lockout_body
         .get("retry_after")
         .and_then(Value::as_u64)
@@ -352,10 +362,12 @@ async fn gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths() {
         .json()
         .await
         .expect("missing-token response should be json");
-    assert!(missing_token_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("pair first")));
+    assert!(
+        missing_token_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("pair first"))
+    );
 
     let invalid_token = client
         .post(server.url("/webhook"))
@@ -370,10 +382,12 @@ async fn gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths() {
         .json()
         .await
         .expect("invalid-token response should be json");
-    assert!(invalid_token_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("pair first")));
+    assert!(
+        invalid_token_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("pair first"))
+    );
 
     let missing_secret = client
         .post(server.url("/webhook"))
@@ -387,10 +401,12 @@ async fn gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths() {
         .json()
         .await
         .expect("missing-secret response should be json");
-    assert!(missing_secret_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("X-Webhook-Secret")));
+    assert!(
+        missing_secret_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("X-Webhook-Secret"))
+    );
 
     let mismatched_secret = client
         .post(server.url("/webhook"))
@@ -405,10 +421,12 @@ async fn gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths() {
         .json()
         .await
         .expect("mismatched-secret response should be json");
-    assert!(mismatched_secret_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("X-Webhook-Secret")));
+    assert!(
+        mismatched_secret_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("X-Webhook-Secret"))
+    );
 
     let authorized_bad_json = client
         .post(server.url("/webhook"))
@@ -423,10 +441,12 @@ async fn gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths() {
         .json()
         .await
         .expect("authorized bad-json response should be json");
-    assert!(authorized_bad_json_body
-        .get("error")
-        .and_then(Value::as_str)
-        .is_some_and(|msg| msg.contains("Invalid JSON")));
+    assert!(
+        authorized_bad_json_body
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("Invalid JSON"))
+    );
 }
 
 struct CountingObserver {

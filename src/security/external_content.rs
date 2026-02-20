@@ -244,9 +244,11 @@ mod tests {
         );
 
         assert_eq!(prepared.action, ExternalAction::Block);
-        assert!(!prepared
-            .model_input
-            .contains("ignore previous instructions"));
+        assert!(
+            !prepared
+                .model_input
+                .contains("ignore previous instructions")
+        );
         assert_eq!(prepared.persisted_summary.action, ExternalAction::Block);
     }
 }

@@ -1,7 +1,7 @@
 use super::batch::{build_row_batch, parse_entries_and_score, parse_rows};
 use super::{
-    BackfillJob, LanceDbMemory, ProjectionEntry, StoredRow, EMBEDDING_STATUS_READY,
-    LANCE_DISTANCE_COL, LANCE_SCORE_COL,
+    BackfillJob, EMBEDDING_STATUS_READY, LANCE_DISTANCE_COL, LANCE_SCORE_COL, LanceDbMemory,
+    ProjectionEntry, StoredRow,
 };
 
 use anyhow::Context;

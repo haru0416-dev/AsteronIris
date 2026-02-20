@@ -6,12 +6,12 @@ use asteroniris::agent::loop_::run_main_session_turn_for_integration_with_policy
 use asteroniris::config::Config;
 use asteroniris::memory::traits::MemoryLayer;
 use asteroniris::memory::{
-    run_consolidation_once, ConsolidationDisposition, ConsolidationInput, Memory, MemoryEventInput,
-    MemoryEventType, MemorySource, PrivacyLevel, RecallQuery, SqliteMemory, CONSOLIDATION_SLOT_KEY,
+    CONSOLIDATION_SLOT_KEY, ConsolidationDisposition, ConsolidationInput, Memory, MemoryEventInput,
+    MemoryEventType, MemorySource, PrivacyLevel, RecallQuery, SqliteMemory, run_consolidation_once,
 };
 use asteroniris::providers::Provider;
-use asteroniris::security::policy::TenantPolicyContext;
 use asteroniris::security::SecurityPolicy;
+use asteroniris::security::policy::TenantPolicyContext;
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::Value;

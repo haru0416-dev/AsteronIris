@@ -7,8 +7,7 @@
     clippy::struct_field_names,
     clippy::must_use_candidate,
     clippy::new_without_default,
-    clippy::return_self_not_must_use,
-    dead_code
+    clippy::return_self_not_must_use
 )]
 
 #[macro_use]
@@ -43,6 +42,7 @@ pub mod service;
 pub mod skills;
 pub mod tools;
 pub mod tunnel;
+pub mod ui;
 pub mod util;
 
 pub use config::Config;

@@ -53,11 +53,7 @@ impl IrcMessage {
         self.prefix.as_ref().and_then(|p| {
             let end = p.find('!').unwrap_or(p.len());
             let nick = &p[..end];
-            if nick.is_empty() {
-                None
-            } else {
-                Some(nick)
-            }
+            if nick.is_empty() { None } else { Some(nick) }
         })
     }
 }

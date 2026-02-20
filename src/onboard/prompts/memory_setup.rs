@@ -1,6 +1,6 @@
 use crate::config::MemoryConfig;
+use crate::ui::style as ui;
 use anyhow::Result;
-use console::style;
 use dialoguer::{Confirm, Select};
 
 use super::super::view::print_bullet;
@@ -31,19 +31,18 @@ pub fn setup_memory() -> Result<MemoryConfig> {
     let auto_save = if backend == "none" {
         false
     } else {
-        let save = Confirm::new()
+        Confirm::new()
             .with_prompt(format!("  {}", t!("onboard.memory.auto_save_prompt")))
             .default(true)
-            .interact()?;
-        save
+            .interact()?
     };
 
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!(
             "onboard.memory.confirm",
-            backend = style(backend).green(),
+            backend = ui::value(backend),
             auto_save = if auto_save { "on" } else { "off" }
         )
     );

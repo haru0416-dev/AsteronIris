@@ -1,13 +1,13 @@
 use super::oauth::{
-    claude_auth_status, codex_login_status, import_claude_oauth, import_codex_oauth,
-    load_codex_auth_file, OAuthProvider,
+    OAuthProvider, claude_auth_status, codex_login_status, import_claude_oauth, import_codex_oauth,
+    load_codex_auth_file,
 };
 use super::{
-    auth_profiles_path, canonical_provider_name, has_secret, AuthBroker, AuthProfile,
-    AuthProfileStore,
+    AuthBroker, AuthProfile, AuthProfileStore, auth_profiles_path, canonical_provider_name,
+    has_secret,
 };
 use crate::config::Config;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use dialoguer::Password;
 use std::io::IsTerminal;
 

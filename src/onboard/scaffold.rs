@@ -1,7 +1,8 @@
 use anyhow::Result;
-use console::style;
 use std::fs;
 use std::path::Path;
+
+use crate::ui::style as ui;
 
 use super::prompts::ProjectContext;
 
@@ -69,7 +70,7 @@ pub fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Result<
 
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!(
             "onboard.scaffold.created",
             created = created,
@@ -80,13 +81,10 @@ pub fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Result<
 
     // Show workspace tree
     println!();
-    println!("  {}", style(t!("onboard.scaffold.layout_header")).dim());
-    println!(
-        "  {}",
-        style(format!("  {}/", workspace_dir.display())).dim()
-    );
+    println!("  {}", ui::dim(t!("onboard.scaffold.layout_header")));
+    println!("  {}", ui::dim(format!("  {}/", workspace_dir.display())));
     for dir in &subdirs {
-        println!("  {}", style(format!("  ├── {dir}/")).dim());
+        println!("  {}", ui::dim(format!("  ├── {dir}/")));
     }
     for (i, (filename, _)) in files.iter().enumerate() {
         let prefix = if i == files.len() - 1 {
@@ -94,7 +92,7 @@ pub fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Result<
         } else {
             "├──"
         };
-        println!("  {}", style(format!("  {prefix} {filename}")).dim());
+        println!("  {}", ui::dim(format!("  {prefix} {filename}")));
     }
 
     Ok(())

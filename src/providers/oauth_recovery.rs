@@ -1,4 +1,4 @@
-use super::{sanitize_api_error, Provider};
+use super::{Provider, sanitize_api_error};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -61,10 +61,10 @@ impl OAuthRecoveryProvider {
     }
 
     fn is_auth_error(err: &anyhow::Error) -> bool {
-        if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>() {
-            if let Some(status) = reqwest_err.status() {
-                return status.as_u16() == 401 || status.as_u16() == 403;
-            }
+        if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>()
+            && let Some(status) = reqwest_err.status()
+        {
+            return status.as_u16() == 401 || status.as_u16() == 403;
         }
 
         let msg = err.to_string().to_ascii_lowercase();

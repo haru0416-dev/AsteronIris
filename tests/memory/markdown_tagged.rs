@@ -1,8 +1,8 @@
 use super::memory_harness;
 
 use super::memory_harness::{append_test_event, memory_count};
-use asteroniris::memory::traits::MemoryLayer;
 use asteroniris::memory::ForgetMode;
+use asteroniris::memory::traits::MemoryLayer;
 use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };

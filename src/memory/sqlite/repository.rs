@@ -6,7 +6,7 @@ use crate::memory::{
     MemorySource, RecallQuery,
 };
 use chrono::Local;
-use rusqlite::{params, ToSql};
+use rusqlite::{ToSql, params};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -411,6 +411,7 @@ impl SqliteMemory {
         Ok(out)
     }
 
+    #[allow(dead_code)]
     pub(super) async fn upsert_projection_entry(
         &self,
         key: &str,
@@ -467,6 +468,7 @@ impl SqliteMemory {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(super) async fn search_projection(
         &self,
         query: &str,
@@ -547,6 +549,7 @@ impl SqliteMemory {
         Ok(results)
     }
 
+    #[allow(dead_code)]
     fn fetch_entries_by_ids(
         conn: &rusqlite::Connection,
         ids: &[String],
@@ -582,6 +585,7 @@ impl SqliteMemory {
         Ok(out)
     }
 
+    #[allow(dead_code)]
     fn keyword_fallback_search(
         conn: &rusqlite::Connection,
         query: &str,
@@ -644,7 +648,7 @@ impl SqliteMemory {
         Ok(out)
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn fetch_projection_entry(
         &self,
         key: &str,
@@ -676,7 +680,7 @@ impl SqliteMemory {
         }
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn list_projection_entries(
         &self,
         category: Option<&MemoryCategory>,
@@ -724,7 +728,7 @@ impl SqliteMemory {
         Ok(results)
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn delete_projection_entry(&self, key: &str) -> anyhow::Result<bool> {
         let conn = self
             .conn
@@ -734,7 +738,7 @@ impl SqliteMemory {
         Ok(affected > 0)
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn count_projection_entries(&self) -> anyhow::Result<usize> {
         let conn = self
             .conn

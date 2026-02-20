@@ -1,6 +1,6 @@
 use crate::config::{ComposioConfig, SecretsConfig};
+use crate::ui::style as ui;
 use anyhow::Result;
-use console::style;
 use dialoguer::{Confirm, Input, Select};
 
 use super::super::view::print_bullet;
@@ -25,8 +25,8 @@ pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
         println!();
         println!(
             "  {} {}",
-            style(t!("onboard.tool_mode.composio_title")).white().bold(),
-            style(format!("— {}", t!("onboard.tool_mode.composio_subtitle"))).dim()
+            ui::header(t!("onboard.tool_mode.composio_title")),
+            ui::dim(format!("— {}", t!("onboard.tool_mode.composio_subtitle")))
         );
         print_bullet(&t!("onboard.tool_mode.composio_url_hint"));
         print_bullet(&t!("onboard.tool_mode.composio_desc"));
@@ -40,14 +40,14 @@ pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
         if api_key.trim().is_empty() {
             println!(
                 "  {} {}",
-                style("→").dim(),
+                ui::dim("→"),
                 t!("onboard.tool_mode.composio_skipped")
             );
             ComposioConfig::default()
         } else {
             println!(
                 "  {} {}",
-                style("✓").green().bold(),
+                ui::success("✓"),
                 t!("onboard.tool_mode.composio_confirm")
             );
             ComposioConfig {
@@ -59,7 +59,7 @@ pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
     } else {
         println!(
             "  {} {}",
-            style("✓").green().bold(),
+            ui::success("✓"),
             t!("onboard.tool_mode.sovereign_confirm")
         );
         ComposioConfig::default()
@@ -80,13 +80,13 @@ pub fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
     if encrypt {
         println!(
             "  {} {}",
-            style("✓").green().bold(),
+            ui::success("✓"),
             t!("onboard.tool_mode.encrypt_on")
         );
     } else {
         println!(
             "  {} {}",
-            style("✓").green().bold(),
+            ui::success("✓"),
             t!("onboard.tool_mode.encrypt_off")
         );
     }

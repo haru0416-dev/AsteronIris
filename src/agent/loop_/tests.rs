@@ -8,8 +8,8 @@ use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 use verify_repair::VERIFY_REPAIR_ESCALATION_SLOT_KEY;
 
@@ -594,13 +594,17 @@ async fn verify_repair_emits_escalation_event() {
         .unwrap()
         .expect("escalation event should be written");
 
-    assert!(escalation
-        .value
-        .contains("\"reason\":\"max_attempts_reached\""));
+    assert!(
+        escalation
+            .value
+            .contains("\"reason\":\"max_attempts_reached\"")
+    );
     assert!(escalation.value.contains("\"attempts\":2"));
-    assert!(escalation
-        .value
-        .contains("\"failure_class\":\"transient_failure\""));
+    assert!(
+        escalation
+            .value
+            .contains("\"failure_class\":\"transient_failure\"")
+    );
 }
 
 #[tokio::test]

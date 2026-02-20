@@ -26,9 +26,6 @@ use chacha20poly1305::{AeadCore, ChaCha20Poly1305, Key, Nonce};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Length of the random encryption key in bytes (256-bit, matches `ChaCha20`).
-const KEY_LEN: usize = 32;
-
 /// ChaCha20-Poly1305 nonce length in bytes.
 const NONCE_LEN: usize = 12;
 
@@ -257,6 +254,7 @@ fn hex_encode(data: &[u8]) -> String {
 
 /// Build the `/grant` argument for `icacls` using a normalized username.
 /// Returns `None` when the username is empty or whitespace-only.
+#[cfg(windows)]
 fn build_windows_icacls_grant_arg(username: &str) -> Option<String> {
     let normalized = username.trim();
     if normalized.is_empty() {
@@ -284,6 +282,9 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// ChaCha20Poly1305 key length (32 bytes / 256 bits).
+    const KEY_LEN: usize = 32;
 
     // ── SecretStore basics ─────────────────────────────────────
 
@@ -759,12 +760,14 @@ mod tests {
         assert!(hex_decode("zzzz").is_err());
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_icacls_grant_arg_rejects_empty_username() {
         assert_eq!(build_windows_icacls_grant_arg(""), None);
         assert_eq!(build_windows_icacls_grant_arg("   \t\n"), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_icacls_grant_arg_trims_username() {
         assert_eq!(
@@ -773,6 +776,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_icacls_grant_arg_preserves_valid_characters() {
         assert_eq!(

@@ -89,10 +89,10 @@ impl GitHubScout {
             reqwest::header::USER_AGENT,
             "AsteronIris-SkillForge/0.1".parse().expect("valid header"),
         );
-        if let Some(t) = token {
-            if let Ok(val) = format!("Bearer {t}").parse() {
-                headers.insert(reqwest::header::AUTHORIZATION, val);
-            }
+        if let Some(t) = token
+            && let Ok(val) = format!("Bearer {t}").parse()
+        {
+            headers.insert(reqwest::header::AUTHORIZATION, val);
         }
 
         let client = reqwest::Client::builder()
@@ -261,10 +261,10 @@ impl ClawHubScout {
             reqwest::header::USER_AGENT,
             "AsteronIris-SkillForge/0.1".parse().expect("valid header"),
         );
-        if let Some(t) = token {
-            if let Ok(val) = format!("Bearer {t}").parse() {
-                headers.insert(reqwest::header::AUTHORIZATION, val);
-            }
+        if let Some(t) = token
+            && let Ok(val) = format!("Bearer {t}").parse()
+        {
+            headers.insert(reqwest::header::AUTHORIZATION, val);
         }
 
         let client = reqwest::Client::builder()
@@ -377,7 +377,7 @@ impl ClawHubScout {
 #[async_trait]
 impl Scout for GitHubScout {
     async fn discover(&self) -> Result<Vec<ScoutResult>> {
-        let mut all: Vec<ScoutResult> = Vec::new();
+        let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
 
         for query in &self.queries {
             let url = format!(
@@ -432,7 +432,7 @@ impl Scout for GitHubScout {
 #[async_trait]
 impl Scout for HuggingFaceScout {
     async fn discover(&self) -> Result<Vec<ScoutResult>> {
-        let mut all: Vec<ScoutResult> = Vec::new();
+        let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
 
         for query in &self.queries {
             let url = format!(
@@ -500,7 +500,7 @@ impl Scout for HuggingFaceScout {
 #[async_trait]
 impl Scout for ClawHubScout {
     async fn discover(&self) -> Result<Vec<ScoutResult>> {
-        let mut all: Vec<ScoutResult> = Vec::new();
+        let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
 
         for query in &self.queries {
             let url = format!(

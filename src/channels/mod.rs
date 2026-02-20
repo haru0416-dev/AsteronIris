@@ -1,6 +1,26 @@
 pub mod cli;
 pub mod discord;
+#[cfg(feature = "email")]
 pub mod email_channel;
+#[cfg(not(feature = "email"))]
+pub mod email_channel {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct EmailConfig {
+        pub imap_host: String,
+        pub imap_port: u16,
+        pub imap_folder: String,
+        pub smtp_host: String,
+        pub smtp_port: u16,
+        pub smtp_tls: bool,
+        pub username: String,
+        pub password: String,
+        pub from_address: String,
+        pub poll_interval_secs: u64,
+        pub allowed_senders: Vec<String>,
+    }
+}
 pub mod imessage;
 pub mod ingress_policy;
 pub mod irc;
@@ -14,12 +34,13 @@ pub mod whatsapp;
 
 pub use cli::CliChannel;
 pub use discord::DiscordChannel;
+#[cfg(feature = "email")]
 pub use email_channel::EmailChannel;
 pub use imessage::IMessageChannel;
 pub use irc::IrcChannel;
 pub use matrix::MatrixChannel;
 pub use prompt_builder::{
-    build_system_prompt, build_system_prompt_with_options, SystemPromptOptions,
+    SystemPromptOptions, build_system_prompt, build_system_prompt_with_options,
 };
 pub use slack::SlackChannel;
 pub use telegram::TelegramChannel;
@@ -102,7 +123,7 @@ fn classify_health_result(
 
 #[allow(clippy::too_many_lines)]
 pub async fn doctor_channels(config: Config) -> Result<()> {
-    let mut channels: Vec<(&'static str, Arc<dyn Channel>)> = Vec::new();
+    let mut channels: Vec<(&'static str, Arc<dyn Channel>)> = Vec::with_capacity(8);
 
     if let Some(ref tg) = config.channels_config.telegram {
         channels.push((
@@ -167,6 +188,7 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
         ));
     }
 
+    #[cfg(feature = "email")]
     if let Some(ref email_cfg) = config.channels_config.email {
         channels.push(("Email", Arc::new(EmailChannel::new(email_cfg.clone()))));
     }
@@ -317,7 +339,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         );
     }
 
-    let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
+    let mut channels: Vec<Arc<dyn Channel>> = Vec::with_capacity(8);
 
     if let Some(ref tg) = config.channels_config.telegram {
         channels.push(Arc::new(TelegramChannel::new(
@@ -364,6 +386,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         )));
     }
 
+    #[cfg(feature = "email")]
     if let Some(ref email_cfg) = config.channels_config.email {
         channels.push(Arc::new(EmailChannel::new(email_cfg.clone())));
     }
@@ -415,7 +438,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<traits::ChannelMessage>(100);
 
-    let mut handles = Vec::new();
+    let mut handles = Vec::with_capacity(channels.len());
     for ch in &channels {
         handles.push(spawn_supervised_listener(
             ch.clone(),

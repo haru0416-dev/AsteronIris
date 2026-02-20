@@ -1,6 +1,7 @@
 use anyhow::Result;
-use console::style;
 use dialoguer::{Confirm, Input, Select};
+
+use crate::ui::style as ui;
 
 use super::super::view::print_bullet;
 
@@ -40,14 +41,10 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
                 ))
                 .interact_text()?;
             if token.trim().is_empty() {
-                println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+                println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
                 TunnelConfig::default()
             } else {
-                println!(
-                    "  {} Tunnel: {}",
-                    style("✓").green().bold(),
-                    style("Cloudflare").green()
-                );
+                println!("  {} Tunnel: {}", ui::success("✓"), ui::value("Cloudflare"));
                 TunnelConfig {
                     provider: "cloudflare".into(),
                     cloudflare: Some(CloudflareTunnelConfig { token }),
@@ -67,8 +64,8 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
                 .interact()?;
             println!(
                 "  {} Tunnel: {} ({})",
-                style("✓").green().bold(),
-                style("Tailscale").green(),
+                ui::success("✓"),
+                ui::value("Tailscale"),
                 if funnel {
                     t!("onboard.tunnel.tailscale_funnel_public")
                 } else {
@@ -91,18 +88,14 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
                 .with_prompt(format!("  {}", t!("onboard.tunnel.ngrok_token_prompt")))
                 .interact_text()?;
             if auth_token.trim().is_empty() {
-                println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+                println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
                 TunnelConfig::default()
             } else {
                 let domain: String = Input::new()
                     .with_prompt(format!("  {}", t!("onboard.tunnel.ngrok_domain_prompt")))
                     .allow_empty(true)
                     .interact_text()?;
-                println!(
-                    "  {} Tunnel: {}",
-                    style("✓").green().bold(),
-                    style("ngrok").green()
-                );
+                println!("  {} Tunnel: {}", ui::success("✓"), ui::value("ngrok"));
                 TunnelConfig {
                     provider: "ngrok".into(),
                     ngrok: Some(NgrokTunnelConfig {
@@ -126,14 +119,14 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
                 .with_prompt(format!("  {}", t!("onboard.tunnel.custom_prompt")))
                 .interact_text()?;
             if cmd.trim().is_empty() {
-                println!("  {} {}", style("→").dim(), t!("onboard.channels.skipped"));
+                println!("  {} {}", ui::dim("→"), t!("onboard.channels.skipped"));
                 TunnelConfig::default()
             } else {
                 println!(
                     "  {} Tunnel: {} ({})",
-                    style("✓").green().bold(),
-                    style(t!("onboard.tunnel.confirm_custom")).green(),
-                    style(&cmd).dim()
+                    ui::success("✓"),
+                    ui::value(t!("onboard.tunnel.confirm_custom")),
+                    ui::dim(&cmd)
                 );
                 TunnelConfig {
                     provider: "custom".into(),
@@ -149,8 +142,8 @@ pub fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
         _ => {
             println!(
                 "  {} Tunnel: {}",
-                style("✓").green().bold(),
-                style(t!("onboard.tunnel.confirm_none")).dim()
+                ui::success("✓"),
+                ui::dim(t!("onboard.tunnel.confirm_none"))
             );
             TunnelConfig::default()
         }

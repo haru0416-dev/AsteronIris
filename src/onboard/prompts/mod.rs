@@ -7,7 +7,7 @@ mod tunnel;
 mod workspace;
 
 pub use channels::setup_channels;
-pub use context::{setup_project_context, ProjectContext};
+pub use context::{ProjectContext, setup_project_context};
 pub use memory_setup::setup_memory;
 pub use provider::setup_provider;
 pub use tool_mode::setup_tool_mode;

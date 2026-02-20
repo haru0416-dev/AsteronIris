@@ -10,7 +10,7 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::Instant;
 
 /// Maximum failed pairing attempts before lockout.
@@ -30,7 +30,7 @@ pub struct PairingGuard {
     /// One-time pairing code (generated on startup, consumed on first pair).
     pairing_code: Mutex<Option<String>>,
     /// Set of SHA-256 hashed bearer tokens (persisted across restarts).
-    paired_tokens: Mutex<HashSet<String>>,
+    paired_tokens: RwLock<HashSet<String>>,
     /// Brute-force protection: failed attempt counter + lockout time.
     failed_attempts: Mutex<(u32, Option<Instant>)>,
 }
@@ -63,7 +63,7 @@ impl PairingGuard {
         Self {
             require_pairing,
             pairing_code: Mutex::new(code),
-            paired_tokens: Mutex::new(tokens),
+            paired_tokens: RwLock::new(tokens),
             failed_attempts: Mutex::new((0, None)),
         }
     }
@@ -90,12 +90,12 @@ impl PairingGuard {
                 .failed_attempts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let (count, Some(locked_at)) = &*attempts {
-                if *count >= MAX_PAIR_ATTEMPTS {
-                    let elapsed = locked_at.elapsed().as_secs();
-                    if elapsed < PAIR_LOCKOUT_SECS {
-                        return Err(PAIR_LOCKOUT_SECS - elapsed);
-                    }
+            if let (count, Some(locked_at)) = &*attempts
+                && *count >= MAX_PAIR_ATTEMPTS
+            {
+                let elapsed = locked_at.elapsed().as_secs();
+                if elapsed < PAIR_LOCKOUT_SECS {
+                    return Err(PAIR_LOCKOUT_SECS - elapsed);
                 }
             }
         }
@@ -105,28 +105,28 @@ impl PairingGuard {
                 .pairing_code
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(ref expected) = *pairing_code {
-                if constant_time_eq(code.trim(), expected.trim()) {
-                    // Reset failed attempts on success
-                    {
-                        let mut attempts = self
-                            .failed_attempts
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        *attempts = (0, None);
-                    }
-                    let token = generate_token();
-                    let mut tokens = self
-                        .paired_tokens
+            if let Some(ref expected) = *pairing_code
+                && constant_time_eq(code.trim(), expected.trim())
+            {
+                // Reset failed attempts on success
+                {
+                    let mut attempts = self
+                        .failed_attempts
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    tokens.insert(hash_token(&token));
-
-                    // Consume the pairing code so it cannot be reused
-                    *pairing_code = None;
-
-                    return Ok(Some(token));
+                    *attempts = (0, None);
                 }
+                let token = generate_token();
+                let mut tokens = self
+                    .paired_tokens
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                tokens.insert(hash_token(&token));
+
+                // Consume the pairing code so it cannot be reused
+                *pairing_code = None;
+
+                return Ok(Some(token));
             }
         }
 
@@ -153,7 +153,7 @@ impl PairingGuard {
         let hashed = hash_token(token);
         let tokens = self
             .paired_tokens
-            .lock()
+            .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         tokens.contains(&hashed)
     }
@@ -162,7 +162,7 @@ impl PairingGuard {
     pub fn is_paired(&self) -> bool {
         let tokens = self
             .paired_tokens
-            .lock()
+            .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         !tokens.is_empty()
     }
@@ -171,7 +171,7 @@ impl PairingGuard {
     pub fn tokens(&self) -> Vec<String> {
         let tokens = self
             .paired_tokens
-            .lock()
+            .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         tokens.iter().cloned().collect()
     }

@@ -28,6 +28,7 @@ pub(super) fn apply_external_ingress_policy(
 pub(super) enum PolicyViolation {
     MissingOrInvalidBearer,
     MissingOrInvalidWebhookSecret,
+    NoAuthConfigured,
 }
 
 impl PolicyViolation {
@@ -35,6 +36,7 @@ impl PolicyViolation {
         match self {
             Self::MissingOrInvalidBearer => "missing_or_invalid_bearer",
             Self::MissingOrInvalidWebhookSecret => "missing_or_invalid_webhook_secret",
+            Self::NoAuthConfigured => "no_auth_configured",
         }
     }
 
@@ -49,6 +51,12 @@ impl PolicyViolation {
             Self::MissingOrInvalidWebhookSecret => {
                 let err = serde_json::json!({"error": "Unauthorized — invalid or missing X-Webhook-Secret header"});
                 (StatusCode::UNAUTHORIZED, Json(err))
+            }
+            Self::NoAuthConfigured => {
+                let err = serde_json::json!({
+                    "error": "Forbidden — no authentication configured. Pair first via POST /pair or configure a webhook secret."
+                });
+                (StatusCode::FORBIDDEN, Json(err))
             }
         }
     }

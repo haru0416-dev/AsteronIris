@@ -8,7 +8,7 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::unnecessary_map_or)]
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
@@ -25,6 +25,23 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use super::traits::{Channel, ChannelMessage};
+
+/// Escape a string for use inside IMAP double-quoted strings (RFC 3501 §4.3).
+/// Backslash and double-quote are the only characters that need escaping.
+fn escape_imap_quoted(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\0' | '\r' | '\n' => {}
+            _ => out.push(ch),
+        }
+    }
+    out
+}
 
 /// Email channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,13 +182,12 @@ impl EmailChannel {
         }
         for part in parsed.attachments() {
             let part: &mail_parser::MessagePart = part;
-            if let Some(ct) = MimeHeaders::content_type(part) {
-                if ct.ctype() == "text" {
-                    if let Ok(text) = std::str::from_utf8(part.contents()) {
-                        let name = MimeHeaders::attachment_name(part).unwrap_or("file");
-                        return format!("[Attachment: {}]\n{}", name, text);
-                    }
-                }
+            if let Some(ct) = MimeHeaders::content_type(part)
+                && ct.ctype() == "text"
+                && let Ok(text) = std::str::from_utf8(part.contents())
+            {
+                let name = MimeHeaders::attachment_name(part).unwrap_or("file");
+                return format!("[Attachment: {}]\n{}", name, text);
             }
         }
         "(no readable content)".to_string()
@@ -244,7 +260,11 @@ impl EmailChannel {
         let login_resp = send_cmd(
             &mut tls,
             "A1",
-            &format!("LOGIN \"{}\" \"{}\"", config.username, config.password),
+            &format!(
+                "LOGIN \"{}\" \"{}\"",
+                escape_imap_quoted(&config.username),
+                escape_imap_quoted(&config.password)
+            ),
         )?;
         if !login_resp.last().map_or(false, |l| l.contains("OK")) {
             return Err(anyhow!("IMAP login failed"));
@@ -254,7 +274,7 @@ impl EmailChannel {
         let _select = send_cmd(
             &mut tls,
             "A2",
-            &format!("SELECT \"{}\"", config.imap_folder),
+            &format!("SELECT \"{}\"", escape_imap_quoted(&config.imap_folder)),
         )?;
 
         // Search unseen

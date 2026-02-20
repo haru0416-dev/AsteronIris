@@ -4,7 +4,7 @@ use crate::persona::state_header::StateHeaderV1;
 use crate::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use crate::providers::Provider;
 use crate::security::writeback_guard::{
-    validate_writeback_payload, ImmutableStateHeader, SelfTaskWriteback, WritebackGuardVerdict,
+    ImmutableStateHeader, SelfTaskWriteback, WritebackGuardVerdict, validate_writeback_payload,
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};

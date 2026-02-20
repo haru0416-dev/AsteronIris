@@ -5,17 +5,17 @@ use crate::util::truncate_with_ellipsis;
 use axum::{
     body::Bytes,
     extract::{Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
 };
 
 use super::autosave::{
-    gateway_runtime_policy_context, gateway_webhook_autosave_event,
-    gateway_whatsapp_autosave_event, GATEWAY_AUTOSAVE_ENTITY_ID,
+    GATEWAY_AUTOSAVE_ENTITY_ID, gateway_runtime_policy_context, gateway_webhook_autosave_event,
+    gateway_whatsapp_autosave_event,
 };
 use super::defense::{
-    apply_external_ingress_policy, policy_accounting_response, policy_violation_response,
-    PolicyViolation,
+    PolicyViolation, apply_external_ingress_policy, policy_accounting_response,
+    policy_violation_response,
 };
 use super::signature::verify_whatsapp_signature;
 use super::{AppState, WebhookBody, WhatsAppVerifyQuery};
@@ -74,19 +74,21 @@ pub(super) async fn handle_webhook(
     headers: HeaderMap,
     body: Result<Json<WebhookBody>, axum::extract::rejection::JsonRejection>,
 ) -> impl IntoResponse {
-    // ── Bearer token auth (pairing) ──
-    if state.pairing.require_pairing() {
+    // ── Bearer token auth ──
+    // Always check bearer token when paired tokens exist, regardless of
+    // whether `require_pairing` is enabled.  Pairing controls the initial
+    // enrollment flow, NOT whether runtime endpoints need authentication.
+    if state.pairing.is_paired() {
         let auth = headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         let token = auth.strip_prefix("Bearer ").unwrap_or("");
-        if !state.pairing.is_authenticated(token) {
-            if let Some(response) =
+        if !state.pairing.is_authenticated(token)
+            && let Some(response) =
                 policy_violation_response(&state, PolicyViolation::MissingOrInvalidBearer)
-            {
-                return response;
-            }
+        {
+            return response;
         }
     }
 
@@ -106,6 +108,17 @@ pub(super) async fn handle_webhook(
                 }
             }
         }
+    }
+
+    // ── Reject if no authentication mechanism is configured at all ──
+    // Prevents accidental unauthenticated access when pairing is disabled
+    // and no webhook secret is set.
+    if !state.pairing.is_paired()
+        && state.webhook_secret.is_none()
+        && let Some(response) =
+            policy_violation_response(&state, PolicyViolation::NoAuthConfigured)
+    {
+        return response;
     }
 
     // ── Parse body ──

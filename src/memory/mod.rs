@@ -2,6 +2,7 @@ pub mod chunker;
 pub mod consolidation;
 pub mod embeddings;
 pub mod hygiene;
+#[cfg(feature = "vector-search")]
 pub mod lancedb;
 pub mod markdown;
 pub mod sqlite;
@@ -10,9 +11,10 @@ pub mod vector;
 
 #[allow(unused_imports)]
 pub use consolidation::{
-    enqueue_consolidation_task, run_consolidation_once, ConsolidationDisposition,
-    ConsolidationInput, ConsolidationOutput, CONSOLIDATION_SLOT_KEY,
+    CONSOLIDATION_SLOT_KEY, ConsolidationDisposition, ConsolidationInput, ConsolidationOutput,
+    enqueue_consolidation_task, run_consolidation_once,
 };
+#[cfg(feature = "vector-search")]
 pub use lancedb::LanceDbMemory;
 pub use markdown::MarkdownMemory;
 pub use sqlite::SqliteMemory;
@@ -38,13 +40,13 @@ const SQLITE_CAPABILITY_MATRIX: MemoryCapabilityMatrix = MemoryCapabilityMatrix 
     unsupported_contract: "sqlite supports soft/hard/tombstone forget semantics",
 };
 
+#[cfg(feature = "vector-search")]
 const LANCEDB_CAPABILITY_MATRIX: MemoryCapabilityMatrix = MemoryCapabilityMatrix {
     backend: "lancedb",
     forget_soft: CapabilitySupport::Degraded,
     forget_hard: CapabilitySupport::Supported,
     forget_tombstone: CapabilitySupport::Degraded,
-    unsupported_contract:
-        "lancedb soft/tombstone are marker rewrites; hard forget removes projection",
+    unsupported_contract: "lancedb soft/tombstone are marker rewrites; hard forget removes projection",
 };
 
 const MARKDOWN_CAPABILITY_MATRIX: MemoryCapabilityMatrix = MemoryCapabilityMatrix {
@@ -55,11 +57,16 @@ const MARKDOWN_CAPABILITY_MATRIX: MemoryCapabilityMatrix = MemoryCapabilityMatri
     unsupported_contract: "markdown is append-only; hard forget cannot physically delete",
 };
 
+#[cfg(feature = "vector-search")]
 const BACKEND_CAPABILITY_MATRIX: [MemoryCapabilityMatrix; 3] = [
     SQLITE_CAPABILITY_MATRIX,
     LANCEDB_CAPABILITY_MATRIX,
     MARKDOWN_CAPABILITY_MATRIX,
 ];
+
+#[cfg(not(feature = "vector-search"))]
+const BACKEND_CAPABILITY_MATRIX: [MemoryCapabilityMatrix; 2] =
+    [SQLITE_CAPABILITY_MATRIX, MARKDOWN_CAPABILITY_MATRIX];
 
 pub fn backend_capability_matrix() -> &'static [MemoryCapabilityMatrix] {
     &BACKEND_CAPABILITY_MATRIX
@@ -117,6 +124,7 @@ pub fn create_memory(
             )?;
             Ok(Box::new(mem))
         }
+        #[cfg(feature = "vector-search")]
         "lancedb" => {
             let embedder: Arc<dyn embeddings::EmbeddingProvider> =
                 Arc::from(embeddings::create_embedding_provider(

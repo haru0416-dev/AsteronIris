@@ -3,6 +3,7 @@ use crate::memory::traits::MemoryLayer;
 use crate::memory::{MemoryCategory, MemorySource, PrivacyLevel};
 
 impl SqliteMemory {
+    #[allow(dead_code)]
     pub(super) fn category_to_str(cat: &MemoryCategory) -> String {
         match cat {
             MemoryCategory::Core => "core".into(),
@@ -12,6 +13,7 @@ impl SqliteMemory {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn str_to_category(s: &str) -> MemoryCategory {
         match s {
             "core" => MemoryCategory::Core,

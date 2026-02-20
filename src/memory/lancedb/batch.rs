@@ -23,14 +23,14 @@ pub(super) fn build_row_batch(
     let privacy_level = Arc::new(StringArray::from(vec![Some(row.privacy_level.as_str())]));
     let occurred_at = Arc::new(StringArray::from(vec![Some(row.occurred_at.as_str())]));
     let layer = Arc::new(StringArray::from(vec![Some(row.layer.as_str())]));
-    let provenance_source_class = Arc::new(StringArray::from(vec![row
-        .provenance_source_class
-        .as_deref()]));
+    let provenance_source_class = Arc::new(StringArray::from(vec![
+        row.provenance_source_class.as_deref(),
+    ]));
     let provenance_reference =
         Arc::new(StringArray::from(vec![row.provenance_reference.as_deref()]));
-    let provenance_evidence_uri = Arc::new(StringArray::from(vec![row
-        .provenance_evidence_uri
-        .as_deref()]));
+    let provenance_evidence_uri = Arc::new(StringArray::from(vec![
+        row.provenance_evidence_uri.as_deref(),
+    ]));
     let created_at = Arc::new(StringArray::from(vec![Some(row.created_at.as_str())]));
     let updated_at = Arc::new(StringArray::from(vec![Some(row.updated_at.as_str())]));
     let status = Arc::new(StringArray::from(vec![Some(row.embedding_status.as_str())]));

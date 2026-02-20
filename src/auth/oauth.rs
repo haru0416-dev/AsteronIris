@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use dialoguer::Password;
 use directories::UserDirs;
 use serde::Deserialize;

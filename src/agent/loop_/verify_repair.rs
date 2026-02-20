@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::memory::{Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct VerifyRepairCaps {

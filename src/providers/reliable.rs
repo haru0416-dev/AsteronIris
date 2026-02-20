@@ -5,22 +5,22 @@ use std::time::Duration;
 /// Check if an error is non-retryable (client errors that won't resolve with retries).
 fn is_non_retryable(err: &anyhow::Error) -> bool {
     // Check for reqwest status errors (returned by .error_for_status())
-    if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>() {
-        if let Some(status) = reqwest_err.status() {
-            let code = status.as_u16();
-            // 4xx client errors are non-retryable, except:
-            // - 429 Too Many Requests (rate limiting, transient)
-            // - 408 Request Timeout (transient)
-            return status.is_client_error() && code != 429 && code != 408;
-        }
+    if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>()
+        && let Some(status) = reqwest_err.status()
+    {
+        let code = status.as_u16();
+        // 4xx client errors are non-retryable, except:
+        // - 429 Too Many Requests (rate limiting, transient)
+        // - 408 Request Timeout (transient)
+        return status.is_client_error() && code != 429 && code != 408;
     }
     // String fallback: scan for any 4xx status code in error message
     let msg = err.to_string();
     for word in msg.split(|c: char| !c.is_ascii_digit()) {
-        if let Ok(code) = word.parse::<u16>() {
-            if (400..500).contains(&code) {
-                return code != 429 && code != 408;
-            }
+        if let Ok(code) = word.parse::<u16>()
+            && (400..500).contains(&code)
+        {
+            return code != 429 && code != 408;
         }
     }
     false
@@ -126,8 +126,8 @@ impl Provider for ReliableProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct MockProvider {
         calls: Arc<AtomicUsize>,

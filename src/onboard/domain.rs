@@ -2,13 +2,19 @@ use anyhow::Result;
 
 pub fn default_model_for_provider(provider: &str) -> String {
     match provider {
-        "anthropic" => "claude-sonnet-4-20250514".into(),
-        "openai" => "gpt-4o".into(),
+        "anthropic" => "claude-sonnet-4-6".into(),
+        "openai" => "gpt-5.2".into(),
         "ollama" => "llama3.2".into(),
         "groq" => "llama-3.3-70b-versatile".into(),
         "deepseek" => "deepseek-chat".into(),
-        "gemini" | "google" | "google-gemini" => "gemini-2.0-flash".into(),
-        _ => "anthropic/claude-sonnet-4-20250514".into(),
+        "gemini" | "google" | "google-gemini" => "gemini-2.5-flash".into(),
+        "mistral" => "mistral-large-2512".into(),
+        "xai" | "grok" => "grok-4-0709".into(),
+        "cohere" => "command-a-03-2025".into(),
+        "moonshot" | "kimi" => "kimi-k2.5".into(),
+        "glm" | "zhipu" => "glm-4.7".into(),
+        "minimax" => "MiniMax-M2.1".into(),
+        _ => "anthropic/claude-sonnet-4-6".into(),
     }
 }
 

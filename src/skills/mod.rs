@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
+use crate::ui::style as ui;
+
 const OPEN_SKILLS_REPO_URL: &str = "https://github.com/besoeasy/open-skills";
 const OPEN_SKILLS_SYNC_MARKER: &str = ".asteroniris-open-skills-sync";
 const OPEN_SKILLS_SYNC_INTERVAL_SECS: u64 = 60 * 60 * 24 * 7;
@@ -111,10 +113,10 @@ fn load_skills_from_directory(skills_dir: &Path) -> Vec<Skill> {
             if let Ok(skill) = load_skill_toml(&manifest_path) {
                 skills.push(skill);
             }
-        } else if md_path.exists() {
-            if let Ok(skill) = load_skill_md(&md_path, &path) {
-                skills.push(skill);
-            }
+        } else if md_path.exists()
+            && let Ok(skill) = load_skill_md(&md_path, &path)
+        {
+            skills.push(skill);
         }
     }
 
@@ -209,14 +211,14 @@ fn ensure_open_skills_repo() -> Option<PathBuf> {
 }
 
 fn clone_open_skills_repo(repo_dir: &Path) -> bool {
-    if let Some(parent) = repo_dir.parent() {
-        if let Err(err) = std::fs::create_dir_all(parent) {
-            tracing::warn!(
-                "failed to create open-skills parent directory {}: {err}",
-                parent.display()
-            );
-            return false;
-        }
+    if let Some(parent) = repo_dir.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!(
+            "failed to create open-skills parent directory {}: {err}",
+            parent.display()
+        );
+        return false;
     }
 
     let output = Command::new("git")
@@ -461,7 +463,9 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
                 println!("No skills installed.");
                 println!();
                 println!("  Create one: mkdir -p ~/.asteroniris/workspace/skills/my-skill");
-                println!("              echo '# My Skill' > ~/.asteroniris/workspace/skills/my-skill/SKILL.md");
+                println!(
+                    "              echo '# My Skill' > ~/.asteroniris/workspace/skills/my-skill/SKILL.md"
+                );
                 println!();
                 println!("  Or install: asteroniris skills install <github-url>");
             } else {
@@ -470,8 +474,8 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
                 for skill in &skills {
                     println!(
                         "  {} {} — {}",
-                        console::style(&skill.name).white().bold(),
-                        console::style(format!("v{}", skill.version)).dim(),
+                        ui::header(&skill.name),
+                        ui::dim(format!("v{}", skill.version)),
                         skill.description
                     );
                     if !skill.tools.is_empty() {
@@ -507,10 +511,7 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
                     .output()?;
 
                 if output.status.success() {
-                    println!(
-                        "  {} Skill installed successfully!",
-                        console::style("✓").green().bold()
-                    );
+                    println!("  {} Skill installed successfully!", ui::success("✓"));
                     println!("  Restart `asteroniris channel start` to activate.");
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -528,11 +529,7 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
                 #[cfg(unix)]
                 {
                     std::os::unix::fs::symlink(&src, &dest)?;
-                    println!(
-                        "  {} Skill linked: {}",
-                        console::style("✓").green().bold(),
-                        dest.display()
-                    );
+                    println!("  {} Skill linked: {}", ui::success("✓"), dest.display());
                 }
                 #[cfg(windows)]
                 {
@@ -540,11 +537,7 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
                     // fall back to directory junction, then copy
                     use std::os::windows::fs::symlink_dir;
                     if symlink_dir(&src, &dest).is_ok() {
-                        println!(
-                            "  {} Skill linked: {}",
-                            console::style("✓").green().bold(),
-                            dest.display()
-                        );
+                        println!("  {} Skill linked: {}", ui::success("✓"), dest.display());
                     } else {
                         // Try junction as fallback (works without admin)
                         let junction_result = std::process::Command::new("cmd")
@@ -556,17 +549,13 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
                         if junction_result.is_ok() && junction_result.unwrap().status.success() {
                             println!(
                                 "  {} Skill linked (junction): {}",
-                                console::style("✓").green().bold(),
+                                ui::success("✓"),
                                 dest.display()
                             );
                         } else {
                             // Final fallback: copy the directory
                             copy_dir_recursive(&src, &dest)?;
-                            println!(
-                                "  {} Skill copied: {}",
-                                console::style("✓").green().bold(),
-                                dest.display()
-                            );
+                            println!("  {} Skill copied: {}", ui::success("✓"), dest.display());
                         }
                     }
                 }
@@ -574,11 +563,7 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
                 {
                     // On other platforms, copy the directory
                     copy_dir_recursive(&src, &dest)?;
-                    println!(
-                        "  {} Skill copied: {}",
-                        console::style("✓").green().bold(),
-                        dest.display()
-                    );
+                    println!("  {} Skill copied: {}", ui::success("✓"), dest.display());
                 }
             }
 
@@ -596,10 +581,10 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
             let canonical_skills = skills_dir(workspace_dir)
                 .canonicalize()
                 .unwrap_or_else(|_| skills_dir(workspace_dir));
-            if let Ok(canonical_skill) = skill_path.canonicalize() {
-                if !canonical_skill.starts_with(&canonical_skills) {
-                    anyhow::bail!("Skill path escapes skills directory: {name}");
-                }
+            if let Ok(canonical_skill) = skill_path.canonicalize()
+                && !canonical_skill.starts_with(&canonical_skills)
+            {
+                anyhow::bail!("Skill path escapes skills directory: {name}");
             }
 
             if !skill_path.exists() {
@@ -607,11 +592,7 @@ pub fn handle_command(command: crate::SkillCommands, workspace_dir: &Path) -> Re
             }
 
             std::fs::remove_dir_all(&skill_path)?;
-            println!(
-                "  {} Skill '{}' removed.",
-                console::style("✓").green().bold(),
-                name
-            );
+            println!("  {} Skill '{}' removed.", ui::success("✓"), name);
             Ok(())
         }
     }

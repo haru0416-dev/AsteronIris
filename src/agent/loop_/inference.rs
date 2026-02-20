@@ -1,8 +1,8 @@
 use super::RuntimeMemoryWriteContext;
 use crate::memory::traits::MemoryLayer;
 use crate::memory::{Memory, MemoryInferenceEvent, MemoryProvenance, MemorySource};
-use crate::observability::traits::AutonomyLifecycleSignal;
 use crate::observability::Observer;
+use crate::observability::traits::AutonomyLifecycleSignal;
 use anyhow::Result;
 use std::sync::Arc;
 

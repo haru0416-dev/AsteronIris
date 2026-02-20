@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
-use console::style;
 use dialoguer::{Confirm, Input};
 use std::fs;
 use std::path::PathBuf;
+
+use crate::ui::style as ui;
 
 use super::super::domain::validate_non_empty;
 use super::super::view::print_bullet;
@@ -15,7 +16,7 @@ pub fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
 
     print_bullet(&t!(
         "onboard.workspace.default_location",
-        path = style(default_dir.display()).green()
+        path = ui::value(default_dir.display())
     ));
 
     let use_default = Confirm::new()
@@ -37,10 +38,10 @@ pub fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
 
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!(
             "onboard.workspace.confirm",
-            path = style(workspace_dir.display()).green()
+            path = ui::value(workspace_dir.display())
         )
     );
 

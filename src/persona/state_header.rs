@@ -1,5 +1,5 @@
 use crate::config::PersonaConfig;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 

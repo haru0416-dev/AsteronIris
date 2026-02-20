@@ -5,7 +5,7 @@ use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
     SqliteMemory,
 };
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use tempfile::TempDir;
 
 #[tokio::test]

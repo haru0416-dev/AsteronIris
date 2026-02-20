@@ -1,4 +1,4 @@
-use asteroniris::security::external_content::{prepare_external_content, ExternalAction};
+use asteroniris::security::external_content::{ExternalAction, prepare_external_content};
 
 #[test]
 fn external_ingress_never_replays_blocked_raw_payload_to_model_input() {

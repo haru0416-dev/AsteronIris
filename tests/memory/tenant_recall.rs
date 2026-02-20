@@ -5,11 +5,11 @@ use asteroniris::agent::loop_::run_main_session_turn_for_integration_with_policy
 use asteroniris::config::Config;
 use asteroniris::memory::{Memory, MemoryCategory, RecallQuery};
 use asteroniris::providers::Provider;
-use asteroniris::security::policy::{
-    TenantPolicyContext, TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR,
-    TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR,
-};
 use asteroniris::security::SecurityPolicy;
+use asteroniris::security::policy::{
+    TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR, TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR,
+    TenantPolicyContext,
+};
 use asteroniris::tools::memory_recall::MemoryRecallTool;
 use asteroniris::tools::traits::Tool;
 use async_trait::async_trait;

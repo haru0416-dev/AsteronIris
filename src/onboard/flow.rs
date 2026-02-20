@@ -3,14 +3,15 @@ use crate::config::{
     MemoryConfig, ObservabilityConfig, PersonaConfig, RuntimeConfig, SecretsConfig,
 };
 use anyhow::{Context, Result};
-use console::style;
 use dialoguer::Confirm;
 use std::fs;
 
+use crate::ui::style as ui;
+
 use super::domain::default_model_for_provider;
 use super::prompts::{
-    setup_channels, setup_memory, setup_project_context, setup_provider, setup_tool_mode,
-    setup_tunnel, setup_workspace, ProjectContext,
+    ProjectContext, setup_channels, setup_memory, setup_project_context, setup_provider,
+    setup_tool_mode, setup_tunnel, setup_workspace,
 };
 use super::scaffold::scaffold_workspace;
 use super::view::{print_step, print_summary, print_welcome_banner};
@@ -18,13 +19,14 @@ use super::view::{print_step, print_summary, print_welcome_banner};
 /// Run the interactive wizard. Uses TUI if stdout is a terminal, falls back to dialoguer CLI.
 pub fn run_wizard() -> Result<Config> {
     // Detect locale before anything else
-    if let Ok(lang) = std::env::var("ASTERONIRIS_LANG") {
-        if !lang.is_empty() {
-            rust_i18n::set_locale(&lang);
-        }
+    if let Ok(lang) = std::env::var("ASTERONIRIS_LANG")
+        && !lang.is_empty()
+    {
+        rust_i18n::set_locale(&lang);
     }
 
     // TUI dispatch: use full-screen TUI if stdout is a terminal
+    #[cfg(feature = "tui")]
     if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
         match super::tui::run_tui_wizard() {
             Ok(config) => {
@@ -33,7 +35,6 @@ pub fn run_wizard() -> Result<Config> {
                 return Ok(config);
             }
             Err(e) => {
-                // If TUI fails (e.g. terminal too small), fall back to CLI
                 tracing::warn!("TUI wizard failed, falling back to CLI: {e}");
             }
         }
@@ -101,12 +102,12 @@ fn run_wizard_cli() -> Result<Config> {
 
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.security_confirm", level = "Supervised")
     );
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!(
             "onboard.memory_confirm",
             backend = &config.memory.backend,
@@ -138,7 +139,7 @@ fn offer_launch_channels(config: &Config) -> Result<()> {
 
         if launch {
             println!();
-            println!("  › {}", style(t!("onboard.launching")).white().bold());
+            println!("  › {}", ui::header(t!("onboard.launching")));
             println!();
             unsafe {
                 std::env::set_var("ASTERONIRIS_AUTOSTART_CHANNELS", "1");
@@ -152,7 +153,7 @@ fn offer_launch_channels(config: &Config) -> Result<()> {
 /// Interactive repair flow: rerun channel setup only without redoing full onboarding.
 pub fn run_channels_repair_wizard() -> Result<Config> {
     print_welcome_banner();
-    println!("  {}", style(t!("onboard.repair.title")).white().bold());
+    println!("  {}", ui::header(t!("onboard.repair.title")));
     println!();
 
     let mut config = Config::load_or_init()?;
@@ -164,7 +165,7 @@ pub fn run_channels_repair_wizard() -> Result<Config> {
     println!();
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.repair.saved", path = config.config_path.display())
     );
 
@@ -183,7 +184,7 @@ pub fn run_quick_setup(
     memory_backend: Option<&str>,
 ) -> Result<Config> {
     print_welcome_banner();
-    println!("  {}", style(t!("onboard.quick.title")).white().bold());
+    println!("  {}", ui::header(t!("onboard.quick.title")));
     println!();
 
     let home = directories::UserDirs::new()
@@ -272,43 +273,43 @@ pub fn run_quick_setup(
 
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.workspace"),
-        style(workspace_dir.display()).green()
+        ui::value(workspace_dir.display())
     );
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.provider"),
-        style(&provider_name).green()
+        ui::value(&provider_name)
     );
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.model"),
-        style(&model).green()
+        ui::value(&model)
     );
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.api_key"),
         if api_key.is_some() {
-            style(t!("onboard.quick.api_key_set")).green()
+            ui::value(t!("onboard.quick.api_key_set"))
         } else {
-            style(t!("onboard.quick.api_key_not_set")).yellow()
+            ui::yellow(t!("onboard.quick.api_key_not_set"))
         }
     );
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.security"),
-        style(t!("onboard.quick.security_value")).green()
+        ui::value(t!("onboard.quick.security_value"))
     );
     println!(
         "  {} {} {} (auto-save: {})",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.memory"),
-        style(&memory_backend_name).green(),
+        ui::value(&memory_backend_name),
         if memory_backend_name == "none" {
             "off"
         } else {
@@ -317,39 +318,36 @@ pub fn run_quick_setup(
     );
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.secrets"),
-        style(t!("onboard.quick.secrets_value")).green()
+        ui::value(t!("onboard.quick.secrets_value"))
     );
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.gateway"),
-        style(t!("onboard.quick.gateway_value")).green()
+        ui::value(t!("onboard.quick.gateway_value"))
     );
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.tunnel"),
-        style(t!("onboard.quick.tunnel_value")).dim()
+        ui::dim(t!("onboard.quick.tunnel_value"))
     );
     println!(
         "  {} {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!("onboard.quick.composio"),
-        style(t!("onboard.quick.composio_value")).dim()
+        ui::dim(t!("onboard.quick.composio_value"))
     );
     println!();
     println!(
         "  {} {}",
-        style(t!("onboard.quick.config_saved")).white().bold(),
-        style(config_path.display()).green()
+        ui::header(t!("onboard.quick.config_saved")),
+        ui::value(config_path.display())
     );
     println!();
-    println!(
-        "  {}",
-        style(t!("onboard.summary.next_steps")).white().bold()
-    );
+    println!("  {}", ui::header(t!("onboard.summary.next_steps")));
     if api_key.is_none() {
         println!("    1. Set your API key:  export OPENROUTER_API_KEY=\"sk-...\"");
         println!("    2. Or edit:           ~/.asteroniris/config.toml");

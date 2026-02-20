@@ -2,11 +2,11 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use asteroniris::memory::{
-    capability_matrix_for_memory, ensure_forget_mode_supported, CapabilitySupport, ForgetMode,
-    ForgetStatus, Memory, MemoryCategory,
+    CapabilitySupport, ForgetMode, ForgetStatus, Memory, MemoryCategory,
+    capability_matrix_for_memory, ensure_forget_mode_supported,
 };
 
 use super::memory_harness;

@@ -2,6 +2,7 @@ pub mod inventory;
 pub mod registry;
 
 use crate::config::Config;
+use crate::ui::style as ui;
 use anyhow::Result;
 
 /// Integration status
@@ -81,7 +82,7 @@ fn show_integration_info(config: &Config, name: &str) -> Result<()> {
     let Some(entry) = entries.iter().find(|e| e.name.to_lowercase() == name_lower) else {
         anyhow::bail!(
             "Unknown integration: {name}. Check README for supported integrations or run `asteroniris onboard --interactive` to configure channels/providers."
-            );
+        );
     };
 
     let status = (entry.status_fn)(config);
@@ -95,7 +96,7 @@ fn show_integration_info(config: &Config, name: &str) -> Result<()> {
     println!(
         "  {} {} — {}",
         icon,
-        console::style(entry.name).white().bold(),
+        ui::header(entry.name),
         entry.description
     );
     println!("  Category: {}", entry.category.label());

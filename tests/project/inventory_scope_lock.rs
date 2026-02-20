@@ -1,10 +1,10 @@
 use asteroniris::config::Config;
 use asteroniris::integrations::inventory::{
-    build_scope_lock_inventory, load_scope_lock_baseline_inventory,
+    IntegrationCapabilityDrift, IntegrationCapabilityMatrix, IntegrationCapabilityMatrixEntry,
+    UnimplementedInventoryEntry, build_scope_lock_inventory, load_scope_lock_baseline_inventory,
     normalize_unimplemented_inventory_from_sources, parse_registry_coming_soon_count,
     parse_skillforge_unimplemented_sources, validate_integration_status_against_matrix,
-    validate_inventory_against_sources, IntegrationCapabilityDrift, IntegrationCapabilityMatrix,
-    IntegrationCapabilityMatrixEntry, UnimplementedInventoryEntry,
+    validate_inventory_against_sources,
 };
 use asteroniris::integrations::registry;
 

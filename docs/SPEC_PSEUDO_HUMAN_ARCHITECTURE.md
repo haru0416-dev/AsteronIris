@@ -9,8 +9,6 @@
 - 記憶に基づく推論更新 (memory inference)
 - 疑似人格の一貫運用 (bounded persona adaptation)
 
-本仕様は既存コードの拡張を前提とし、全面リライトを行わない。
-
 ## 2. Design Principles
 
 - 既存の traits-first 構成を維持する

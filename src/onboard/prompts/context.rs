@@ -1,6 +1,7 @@
 use anyhow::Result;
-use console::style;
 use dialoguer::{Input, Select};
+
+use crate::ui::style as ui;
 
 use super::super::view::print_bullet;
 
@@ -93,13 +94,13 @@ pub fn setup_project_context() -> Result<ProjectContext> {
 
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!(
             "onboard.context.confirm",
-            name = style(&user_name).green(),
-            tz = style(&timezone).green(),
-            agent = style(&agent_name).green(),
-            style = style(&communication_style).green().dim()
+            name = ui::value(&user_name),
+            tz = ui::value(&timezone),
+            agent = ui::value(&agent_name),
+            style = ui::dim_value(&communication_style)
         )
     );
 

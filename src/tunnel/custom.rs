@@ -1,5 +1,5 @@
-use super::{kill_shared, new_shared_process, SharedProcess, Tunnel, TunnelProcess};
-use anyhow::{bail, Result};
+use super::{SharedProcess, Tunnel, TunnelProcess, kill_shared, new_shared_process};
+use anyhow::{Result, bail};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
@@ -62,47 +62,42 @@ impl Tunnel for CustomTunnel {
         let mut public_url = format!("http://{local_host}:{local_port}");
 
         // If a URL pattern is provided, try to extract the public URL from stdout
-        if let Some(ref pattern) = self.url_pattern {
-            if let Some(stdout) = child.stdout.take() {
-                let mut reader = tokio::io::BufReader::new(stdout).lines();
-                let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(15);
+        if let Some(ref pattern) = self.url_pattern
+            && let Some(stdout) = child.stdout.take()
+        {
+            let mut reader = tokio::io::BufReader::new(stdout).lines();
+            let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(15);
 
-                while tokio::time::Instant::now() < deadline {
-                    let line = tokio::time::timeout(
-                        tokio::time::Duration::from_secs(3),
-                        reader.next_line(),
-                    )
-                    .await;
+            while tokio::time::Instant::now() < deadline {
+                let line =
+                    tokio::time::timeout(tokio::time::Duration::from_secs(3), reader.next_line())
+                        .await;
 
-                    match line {
-                        Ok(Ok(Some(l))) => {
-                            tracing::debug!("custom-tunnel: {l}");
-                            // Simple substring match on the pattern
-                            if l.contains(pattern)
-                                || l.contains("https://")
-                                || l.contains("http://")
-                            {
-                                // Extract URL from the line
-                                if let Some(idx) = l.find("https://") {
-                                    let url_part = &l[idx..];
-                                    let end = url_part
-                                        .find(|c: char| c.is_whitespace())
-                                        .unwrap_or(url_part.len());
-                                    public_url = url_part[..end].to_string();
-                                    break;
-                                } else if let Some(idx) = l.find("http://") {
-                                    let url_part = &l[idx..];
-                                    let end = url_part
-                                        .find(|c: char| c.is_whitespace())
-                                        .unwrap_or(url_part.len());
-                                    public_url = url_part[..end].to_string();
-                                    break;
-                                }
+                match line {
+                    Ok(Ok(Some(l))) => {
+                        tracing::debug!("custom-tunnel: {l}");
+                        // Simple substring match on the pattern
+                        if l.contains(pattern) || l.contains("https://") || l.contains("http://") {
+                            // Extract URL from the line
+                            if let Some(idx) = l.find("https://") {
+                                let url_part = &l[idx..];
+                                let end = url_part
+                                    .find(|c: char| c.is_whitespace())
+                                    .unwrap_or(url_part.len());
+                                public_url = url_part[..end].to_string();
+                                break;
+                            } else if let Some(idx) = l.find("http://") {
+                                let url_part = &l[idx..];
+                                let end = url_part
+                                    .find(|c: char| c.is_whitespace())
+                                    .unwrap_or(url_part.len());
+                                public_url = url_part[..end].to_string();
+                                break;
                             }
                         }
-                        Ok(Ok(None) | Err(_)) => break,
-                        Err(_) => {}
                     }
+                    Ok(Ok(None) | Err(_)) => break,
+                    Err(_) => {}
                 }
             }
         }

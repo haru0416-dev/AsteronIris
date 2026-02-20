@@ -1,6 +1,7 @@
 use anyhow::Result;
-use console::style;
 use dialoguer::{Input, Select};
+
+use crate::ui::style as ui;
 
 use super::super::domain::{provider_env_var, validate_base_url};
 use super::super::view::print_bullet;
@@ -70,8 +71,8 @@ pub fn setup_provider() -> Result<(String, String, String)> {
         println!();
         println!(
             "  {} {}",
-            style(t!("onboard.provider.custom_title")).white().bold(),
-            style(format!("— {}", t!("onboard.provider.custom_subtitle"))).dim()
+            ui::header(t!("onboard.provider.custom_title")),
+            ui::dim(format!("— {}", t!("onboard.provider.custom_subtitle")))
         );
         print_bullet(&t!("onboard.provider.custom_desc"));
         print_bullet(&t!("onboard.provider.custom_examples"));
@@ -97,11 +98,11 @@ pub fn setup_provider() -> Result<(String, String, String)> {
 
         println!(
             "  {} {}",
-            style("✓").green().bold(),
+            ui::success("✓"),
             t!(
                 "onboard.provider.confirm",
-                provider = style(&provider_name).green(),
-                model = style(&model).green()
+                provider = ui::value(&provider_name),
+                model = ui::value(&model)
             )
         );
 
@@ -129,7 +130,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
         if crate::providers::gemini::GeminiProvider::has_cli_credentials() {
             print_bullet(&format!(
                 "{} {}",
-                style("✓").green().bold(),
+                ui::success("✓"),
                 t!("onboard.provider.gemini_cli_detected")
             ));
             print_bullet(&t!("onboard.provider.gemini_cli_reuse"));
@@ -143,7 +144,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
             if use_cli {
                 println!(
                     "  {} {}",
-                    style("✓").green().bold(),
+                    ui::success("✓"),
                     t!("onboard.provider.gemini_using_cli")
                 );
                 String::new()
@@ -160,7 +161,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
         } else if std::env::var("GEMINI_API_KEY").is_ok() {
             print_bullet(&format!(
                 "{} {}",
-                style("✓").green().bold(),
+                ui::success("✓"),
                 t!("onboard.provider.gemini_env_detected")
             ));
             String::new()
@@ -202,10 +203,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
 
         println!();
         if !key_url.is_empty() {
-            print_bullet(&t!(
-                "onboard.provider.api_key_url",
-                url = style(key_url).cyan().underlined()
-            ));
+            print_bullet(&t!("onboard.provider.api_key_url", url = ui::url(key_url)));
         }
         print_bullet(&t!("onboard.provider.api_key_later"));
         println!();
@@ -219,7 +217,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
             let env_var = provider_env_var(provider_name);
             print_bullet(&t!(
                 "onboard.provider.key_skipped",
-                env_var = style(env_var).yellow()
+                env_var = ui::yellow(env_var)
             ));
         }
 
@@ -230,45 +228,42 @@ pub fn setup_provider() -> Result<(String, String, String)> {
     let models: Vec<(&str, &str)> = match provider_name {
         "openrouter" => vec![
             (
-                "anthropic/claude-sonnet-4-20250514",
-                "Claude Sonnet 4 (balanced, recommended)",
+                "anthropic/claude-sonnet-4-6",
+                "Claude Sonnet 4.6 (balanced, recommended)",
             ),
             (
-                "anthropic/claude-3.5-sonnet",
-                "Claude 3.5 Sonnet (fast, affordable)",
+                "anthropic/claude-opus-4-6",
+                "Claude Opus 4.6 (most capable)",
             ),
-            ("openai/gpt-4o", "GPT-4o (OpenAI flagship)"),
-            ("openai/gpt-4o-mini", "GPT-4o Mini (fast, cheap)"),
-            (
-                "google/gemini-2.0-flash-001",
-                "Gemini 2.0 Flash (Google, fast)",
-            ),
+            ("openai/gpt-5.2", "GPT-5.2 (OpenAI flagship)"),
+            ("openai/gpt-5-mini", "GPT-5 Mini (fast, cheap)"),
+            ("google/gemini-2.5-flash", "Gemini 2.5 Flash (Google, fast)"),
             (
                 "meta-llama/llama-3.3-70b-instruct",
                 "Llama 3.3 70B (open source)",
             ),
-            ("deepseek/deepseek-chat", "DeepSeek Chat (affordable)"),
+            ("deepseek/deepseek-chat", "DeepSeek V3.2 (affordable)"),
         ],
         "anthropic" => vec![
             (
-                "claude-sonnet-4-20250514",
-                "Claude Sonnet 4 (balanced, recommended)",
+                "claude-sonnet-4-6",
+                "Claude Sonnet 4.6 (balanced, recommended)",
             ),
-            ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet (fast)"),
-            (
-                "claude-3-5-haiku-20241022",
-                "Claude 3.5 Haiku (fastest, cheapest)",
-            ),
+            ("claude-opus-4-6", "Claude Opus 4.6 (most capable)"),
+            ("claude-haiku-4-5", "Claude Haiku 4.5 (fastest, cheapest)"),
         ],
         "openai" => vec![
-            ("gpt-4o", "GPT-4o (flagship)"),
-            ("gpt-4o-mini", "GPT-4o Mini (fast, cheap)"),
-            ("o1-mini", "o1-mini (reasoning)"),
+            ("gpt-5.2", "GPT-5.2 (flagship)"),
+            ("gpt-5-mini", "GPT-5 Mini (fast, cheap)"),
+            ("gpt-4.1", "GPT-4.1 (1M context, non-reasoning)"),
         ],
         "venice" => vec![
-            ("llama-3.3-70b", "Llama 3.3 70B (default, fast)"),
-            ("claude-opus-45", "Claude Opus 4.5 via Venice (strongest)"),
-            ("llama-3.1-405b", "Llama 3.1 405B (largest open source)"),
+            ("deepseek-v3.2", "DeepSeek V3.2 (recommended)"),
+            (
+                "claude-opus-4-6",
+                "Claude Opus 4.6 via Venice (most capable)",
+            ),
+            ("llama-3.3-70b", "Llama 3.3 70B (open source, fast)"),
         ],
         "groq" => vec![
             (
@@ -276,76 +271,80 @@ pub fn setup_provider() -> Result<(String, String, String)> {
                 "Llama 3.3 70B (fast, recommended)",
             ),
             ("llama-3.1-8b-instant", "Llama 3.1 8B (instant)"),
-            ("mixtral-8x7b-32768", "Mixtral 8x7B (32K context)"),
+            ("openai/gpt-oss-120b", "GPT-OSS 120B (OpenAI open-weight)"),
         ],
         "mistral" => vec![
-            ("mistral-large-latest", "Mistral Large (flagship)"),
-            ("codestral-latest", "Codestral (code-focused)"),
-            ("mistral-small-latest", "Mistral Small (fast, cheap)"),
+            ("mistral-large-2512", "Mistral Large 3 (flagship)"),
+            ("codestral-2508", "Codestral (code-focused)"),
+            ("mistral-small-2506", "Mistral Small 3.2 (fast, cheap)"),
         ],
         "deepseek" => vec![
-            ("deepseek-chat", "DeepSeek Chat (V3, recommended)"),
-            ("deepseek-reasoner", "DeepSeek Reasoner (R1)"),
+            ("deepseek-chat", "DeepSeek Chat (V3.2, recommended)"),
+            ("deepseek-reasoner", "DeepSeek Reasoner (V3.2 thinking)"),
         ],
         "xai" => vec![
-            ("grok-3", "Grok 3 (flagship)"),
-            ("grok-3-mini", "Grok 3 Mini (fast)"),
+            ("grok-4-0709", "Grok 4 (flagship)"),
+            ("grok-3-mini", "Grok 3 Mini (fast, cheap)"),
         ],
         "perplexity" => vec![
             ("sonar-pro", "Sonar Pro (search + reasoning)"),
             ("sonar", "Sonar (search, fast)"),
+            (
+                "sonar-deep-research",
+                "Sonar Deep Research (expert research)",
+            ),
         ],
         "fireworks" => vec![
+            (
+                "accounts/fireworks/models/deepseek-v3p2",
+                "DeepSeek V3.2 (recommended)",
+            ),
             (
                 "accounts/fireworks/models/llama-v3p3-70b-instruct",
                 "Llama 3.3 70B",
             ),
             (
-                "accounts/fireworks/models/mixtral-8x22b-instruct",
-                "Mixtral 8x22B",
+                "accounts/fireworks/models/qwen3-235b-a22b",
+                "Qwen3 235B (code-optimized)",
             ),
         ],
         "together" => vec![
             (
-                "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-                "Llama 3.1 70B Turbo",
+                "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                "Llama 3.3 70B Turbo (recommended)",
             ),
             (
                 "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-                "Llama 3.1 8B Turbo",
+                "Llama 3.1 8B Turbo (fast)",
             ),
-            ("mistralai/Mixtral-8x22B-Instruct-v0.1", "Mixtral 8x22B"),
+            ("deepseek-ai/DeepSeek-V3.1", "DeepSeek V3.1"),
         ],
         "cohere" => vec![
-            ("command-r-plus", "Command R+ (flagship)"),
-            ("command-r", "Command R (fast)"),
+            ("command-a-03-2025", "Command A (flagship)"),
+            ("command-r7b-12-2024", "Command R 7B (fast)"),
         ],
         "moonshot" => vec![
-            ("moonshot-v1-128k", "Moonshot V1 128K"),
-            ("moonshot-v1-32k", "Moonshot V1 32K"),
+            ("kimi-k2.5", "Kimi K2.5 (flagship, multimodal)"),
+            ("kimi-k2-turbo-preview", "Kimi K2 Turbo (fast)"),
         ],
         "glm" => vec![
-            ("glm-4-plus", "GLM-4 Plus (flagship)"),
-            ("glm-4-flash", "GLM-4 Flash (fast)"),
+            ("glm-4.7", "GLM-4.7 (flagship)"),
+            ("glm-4.7-flash", "GLM-4.7 Flash (fast)"),
         ],
         "minimax" => vec![
-            ("abab6.5s-chat", "ABAB 6.5s Chat"),
-            ("abab6.5-chat", "ABAB 6.5 Chat"),
+            ("MiniMax-M2.1", "MiniMax M2.1 (flagship)"),
+            ("MiniMax-M2", "MiniMax M2"),
         ],
         "ollama" => vec![
-            ("llama3.2", "Llama 3.2 (recommended local)"),
-            ("mistral", "Mistral 7B"),
-            ("codellama", "Code Llama"),
-            ("phi3", "Phi-3 (small, fast)"),
+            ("llama3.2", "Llama 3.2 (small, recommended local)"),
+            ("llama3.3", "Llama 3.3 70B (best quality local)"),
+            ("phi4", "Phi-4 14B (Microsoft, strong reasoning)"),
+            ("qwen3", "Qwen3 (multilingual, hybrid thinking)"),
         ],
         "gemini" | "google" | "google-gemini" => vec![
-            ("gemini-2.0-flash", "Gemini 2.0 Flash (fast, recommended)"),
-            (
-                "gemini-2.0-flash-lite",
-                "Gemini 2.0 Flash Lite (fastest, cheapest)",
-            ),
-            ("gemini-1.5-pro", "Gemini 1.5 Pro (best quality)"),
-            ("gemini-1.5-flash", "Gemini 1.5 Flash (balanced)"),
+            ("gemini-2.5-flash", "Gemini 2.5 Flash (fast, recommended)"),
+            ("gemini-2.5-pro", "Gemini 2.5 Pro (best quality)"),
+            ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite (cheapest)"),
         ],
         _ => vec![("default", "Default model")],
     };
@@ -362,11 +361,11 @@ pub fn setup_provider() -> Result<(String, String, String)> {
 
     println!(
         "  {} {}",
-        style("✓").green().bold(),
+        ui::success("✓"),
         t!(
             "onboard.provider.confirm",
-            provider = style(provider_name).green(),
-            model = style(&model).green()
+            provider = ui::value(provider_name),
+            model = ui::value(&model)
         )
     );
 

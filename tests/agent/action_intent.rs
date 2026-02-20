@@ -17,13 +17,17 @@ async fn noop_operator_never_executes_external_action() {
     let result = operator.apply(&intent, Some(&verdict)).await.unwrap();
 
     assert!(!result.executed);
-    assert!(result
-        .message
-        .contains("external_action_execution is disabled"));
-    assert!(result
-        .audit_record_path
-        .as_deref()
-        .is_some_and(|path| path.contains("action_intents")));
+    assert!(
+        result
+            .message
+            .contains("external_action_execution is disabled")
+    );
+    assert!(
+        result
+            .audit_record_path
+            .as_deref()
+            .is_some_and(|path| path.contains("action_intents"))
+    );
 }
 
 #[tokio::test]

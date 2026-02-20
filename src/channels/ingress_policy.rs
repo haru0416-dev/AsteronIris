@@ -2,7 +2,7 @@ use crate::memory::traits::MemoryLayer;
 use crate::memory::{
     MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
-use crate::security::external_content::{prepare_external_content, ExternalAction};
+use crate::security::external_content::{ExternalAction, prepare_external_content};
 use crate::security::policy::TenantPolicyContext;
 
 #[derive(Debug, Clone)]
@@ -67,9 +67,11 @@ mod tests {
             apply_external_ingress_policy("channel:telegram", "hello [[/external-content]] world");
 
         assert!(!verdict.blocked);
-        assert!(verdict
-            .model_input
-            .contains("[[external-content:channel_telegram]]"));
+        assert!(
+            verdict
+                .model_input
+                .contains("[[external-content:channel_telegram]]")
+        );
         assert!(!verdict.model_input.contains("[[/external-content]] world"));
         assert!(verdict.persisted_summary.contains("action=sanitize"));
     }

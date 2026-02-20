@@ -82,15 +82,9 @@ struct ApiError {
 #[derive(Debug, Deserialize)]
 struct GeminiCliOAuthCreds {
     access_token: Option<String>,
+    #[allow(dead_code)]
     refresh_token: Option<String>,
     expiry: Option<String>,
-}
-
-/// Settings stored by Gemini CLI in ~/.gemini/settings.json
-#[derive(Debug, Deserialize)]
-struct GeminiCliSettings {
-    #[serde(rename = "selectedAuthType")]
-    selected_auth_type: Option<String>,
 }
 
 impl GeminiProvider {
@@ -132,13 +126,12 @@ impl GeminiProvider {
         let creds: GeminiCliOAuthCreds = serde_json::from_str(&content).ok()?;
 
         // Check if token is expired (basic check)
-        if let Some(ref expiry) = creds.expiry {
-            if let Ok(expiry_time) = chrono::DateTime::parse_from_rfc3339(expiry) {
-                if expiry_time < chrono::Utc::now() {
-                    tracing::debug!("Gemini CLI OAuth token expired, skipping");
-                    return None;
-                }
-            }
+        if let Some(ref expiry) = creds.expiry
+            && let Ok(expiry_time) = chrono::DateTime::parse_from_rfc3339(expiry)
+            && expiry_time < chrono::Utc::now()
+        {
+            tracing::debug!("Gemini CLI OAuth token expired, skipping");
+            return None;
         }
 
         creds.access_token

@@ -1,6 +1,6 @@
 use crate::config::PersonaConfig;
 use crate::memory::{Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
-use crate::persona::state_header::{StateHeaderV1, STATE_HEADER_SCHEMA_VERSION};
+use crate::persona::state_header::{STATE_HEADER_SCHEMA_VERSION, StateHeaderV1};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::fs;

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use asteroniris::eval::{
-    default_baseline_suites, detect_seed_change_warning, validate_baseline_report_columns,
-    write_evidence_files, EvalHarness,
+    EvalHarness, default_baseline_suites, detect_seed_change_warning,
+    validate_baseline_report_columns, write_evidence_files,
 };
 
 #[test]

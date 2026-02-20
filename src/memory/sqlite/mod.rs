@@ -6,7 +6,7 @@ use super::traits::{
 use crate::memory::vector;
 use async_trait::async_trait;
 use chrono::Local;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -27,9 +27,12 @@ mod search;
 /// - **Safe Reindex**: temp DB → seed → sync → atomic swap → rollback
 pub struct SqliteMemory {
     conn: Mutex<Connection>,
+    #[allow(dead_code)]
     db_path: PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
+    #[allow(dead_code)]
     vector_weight: f32,
+    #[allow(dead_code)]
     keyword_weight: f32,
     cache_max: usize,
 }

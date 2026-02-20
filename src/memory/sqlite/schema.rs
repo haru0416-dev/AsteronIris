@@ -1,6 +1,6 @@
 use super::SqliteMemory;
 use chrono::Local;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 impl SqliteMemory {
     #[allow(clippy::too_many_lines)]

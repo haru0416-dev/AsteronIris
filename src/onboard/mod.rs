@@ -2,6 +2,7 @@ pub mod domain;
 pub mod flow;
 pub mod prompts;
 pub mod scaffold;
+#[cfg(feature = "tui")]
 pub mod tui;
 pub mod view;
 pub mod wizard;

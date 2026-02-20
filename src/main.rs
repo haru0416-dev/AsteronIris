@@ -43,6 +43,7 @@ mod skillforge;
 mod skills;
 mod tools;
 mod tunnel;
+mod ui;
 mod util;
 
 pub(crate) use cli::commands::{

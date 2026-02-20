@@ -7,7 +7,7 @@ use oauth::{import_claude_oauth, import_codex_oauth};
 
 use crate::config::{Config, MemoryConfig};
 use crate::security::SecretStore;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -196,10 +196,9 @@ impl AuthProfileStore {
         if let (Some(default_provider), Some(legacy_api_key)) = (
             config.default_provider.as_deref(),
             config.api_key.as_deref(),
-        ) {
-            if profile_store.migrate_legacy_config_api_key(default_provider, legacy_api_key) {
-                needs_persist = true;
-            }
+        ) && profile_store.migrate_legacy_config_api_key(default_provider, legacy_api_key)
+        {
+            needs_persist = true;
         }
 
         if needs_persist {
@@ -373,11 +372,11 @@ pub fn recover_oauth_profile_for_provider(config: &Config, provider: &str) -> Re
             changed = true;
         }
 
-        if let Some(refresh_token) = imported.refresh_token {
-            if profile.refresh_token.as_deref() != Some(refresh_token.as_str()) {
-                profile.refresh_token = Some(refresh_token);
-                changed = true;
-            }
+        if let Some(refresh_token) = imported.refresh_token
+            && profile.refresh_token.as_deref() != Some(refresh_token.as_str())
+        {
+            profile.refresh_token = Some(refresh_token);
+            changed = true;
         }
 
         if profile.auth_scheme.as_deref() != Some("oauth") {

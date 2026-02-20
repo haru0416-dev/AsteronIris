@@ -1,19 +1,24 @@
 use super::SqliteMemory;
 use crate::memory::vector;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 impl SqliteMemory {
+    #[allow(dead_code)]
     pub(super) fn fts5_search(
         conn: &Connection,
         query: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<(String, f32)>> {
         // Escape FTS5 special chars and build query
-        let fts_query: String = query
-            .split_whitespace()
-            .map(|w| format!("\"{w}\""))
-            .collect::<Vec<_>>()
-            .join(" OR ");
+        let fts_query: String = query.split_whitespace().fold(String::new(), |mut acc, w| {
+            if !acc.is_empty() {
+                acc.push_str(" OR ");
+            }
+            acc.push('"');
+            acc.push_str(w);
+            acc.push('"');
+            acc
+        });
 
         if fts_query.is_empty() {
             return Ok(Vec::new());
@@ -45,6 +50,7 @@ impl SqliteMemory {
         Ok(results)
     }
 
+    #[allow(dead_code)]
     pub(super) fn vector_search(
         conn: &Connection,
         query_embedding: &[f32],

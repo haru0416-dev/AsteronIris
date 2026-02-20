@@ -10,8 +10,8 @@ use context::build_context_with_policy;
 use inference::run_post_turn_inference_pass;
 use reflect::run_persona_reflect_writeback;
 use verify_repair::{
-    analyze_verify_failure, decide_verify_repair_escalation, emit_verify_repair_escalation_event,
-    VerifyRepairCaps,
+    VerifyRepairCaps, analyze_verify_failure, decide_verify_repair_escalation,
+    emit_verify_repair_escalation_event,
 };
 
 use crate::auth::AuthBroker;
@@ -24,8 +24,8 @@ use crate::observability::traits::AutonomyLifecycleSignal;
 use crate::observability::{self, NoopObserver, Observer, ObserverEvent};
 use crate::providers::{self, Provider};
 use crate::runtime;
-use crate::security::policy::TenantPolicyContext;
 use crate::security::SecurityPolicy;
+use crate::security::policy::TenantPolicyContext;
 use crate::tools;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;

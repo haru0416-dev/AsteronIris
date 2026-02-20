@@ -2,8 +2,8 @@ use crate::memory::traits::MemoryLayer;
 use crate::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
-use crate::observability::traits::MemoryLifecycleSignal;
 use crate::observability::Observer;
+use crate::observability::traits::MemoryLifecycleSignal;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -95,13 +95,24 @@ fn build_consolidation_value(input: &ConsolidationInput) -> String {
     let user = input
         .user_message
         .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let assistant = input
-        .assistant_response
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+        .fold(String::new(), |mut acc, w| {
+            if !acc.is_empty() {
+                acc.push(' ');
+            }
+            acc.push_str(w);
+            acc
+        });
+    let assistant =
+        input
+            .assistant_response
+            .split_whitespace()
+            .fold(String::new(), |mut acc, w| {
+                if !acc.is_empty() {
+                    acc.push(' ');
+                }
+                acc.push_str(w);
+                acc
+            });
     let user = truncate_with_ellipsis(&user, 120);
     let assistant = truncate_with_ellipsis(&assistant, 240);
     format!(

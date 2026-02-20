@@ -26,7 +26,8 @@ pub fn chunk_markdown(text: &str, max_tokens: usize) -> Vec<Chunk> {
 
     let max_chars = max_tokens * 4;
     let sections = split_on_headings(text);
-    let mut chunks = Vec::new();
+    let estimated = (text.len() / max_chars.max(1)) + 1;
+    let mut chunks = Vec::with_capacity(estimated);
 
     for (heading, body) in sections {
         let full_len = heading
@@ -109,7 +110,12 @@ pub fn chunk_markdown(text: &str, max_tokens: usize) -> Vec<Chunk> {
 
 /// Split text into `(heading, body)` sections.
 fn split_on_headings(text: &str) -> Vec<(Option<String>, String)> {
-    let mut sections = Vec::new();
+    let estimated = text
+        .lines()
+        .filter(|l| l.starts_with("# ") || l.starts_with("## ") || l.starts_with("### "))
+        .count()
+        + 1;
+    let mut sections = Vec::with_capacity(estimated);
     let mut current_heading: Option<String> = None;
     let mut current_body = String::new();
 
@@ -134,7 +140,8 @@ fn split_on_headings(text: &str) -> Vec<(Option<String>, String)> {
 
 /// Split text on blank lines (paragraph boundaries)
 fn split_on_blank_lines(text: &str) -> Vec<String> {
-    let mut paragraphs = Vec::new();
+    let estimated = text.lines().filter(|l| l.trim().is_empty()).count() + 1;
+    let mut paragraphs = Vec::with_capacity(estimated);
     let mut current = String::new();
 
     for line in text.lines() {

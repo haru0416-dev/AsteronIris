@@ -1,9 +1,9 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tracing::info;
 
+use crate::Config;
 use crate::app::status::render_status;
 use crate::cli::commands::{ChannelCommands, Cli, Commands};
-use crate::Config;
 
 pub async fn dispatch(cli: Cli, config: Config) -> Result<()> {
     // Onboard runs quick setup by default, or the interactive wizard with --interactive

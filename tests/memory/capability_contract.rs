@@ -2,9 +2,10 @@ use arrow_array::{Float64Array, StringArray};
 use asteroniris::config::MemoryConfig;
 use asteroniris::memory::traits::MemoryLayer;
 use asteroniris::memory::{
-    backend_capability_matrix, capability_matrix_for_backend, capability_matrix_for_memory,
-    create_memory, ensure_forget_mode_supported, CapabilitySupport, ForgetMode, Memory,
-    MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel, RecallQuery,
+    CapabilitySupport, ForgetMode, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance,
+    MemorySource, PrivacyLevel, RecallQuery, backend_capability_matrix,
+    capability_matrix_for_backend, capability_matrix_for_memory, create_memory,
+    ensure_forget_mode_supported,
 };
 use futures_util::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
