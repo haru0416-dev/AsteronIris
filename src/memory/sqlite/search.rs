@@ -51,8 +51,8 @@ impl SqliteMemory {
         Ok(results)
     }
 
-    #[allow(dead_code)]
     // Used by search_projection for cosine-similarity vector search — projection layer currently dormant
+    #[allow(dead_code)]
     pub(super) fn vector_search(
         conn: &Connection,
         query_embedding: &[f32],

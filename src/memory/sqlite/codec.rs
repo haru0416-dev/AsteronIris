@@ -14,9 +14,9 @@ impl SqliteMemory {
         }
     }
 
+    // Used by projection layer methods (fetch/list/keyword search) — currently dormant
     #[allow(dead_code)]
     pub(super) fn str_to_category(s: &str) -> MemoryCategory {
-    // Used by projection layer methods (fetch/list/keyword search) — currently dormant
         match s {
             "core" => MemoryCategory::Core,
             "daily" => MemoryCategory::Daily,
