@@ -48,7 +48,7 @@ url     = "2"
 scraper = "0.22"
 
 # MIME detection (media pipeline)
-infer = { version = "0.16", optional = true }
+infer = { version = "0.19", optional = true }
 mime  = { version = "0.3", optional = true }
 
 # UUID generation
