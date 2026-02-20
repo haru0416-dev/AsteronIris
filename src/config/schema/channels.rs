@@ -1,3 +1,4 @@
+use crate::security::AutonomyLevel;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +37,12 @@ impl Default for ChannelsConfig {
 pub struct TelegramConfig {
     pub bot_token: String,
     pub allowed_users: Vec<String>,
+    /// Per-channel autonomy level override. Effective level = min(global, channel).
+    #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
+    pub autonomy_level: Option<AutonomyLevel>,
+    /// Per-channel tool allowlist. None = all tools permitted.
+    #[serde(default)]
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +51,12 @@ pub struct DiscordConfig {
     pub guild_id: Option<String>,
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Per-channel autonomy level override. Effective level = min(global, channel).
+    #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
+    pub autonomy_level: Option<AutonomyLevel>,
+    /// Per-channel tool allowlist. None = all tools permitted.
+    #[serde(default)]
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,17 +66,35 @@ pub struct SlackConfig {
     pub channel_id: Option<String>,
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Per-channel autonomy level override. Effective level = min(global, channel).
+    #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
+    pub autonomy_level: Option<AutonomyLevel>,
+    /// Per-channel tool allowlist. None = all tools permitted.
+    #[serde(default)]
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookConfig {
     pub port: u16,
     pub secret: Option<String>,
+    /// Per-channel autonomy level override. Effective level = min(global, channel).
+    #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
+    pub autonomy_level: Option<AutonomyLevel>,
+    /// Per-channel tool allowlist. None = all tools permitted.
+    #[serde(default)]
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IMessageConfig {
     pub allowed_contacts: Vec<String>,
+    /// Per-channel autonomy level override. Effective level = min(global, channel).
+    #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
+    pub autonomy_level: Option<AutonomyLevel>,
+    /// Per-channel tool allowlist. None = all tools permitted.
+    #[serde(default)]
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +103,12 @@ pub struct MatrixConfig {
     pub access_token: String,
     pub room_id: String,
     pub allowed_users: Vec<String>,
+    /// Per-channel autonomy level override. Effective level = min(global, channel).
+    #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
+    pub autonomy_level: Option<AutonomyLevel>,
+    /// Per-channel tool allowlist. None = all tools permitted.
+    #[serde(default)]
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +125,12 @@ pub struct WhatsAppConfig {
     /// Allowed phone numbers (E.164 format: +1234567890) or "*" for all
     #[serde(default)]
     pub allowed_numbers: Vec<String>,
+    /// Per-channel autonomy level override. Effective level = min(global, channel).
+    #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
+    pub autonomy_level: Option<AutonomyLevel>,
+    /// Per-channel tool allowlist. None = all tools permitted.
+    #[serde(default)]
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +158,32 @@ pub struct IrcConfig {
     pub sasl_password: Option<String>,
     /// Verify TLS certificate (default: true)
     pub verify_tls: Option<bool>,
+    /// Per-channel autonomy level override. Effective level = min(global, channel).
+    #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
+    pub autonomy_level: Option<AutonomyLevel>,
+    /// Per-channel tool allowlist. None = all tools permitted.
+    #[serde(default)]
+    pub tool_allowlist: Option<Vec<String>>,
+}
+
+fn deserialize_autonomy_level_opt<'de, D>(
+    deserializer: D,
+) -> Result<Option<AutonomyLevel>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .map(|level| match level.as_str() {
+            "read_only" | "readonly" => Ok(AutonomyLevel::ReadOnly),
+            "supervised" => Ok(AutonomyLevel::Supervised),
+            "full" => Ok(AutonomyLevel::Full),
+            _ => Err(serde::de::Error::unknown_variant(
+                &level,
+                &["read_only", "readonly", "supervised", "full"],
+            )),
+        })
+        .transpose()
 }
 
 fn default_irc_port() -> u16 {
@@ -123,4 +192,72 @@ fn default_irc_port() -> u16 {
 
 fn default_cli_enabled() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_configs_deserialize_without_policy_fields() {
+        let telegram: TelegramConfig =
+            serde_json::from_str(r#"{"bot_token":"token","allowed_users":["u"]}"#).unwrap();
+        assert!(telegram.autonomy_level.is_none());
+        assert!(telegram.tool_allowlist.is_none());
+
+        let discord: DiscordConfig =
+            serde_json::from_str(r#"{"bot_token":"token","guild_id":null,"allowed_users":[]}"#)
+                .unwrap();
+        assert!(discord.autonomy_level.is_none());
+        assert!(discord.tool_allowlist.is_none());
+
+        let slack: SlackConfig = serde_json::from_str(
+            r#"{"bot_token":"token","app_token":null,"channel_id":null,"allowed_users":[]}"#,
+        )
+        .unwrap();
+        assert!(slack.autonomy_level.is_none());
+        assert!(slack.tool_allowlist.is_none());
+
+        let webhook: WebhookConfig =
+            serde_json::from_str(r#"{"port":8080,"secret":null}"#).unwrap();
+        assert!(webhook.autonomy_level.is_none());
+        assert!(webhook.tool_allowlist.is_none());
+
+        let imessage: IMessageConfig =
+            serde_json::from_str(r#"{"allowed_contacts":["*"]}"#).unwrap();
+        assert!(imessage.autonomy_level.is_none());
+        assert!(imessage.tool_allowlist.is_none());
+
+        let matrix: MatrixConfig = serde_json::from_str(
+            r#"{"homeserver":"https://example.org","access_token":"token","room_id":"!r:example.org","allowed_users":["*"]}"#,
+        )
+        .unwrap();
+        assert!(matrix.autonomy_level.is_none());
+        assert!(matrix.tool_allowlist.is_none());
+
+        let whatsapp: WhatsAppConfig = serde_json::from_str(
+            r#"{"access_token":"token","phone_number_id":"id","verify_token":"verify","allowed_numbers":["*"],"app_secret":null}"#,
+        )
+        .unwrap();
+        assert!(whatsapp.autonomy_level.is_none());
+        assert!(whatsapp.tool_allowlist.is_none());
+
+        let irc: IrcConfig = serde_json::from_str(
+            r#"{"server":"irc.example.com","nickname":"bot","port":6697,"username":null,"channels":[],"allowed_users":[],"server_password":null,"nickserv_password":null,"sasl_password":null,"verify_tls":null}"#,
+        )
+        .unwrap();
+        assert!(irc.autonomy_level.is_none());
+        assert!(irc.tool_allowlist.is_none());
+    }
+
+    #[test]
+    fn channel_config_deserializes_policy_fields() {
+        let telegram: TelegramConfig = serde_json::from_str(
+            r#"{"bot_token":"token","allowed_users":["u"],"autonomy_level":"read_only","tool_allowlist":["file_read"]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(telegram.autonomy_level, Some(AutonomyLevel::ReadOnly));
+        assert_eq!(telegram.tool_allowlist, Some(vec!["file_read".to_string()]));
+    }
 }

@@ -72,6 +72,7 @@ pub mod imessage;
 pub mod ingress_policy;
 pub mod irc;
 pub mod matrix;
+pub mod policy;
 pub mod prompt_builder;
 pub mod runtime;
 pub mod slack;

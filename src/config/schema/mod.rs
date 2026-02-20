@@ -4,6 +4,7 @@ mod core;
 mod gateway;
 mod memory;
 mod observability;
+mod tools;
 mod tunnel;
 
 pub use autonomy::{AutonomyConfig, AutonomyRolloutStage};
@@ -20,6 +21,8 @@ pub use core::{
 pub use gateway::{GatewayConfig, GatewayDefenseMode};
 pub use memory::MemoryConfig;
 pub use observability::ObservabilityConfig;
+#[allow(unused_imports)]
+pub use tools::{ToolEntry, ToolsConfig};
 pub use tunnel::{
     CloudflareTunnelConfig, CustomTunnelConfig, NgrokTunnelConfig, TailscaleTunnelConfig,
     TunnelConfig,

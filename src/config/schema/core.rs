@@ -1,5 +1,6 @@
 use super::{
-    AutonomyConfig, ChannelsConfig, GatewayConfig, MemoryConfig, ObservabilityConfig, TunnelConfig,
+    AutonomyConfig, ChannelsConfig, GatewayConfig, MemoryConfig, ObservabilityConfig, ToolsConfig,
+    TunnelConfig,
 };
 use crate::security::SecretStore;
 use anyhow::{Context, Result};
@@ -62,6 +63,9 @@ pub struct Config {
 
     #[serde(default)]
     pub identity: IdentityConfig,
+
+    #[serde(default)]
+    pub tools: ToolsConfig,
 
     #[serde(default = "default_locale")]
     pub locale: String,
@@ -421,6 +425,7 @@ impl Default for Config {
             browser: BrowserConfig::default(),
             persona: PersonaConfig::default(),
             identity: IdentityConfig::default(),
+            tools: ToolsConfig::default(),
             locale: default_locale(),
         }
     }

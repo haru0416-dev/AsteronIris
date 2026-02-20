@@ -13,11 +13,15 @@ pub struct AutonomyConfig {
     pub allowed_commands: Vec<String>,
     pub forbidden_paths: Vec<String>,
     pub max_actions_per_hour: u32,
+    #[serde(default = "default_max_actions_per_entity_per_hour")]
+    pub max_actions_per_entity_per_hour: u32,
     pub max_cost_per_day_cents: u32,
     #[serde(default = "default_verify_repair_max_attempts")]
     pub verify_repair_max_attempts: u32,
     #[serde(default = "default_verify_repair_max_repair_depth")]
     pub verify_repair_max_repair_depth: u32,
+    #[serde(default = "default_max_tool_loop_iterations")]
+    pub max_tool_loop_iterations: u32,
     #[serde(default)]
     pub temperature_bands: TemperatureBandsConfig,
 }
@@ -84,6 +88,14 @@ fn default_verify_repair_max_attempts() -> u32 {
 
 fn default_verify_repair_max_repair_depth() -> u32 {
     2
+}
+
+fn default_max_tool_loop_iterations() -> u32 {
+    10
+}
+
+fn default_max_actions_per_entity_per_hour() -> u32 {
+    20
 }
 
 impl Default for TemperatureBandsConfig {
@@ -156,9 +168,11 @@ impl Default for AutonomyConfig {
                 "~/.config".into(),
             ],
             max_actions_per_hour: 20,
+            max_actions_per_entity_per_hour: default_max_actions_per_entity_per_hour(),
             max_cost_per_day_cents: 500,
             verify_repair_max_attempts: default_verify_repair_max_attempts(),
             verify_repair_max_repair_depth: default_verify_repair_max_repair_depth(),
+            max_tool_loop_iterations: default_max_tool_loop_iterations(),
             temperature_bands: TemperatureBandsConfig::default(),
         }
     }
