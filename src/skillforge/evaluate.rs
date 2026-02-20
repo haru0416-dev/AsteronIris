@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::gate::{Gate, GateInput, GateVerdict};
 use super::scout::ScoutResult;
 
 // ── Scoring dimensions ───────────────────────────────────────────────────────
@@ -43,6 +44,7 @@ pub struct EvalResult {
     pub scores: Scores,
     pub total_score: f64,
     pub recommendation: Recommendation,
+    pub gate_verdict: GateVerdict,
 }
 
 // ── Evaluator ────────────────────────────────────────────────────────────────
@@ -94,12 +96,20 @@ impl Evaluator {
         };
         let total_score = scores.total();
 
-        let recommendation = if total_score >= self.min_score {
-            Recommendation::Auto
-        } else if total_score >= 0.4 {
-            Recommendation::Manual
-        } else {
-            Recommendation::Skip
+        let gate_verdict = Self::run_gate(&candidate);
+
+        let recommendation = match &gate_verdict {
+            GateVerdict::Reject { .. } => Recommendation::Skip,
+            GateVerdict::Quarantine { .. } => Recommendation::Manual,
+            GateVerdict::Allow { .. } => {
+                if total_score >= self.min_score {
+                    Recommendation::Auto
+                } else if total_score >= 0.4 {
+                    Recommendation::Manual
+                } else {
+                    Recommendation::Skip
+                }
+            }
         };
 
         EvalResult {
@@ -107,12 +117,36 @@ impl Evaluator {
             scores,
             total_score,
             recommendation,
+            gate_verdict,
         }
+    }
+
+    fn run_gate(candidate: &ScoutResult) -> GateVerdict {
+        let days_since_update = candidate
+            .updated_at
+            .map(|updated| (chrono::Utc::now() - updated).num_days());
+
+        let input = GateInput {
+            name: candidate.name.clone(),
+            description: candidate.description.clone(),
+            code_content: None,
+            is_build_script: false,
+            markdown_content: None,
+            has_license: candidate.has_license,
+            days_since_update,
+            file_names: Vec::new(),
+            declared_capabilities: None,
+            commit_sha: None,
+            stored_content_hash: None,
+            computed_content_hash: None,
+            override_rule_ids: Vec::new(),
+        };
+
+        Gate::evaluate(&input)
     }
 
     // ── Dimension scorers ────────────────────────────────────────────────────
 
-    /// Compatibility: favour Rust repos; penalise unknown languages.
     fn score_compatibility(c: &ScoutResult) -> f64 {
         match c.language.as_deref() {
             Some("Rust") => 1.0,
@@ -183,12 +217,14 @@ mod tests {
     }
 
     #[test]
-    fn high_quality_rust_repo_gets_auto() {
+    fn high_quality_rust_repo_quarantined_without_provenance() {
         let eval = Evaluator::new(0.7);
         let c = make_candidate(500, Some("Rust"), true);
         let res = eval.evaluate(c);
         assert!(res.total_score >= 0.7, "score: {}", res.total_score);
-        assert_eq!(res.recommendation, Recommendation::Auto);
+        // Without provenance, gate quarantines → Manual
+        assert_eq!(res.recommendation, Recommendation::Manual);
+        assert!(res.gate_verdict.is_quarantined());
     }
 
     #[test]

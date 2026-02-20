@@ -18,6 +18,7 @@ pub struct ForgeReport {
     pub auto_integrated: usize,
     pub manual_review: usize,
     pub skipped: usize,
+    pub gate_rejected: usize,
     pub results: Vec<EvalResult>,
 }
 
@@ -51,6 +52,7 @@ impl SkillForge {
                 auto_integrated: 0,
                 manual_review: 0,
                 skipped: 0,
+                gate_rejected: 0,
                 results: vec![],
             });
         }
@@ -122,8 +124,19 @@ impl SkillForge {
         let mut auto_integrated = 0usize;
         let mut manual_review = 0usize;
         let mut skipped = 0usize;
+        let mut gate_rejected = 0usize;
 
         for res in &results {
+            if res.gate_verdict.is_rejected() {
+                gate_rejected += 1;
+                warn!(
+                    skill = res.candidate.name.as_str(),
+                    reasons = ?res.gate_verdict.reason_codes(),
+                    "Skill rejected by security gate"
+                );
+                continue;
+            }
+
             match res.recommendation {
                 Recommendation::Auto => {
                     if self.config.auto_integrate {
@@ -140,7 +153,6 @@ impl SkillForge {
                             }
                         }
                     } else {
-                        // Count as would-be auto but not actually integrated
                         manual_review += 1;
                     }
                 }
@@ -155,7 +167,7 @@ impl SkillForge {
 
         info!(
             auto_integrated,
-            manual_review, skipped, "Forge pipeline complete"
+            manual_review, skipped, gate_rejected, "Forge pipeline complete"
         );
 
         Ok(ForgeReport {
@@ -164,6 +176,7 @@ impl SkillForge {
             auto_integrated,
             manual_review,
             skipped,
+            gate_rejected,
             results,
         })
     }
