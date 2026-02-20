@@ -48,12 +48,5 @@ Defense-in-depth defaults include:
 
 ## Verification
 
-Before release or deployment hardening checks:
-
-```bash
-cargo fmt -- --check
-cargo clippy -- -D warnings
-cargo test
-```
-
-For container workflows, verify image/user/runtime settings using your deployment controls and CI policy.
+Pre-release hardening checks are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md)
+(PR checklist) and enforced by the pre-push hook (`.githooks/pre-push`).
