@@ -1,0 +1,19 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Checking asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.68s
+    Checking string_cache v0.8.9
+    Checking triomphe v0.1.15
+    Checking tokio-util v0.7.18
+    Checking axum v0.8.8
+    Checking markup5ever v0.14.1
+    Checking rust-i18n-support v3.1.5
+    Checking reqwest v0.13.2
+    Checking tokio-stream v0.1.18
+    Checking rust-i18n v3.1.5
+    Checking html5ever v0.29.1
+    Checking scraper v0.22.0
+    Checking asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.35s

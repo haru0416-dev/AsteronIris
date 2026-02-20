@@ -1,0 +1,47 @@
+============================================================
+ FINAL QA VERIFICATION REPORT
+ Date: 2026-02-20
+============================================================
+
+Standard Gate:
+  fmt:     FAIL — 3 formatting diffs (lancedb/mod.rs, markdown.rs, sqlite/codec.rs)
+  clippy:  FAIL — dead_code error: fields `layer` and `provenance` never read in ParsedMarkdownLine (src/memory/markdown.rs:26)
+  test:    PASS (2256 passed, 0 failed, 1 ignored [inventory_scope_lock — known pre-existing])
+
+Feature Matrix Gate:
+  no-default-features:          PASS (with 1 dead_code warning)
+  email,vector-search,tui,media: PASS (with 1 dead_code warning)
+  lib:                          PASS (with 1 dead_code warning)
+  bin:                          PASS (with 1 dead_code warning)
+
+Security Regression Gate:
+  action_intent:    PASS (2 tests)
+  external_content: PASS (2 tests)
+  gateway:          PASS (9 tests)
+  injection_guard:  PASS (1 test)
+  governance:       PASS (5 tests)
+  revocation_gate:  PASS (3 tests)
+  tenant_recall:    PASS (6 tests)
+
+============================================================
+VERDICT: FAIL
+============================================================
+
+Root Causes (2 issues):
+1. cargo fmt: 3 files have formatting diffs
+   - src/memory/lancedb/mod.rs:72 — inline comment needs line break
+   - src/memory/markdown.rs:289 — extra blank line
+   - src/memory/sqlite/codec.rs:16 — comment indentation
+
+2. cargo clippy -D warnings: dead_code error
+   - src/memory/markdown.rs:26 — fields `layer` and `provenance` in
+     struct ParsedMarkdownLine are never read
+
+Note: All 4 cargo check variants pass (exit 0) despite the dead_code
+warning because `cargo check` does not use `-D warnings`. The clippy
+invocation promotes warnings to errors, causing the failure.
+
+Evidence files saved to: .sisyphus/evidence/final-qa/
+  fmt.txt, clippy.txt, test.txt,
+  check-no-default.txt, check-features.txt, check-lib.txt, check-bin.txt,
+  security-regression.txt, summary.txt

@@ -1,0 +1,97 @@
+Task 22: Test Helper Deduplication Assessment
+=============================================
+Date: 2026-02-20
+Result: NO EXTRACTION NEEDED — assessment-only outcome
+
+## Summary
+
+Surveyed all test files across src/ and tests/ for deduplication opportunities.
+No pattern meets the 3+ identical copies threshold where extraction would
+genuinely reduce duplication without over-engineering.
+
+## Patterns Analyzed
+
+### Pattern 1: TempDir::new().unwrap() / .expect()
+- Files: 41
+- Matches: 159
+- Verdict: NOT a candidate. One-liner. No helper extraction makes sense.
+
+### Pattern 2: SecurityPolicy::default()
+- Files: 13
+- Matches: 60
+- Verdict: NOT a candidate. One-liner, usually in struct spread (..SecurityPolicy::default()).
+
+### Pattern 3: MemoryConfig { backend: "...", ..MemoryConfig::default() }
+- Files: 3 test contexts (memory/mod.rs, tools/mod.rs, capability_contract.rs)
+- Matches: 9
+- Verdict: NOT enough identical copies. Each varies by backend value. 3-line struct literal.
+
+### Pattern 4: test_config() helper function
+- Total files: 6, with 3 IDENTICAL copies
+  - src/cron/mod.rs: 7 lines
+  - src/cron/scheduler.rs: 7 lines (IDENTICAL)
+  - src/daemon/mod.rs: 7 lines (IDENTICAL)
+  - src/auth/mod.rs: 5 lines (DIFFERENT: no create_dir_all)
+  - src/agent/loop_/tests.rs: 8 lines (DIFFERENT: sets memory & persona)
+  - tests/agent/autonomy_cross_layer_flow.rs: 10 lines (DIFFERENT: sets memory backend & persona)
+- Verdict: BORDERLINE. 3 identical copies of 7 lines = 21 lines total duplication.
+  Extraction would require creating a #[cfg(test)] module in src/config/ accessible
+  to both cron and daemon modules. The module infrastructure overhead outweighs the
+  14-line savings. Each copy is trivial and may diverge in future. SKIPPED.
+
+### Pattern 5: CountingProvider mock
+- Files: 1 (src/gateway/tests.rs)
+- Verdict: NOT a candidate. Only used in one file.
+
+### Pattern 6: create_memory(&cfg, tmp.path(), None).unwrap()
+- Files: 3 test contexts
+- Verdict: NOT a candidate. Function call with different config each time.
+
+### Pattern 7: SequenceProvider::new()
+- Files: 1 (tests/agent/autonomy_cross_layer_flow.rs)
+- Verdict: NOT a candidate. Only used in one file.
+
+## WhatsApp Tests Assessment (898 LOC)
+
+- 40+ tests, all testing parse_webhook_payload() with different JSON payloads
+- Already has make_channel() helper extracted (line 3)
+- Tests are comprehensive edge case coverage (missing fields, wrong types, unicode, etc.)
+- JSON payloads make the file verbose but there is NO structural duplication
+- Each test is unique — different JSON structure, different assertions
+- Some tests use make_channel(), others create custom WhatsAppChannel::new() with different allowlists
+- Verdict: NOT worth splitting. File is long but well-organized with section headers.
+  Splitting would create artificial boundaries with no duplication reduction.
+
+## Gateway Tests Assessment (658 LOC)
+
+- Already has make_test_state() and make_whatsapp_state() helpers extracted
+- Already has CountingProvider mock defined locally
+- Well-structured with section comment headers
+- Verdict: Already well-organized. No further extraction needed.
+
+## Existing Test Infrastructure Assessment
+
+- tests/support/memory_harness.rs (295 lines): Comprehensive shared test utilities
+  - sqlite_fixture(), markdown_fixture(), lancedb_fixture()
+  - append_test_event(), memory_count(), resolve_slot_value()
+  - recall_scoped_values(), recall_scoped_items(), forget_hard()
+  - format_capability_evidence(), find_degraded_backends()
+  - DeterministicEmbeddingProvider for vector search tests
+- This is already the right level of test infrastructure abstraction.
+
+## Verification
+
+- cargo test: 2256 tests passed, 0 failed
+- cargo clippy -- -D warnings: 2 PRE-EXISTING issues (not from this task):
+  1. dead_code: ParsedMarkdownLine fields layer/provenance in src/memory/markdown.rs
+  2. too_many_lines: discord.rs and email_channel.rs functions
+  These are pre-existing issues unrelated to this assessment task.
+- No code changes made (assessment-only outcome)
+
+## Decision
+
+No test helper extraction performed. The existing test infrastructure is adequate:
+- tests/support/memory_harness.rs handles integration test shared utilities
+- Individual test files have local helpers (make_channel, make_test_state, test_config)
+- One-liner patterns (TempDir::new(), SecurityPolicy::default()) don't benefit from extraction
+- The sole borderline case (test_config in 3 files) doesn't justify module overhead

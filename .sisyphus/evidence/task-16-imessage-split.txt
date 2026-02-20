@@ -1,0 +1,65 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/asteroniris-243f17f032d82fe6)
+
+running 58 tests
+test channels::imessage::tests::creates_with_contacts ... ok
+test channels::imessage::tests::contact_case_insensitive ... ok
+test channels::imessage::tests::creates_with_empty_contacts ... ok
+test channels::imessage::tests::contact_with_spaces_exact_match ... ok
+test channels::imessage::tests::empty_allowlist_denies_all ... ok
+test channels::imessage::tests::escape_applescript_backslashes ... ok
+test channels::imessage::tests::escape_applescript_double_quotes ... ok
+test channels::imessage::tests::escape_applescript_empty_string ... ok
+test channels::imessage::tests::escape_applescript_mixed ... ok
+test channels::imessage::tests::escape_applescript_injection_attempt ... ok
+test channels::imessage::tests::escape_applescript_newlines_escaped ... ok
+test channels::imessage::tests::escape_applescript_no_special_chars ... ok
+test channels::imessage::tests::escape_applescript_unicode ... ok
+test channels::imessage::tests::fetch_new_messages_nonexistent_database ... ok
+test channels::imessage::tests::invalid_target_applescript_injection ... ok
+test channels::imessage::tests::invalid_target_email_no_at ... ok
+test channels::imessage::tests::invalid_target_email_no_domain ... ok
+test channels::imessage::tests::get_max_rowid_nonexistent_database ... ok
+test channels::imessage::tests::invalid_target_email_no_dot_in_domain ... ok
+test channels::imessage::tests::invalid_target_email_no_local ... ok
+test channels::imessage::tests::invalid_target_empty ... ok
+test channels::imessage::tests::invalid_target_injection_attempt ... ok
+test channels::imessage::tests::invalid_target_newline ... ok
+test channels::imessage::tests::invalid_target_no_plus_prefix ... ok
+test channels::imessage::tests::invalid_target_null_byte ... ok
+test channels::imessage::tests::invalid_target_special_chars ... ok
+test channels::imessage::tests::invalid_target_too_long_phone ... ok
+test channels::imessage::tests::invalid_target_too_short_phone ... ok
+test channels::imessage::tests::name_returns_imessage ... ok
+test channels::imessage::tests::specific_contact_allowed ... ok
+test channels::imessage::tests::unknown_contact_denied ... ok
+test channels::imessage::tests::target_with_leading_trailing_whitespace_trimmed ... ok
+test channels::imessage::tests::valid_email_icloud ... ok
+test channels::imessage::tests::valid_email_simple ... ok
+test channels::imessage::tests::valid_email_with_dots ... ok
+test channels::imessage::tests::valid_email_with_plus ... ok
+test channels::imessage::tests::valid_email_with_subdomain ... ok
+test channels::imessage::tests::valid_phone_number_international ... ok
+test channels::imessage::tests::valid_phone_number_simple ... ok
+test channels::imessage::tests::valid_phone_number_with_country_code ... ok
+test channels::imessage::tests::valid_phone_number_with_spaces ... ok
+test channels::imessage::tests::valid_phone_number_with_dashes ... ok
+test channels::imessage::tests::wildcard_allows_anyone ... ok
+test channels::imessage::tests::wildcard_among_others_still_allows_all ... ok
+test channels::imessage::tests::fetch_new_messages_empty_database ... ok
+test channels::imessage::tests::get_max_rowid_empty_database ... ok
+test channels::imessage::tests::fetch_new_messages_negative_rowid_edge_case ... ok
+test channels::imessage::tests::fetch_new_messages_excludes_sent_messages ... ok
+test channels::imessage::tests::fetch_new_messages_large_rowid_edge_case ... ok
+test channels::imessage::tests::fetch_new_messages_handles_unicode ... ok
+test channels::imessage::tests::fetch_new_messages_excludes_null_text ... ok
+test channels::imessage::tests::fetch_new_messages_handles_empty_text ... ok
+test channels::imessage::tests::fetch_new_messages_filters_by_rowid ... ok
+test channels::imessage::tests::fetch_new_messages_handles_special_characters ... ok
+test channels::imessage::tests::fetch_new_messages_returns_correct_data ... ok
+test channels::imessage::tests::get_max_rowid_with_messages ... ok
+test channels::imessage::tests::fetch_new_messages_ordered_by_rowid_asc ... ok
+test channels::imessage::tests::fetch_new_messages_respects_limit ... ok
+
+test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 1023 filtered out; finished in 0.02s
+

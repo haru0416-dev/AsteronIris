@@ -1,0 +1,49 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.82s
+     Running unittests src/lib.rs (target/debug/deps/asteroniris-243f17f032d82fe6)
+
+running 40 tests
+test gateway::tests::autosave_entity_id_is_default ... ok
+test gateway::tests::app_state_is_clone ... ok
+test gateway::tests::policy_violation_reason_bearer ... ok
+test gateway::tests::policy_violation_enforce_secret_returns_401 ... ok
+test gateway::tests::effective_defense_mode_kill_switch_forces_audit ... ok
+test gateway::tests::policy_violation_enforce_bearer_returns_401 ... ok
+test gateway::tests::gateway_runtime_policy_context_is_disabled ... ok
+test gateway::tests::security_body_limit_is_64kb ... ok
+test gateway::tests::policy_accounting_response_returns_429 ... ok
+test gateway::tests::security_timeout_is_30_seconds ... ok
+test gateway::tests::policy_violation_reason_webhook_secret ... ok
+test gateway::tests::webhook_autosave_event_fields ... ok
+test gateway::tests::external_ingress_policy_blocks_high_risk_payload_before_model_call ... ok
+test gateway::tests::whatsapp_autosave_event_includes_sender ... ok
+test gateway::tests::webhook_body_requires_message_field ... ok
+test gateway::tests::handle_health_returns_ok_with_unpaired_state ... ok
+test gateway::tests::handle_health_reflects_paired_when_tokens_exist ... ok
+test gateway::tests::whatsapp_query_fields_are_optional ... ok
+test gateway::tests::whatsapp_message_404_when_not_configured ... ok
+test gateway::tests::whatsapp_signature_invalid_hex ... ok
+test gateway::tests::whatsapp_signature_empty_header ... ok
+test gateway::tests::webhook_policy_blocks_when_action_limit_is_exhausted ... ok
+test gateway::tests::whatsapp_signature_extra_bytes ... ok
+test gateway::tests::whatsapp_signature_empty_body ... ok
+test gateway::tests::whatsapp_signature_case_sensitive_prefix ... ok
+test gateway::tests::whatsapp_signature_missing_prefix ... ok
+test gateway::tests::whatsapp_signature_invalid_wrong_body ... ok
+test gateway::tests::whatsapp_signature_invalid_wrong_secret ... ok
+test gateway::tests::whatsapp_signature_json_payload ... ok
+test gateway::tests::whatsapp_signature_truncated_hex ... ok
+test gateway::tests::whatsapp_signature_unicode_body ... ok
+test gateway::tests::whatsapp_signature_valid ... ok
+test gateway::tests::whatsapp_verify_returns_404_when_not_configured ... ok
+test gateway::tests::whatsapp_message_rejects_invalid_json ... ok
+test gateway::tests::whatsapp_verify_rejects_wrong_mode ... ok
+test gateway::tests::whatsapp_message_rejects_invalid_signature ... ok
+test gateway::tests::whatsapp_message_ack_empty_messages ... ok
+test gateway::tests::whatsapp_verify_returns_challenge_on_valid ... ok
+test gateway::tests::whatsapp_verify_rejects_wrong_token ... ok
+test gateway::tests::whatsapp_verify_rejects_missing_challenge ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 1041 filtered out; finished in 0.07s
+

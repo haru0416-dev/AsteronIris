@@ -1,0 +1,60 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+error[E0761]: file for module `imessage` found at both "src/channels/imessage.rs" and "src/channels/imessage/mod.rs"
+  --> src/channels/mod.rs:70:1
+   |
+70 | pub mod imessage;
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: delete or rename one of them to remove the ambiguity
+
+For more information about this error, try `rustc --explain E0761`.
+error: could not compile `asteroniris` (lib test) due to 1 previous error
+    Blocking waiting for file lock on artifact directory
+   Compiling asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+warning: unused import: `scrub_secret_patterns`
+  --> src/providers/mod.rs:19:48
+   |
+19 | pub use scrub::{api_error, sanitize_api_error, scrub_secret_patterns};
+   |                                                ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (bin "asteroniris" test) generated 1 warning (run `cargo fix --bin "asteroniris" -p asteroniris --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 59s
+     Running unittests src/main.rs (target/debug/deps/asteroniris-e15dae8c15ffdeb7)
+
+running 21 tests
+test skills::symlink_tests::tests::test_skills_symlink_permissions_and_safety ... ok
+test skills::symlink_tests::tests::test_skills_symlink_unix_edge_cases ... ok
+test skills::tests::tests::init_skills_idempotent ... ok
+test skills::tests::tests::init_skills_creates_readme ... ok
+test skills::tests::tests::load_empty_skills_dir ... ok
+test skills::tests::tests::load_ignores_dir_without_manifest ... ok
+test skills::tests::tests::load_nonexistent_dir ... ok
+test skills::tests::tests::load_ignores_files_in_skills_dir ... ok
+test skills::tests::tests::skills_dir_path ... ok
+test skills::tests::tests::skills_to_prompt_empty ... ok
+test channels::prompt_builder::tests::prompt_skills_compact_list ... ok
+test skills::tests::tests::md_skill_heading_only ... ok
+test skills::tests::tests::load_skill_from_md ... ok
+test skills::tests::tests::skills_to_prompt_includes_tools ... ok
+test skills::tests::tests::skills_to_prompt_with_skills ... ok
+test skills::tests::tests::load_multiple_skills ... ok
+test skills::tests::tests::toml_skill_invalid_syntax_skipped ... ok
+test skills::tests::tests::toml_prefers_over_md ... ok
+test skills::tests::tests::toml_skill_minimal ... ok
+test skills::tests::tests::load_skill_from_toml ... ok
+test skills::tests::tests::toml_skill_with_multiple_tools ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 1021 filtered out; finished in 0.00s
+
+   46 src/skills/mod.rs
+  572 src/skills/loader.rs
+  618 合計
+=== Pre-existing lib crate issue (not from this task) ===
+cargo check --lib fails due to imessage.rs + imessage/mod.rs ambiguity (pre-existing from task-14)
+cargo check --bin asteroniris succeeds
+
+warning: `asteroniris` (bin "asteroniris") generated 3 warnings (run `cargo fix --bin "asteroniris" -p asteroniris` to apply 3 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 32.31s

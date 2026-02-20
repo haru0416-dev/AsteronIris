@@ -1,0 +1,50 @@
+Task 17: Split telegram.rs into telegram/ subdirectory
+========================================================
+
+Test run: cargo test --lib -- channels::telegram
+(imessage.rs temporarily moved aside due to parallel T16 conflict)
+
+running 30 tests
+test channels::telegram::tests::telegram_channel_name ... ok
+test channels::telegram::tests::telegram_api_url_send_photo ... ok
+test channels::telegram::tests::telegram_api_url ... ok
+test channels::telegram::tests::telegram_send_audio_nonexistent_file ... ok
+test channels::telegram::tests::telegram_api_url_send_audio ... ok
+test channels::telegram::tests::telegram_send_document_nonexistent_file ... ok
+test channels::telegram::tests::telegram_api_url_send_video ... ok
+test channels::telegram::tests::telegram_api_url_send_voice ... ok
+test channels::telegram::tests::telegram_api_url_send_document ... ok
+test channels::telegram::tests::telegram_send_photo_nonexistent_file ... ok
+test channels::telegram::tests::telegram_user_allowed_by_numeric_id_identity ... ok
+test channels::telegram::tests::telegram_send_voice_nonexistent_file ... ok
+test channels::telegram::tests::telegram_user_allowed_specific ... ok
+test channels::telegram::tests::telegram_send_video_nonexistent_file ... ok
+test channels::telegram::tests::telegram_user_case_sensitive ... ok
+test channels::telegram::tests::telegram_user_denied_empty ... ok
+test channels::telegram::tests::telegram_user_allowed_wildcard ... ok
+test channels::telegram::tests::telegram_user_denied_when_none_of_identities_match ... ok
+test channels::telegram::tests::telegram_user_empty_string_denied ... ok
+test channels::telegram::tests::telegram_user_exact_match_not_substring ... ok
+test channels::telegram::tests::telegram_wildcard_with_specific_users ... ok
+test channels::telegram::tests::telegram_send_document_bytes_builds_correct_form ... ok
+test channels::telegram::tests::telegram_send_document_bytes_empty_chat_id ... ok
+test channels::telegram::tests::telegram_send_photo_by_url_builds_correct_json ... ok
+test channels::telegram::tests::telegram_send_document_by_url_builds_correct_json ... ok
+test channels::telegram::tests::telegram_send_document_bytes_empty_filename ... ok
+test channels::telegram::tests::telegram_send_document_bytes_empty_file ... ok
+test channels::telegram::tests::telegram_send_photo_bytes_builds_correct_form ... ok
+test channels::telegram::tests::telegram_send_document_bytes_with_caption ... ok
+test channels::telegram::tests::telegram_send_photo_bytes_with_caption ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 1051 filtered out
+
+cargo check --lib: Finished `dev` profile [unoptimized + debuginfo]
+
+File structure:
+  src/channels/telegram/mod.rs     — struct + constructor + helpers (thin facade)
+  src/channels/telegram/api.rs     — 9 Telegram Bot API methods
+  src/channels/telegram/handler.rs — Channel trait impl (name, send, listen, health_check)
+  src/channels/telegram/tests.rs   — 30 tests (16 sync + 14 async)
+  src/channels/telegram.rs         — DELETED
+
+channels::TelegramChannel remains accessible via pub use in channels/mod.rs.

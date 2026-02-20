@@ -1,0 +1,212 @@
+=== Security Regression Gate ===
+
+--- action_intent ---
+    Blocking waiting for file lock on artifact directory
+   Compiling asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+warning: fields `layer` and `provenance` are never read
+  --> src/memory/markdown.rs:26:5
+   |
+23 | struct ParsedMarkdownLine {
+   |        ------------------ fields in this struct
+...
+26 |     layer: Option<MemoryLayer>,
+   |     ^^^^^
+27 |     provenance: Option<MemoryProvenance>,
+   |     ^^^^^^^^^^
+   |
+   = note: `ParsedMarkdownLine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.29s
+     Running tests/agent.rs (target/debug/deps/agent-2966eabba70d4f7f)
+
+running 2 tests
+test action_intent::action_intent_requires_policy_verdict ... ok
+test action_intent::noop_operator_never_executes_external_action ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+EXIT: 0
+
+--- external_content ---
+    Blocking waiting for file lock on artifact directory
+   Compiling asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+warning: fields `layer` and `provenance` are never read
+  --> src/memory/markdown.rs:26:5
+   |
+23 | struct ParsedMarkdownLine {
+   |        ------------------ fields in this struct
+...
+26 |     layer: Option<MemoryLayer>,
+   |     ^^^^^
+27 |     provenance: Option<MemoryProvenance>,
+   |     ^^^^^^^^^^
+   |
+   = note: `ParsedMarkdownLine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.19s
+     Running tests/agent.rs (target/debug/deps/agent-2966eabba70d4f7f)
+
+running 2 tests
+test external_content::external_ingress_never_replays_blocked_raw_payload_to_model_input ... ok
+test autonomy_cross_layer_flow::external_content_injection_is_blocked_and_raw_payload_not_replayed_from_memory ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+EXIT: 0
+
+--- gateway ---
+    Blocking waiting for file lock on artifact directory
+   Compiling asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+warning: fields `layer` and `provenance` are never read
+  --> src/memory/markdown.rs:26:5
+   |
+23 | struct ParsedMarkdownLine {
+   |        ------------------ fields in this struct
+...
+26 |     layer: Option<MemoryLayer>,
+   |     ^^^^^
+27 |     provenance: Option<MemoryProvenance>,
+   |     ^^^^^^^^^^
+   |
+   = note: `ParsedMarkdownLine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.85s
+     Running tests/gateway.rs (target/debug/deps/gateway-3b0c2342c0226e2a)
+
+running 9 tests
+test auth::observability_deterministic_factory_and_fanout_path ... ok
+test auth::pairing_lifecycle_covers_success_failure_and_token_authentication ... ok
+test embedding_batching::openai_embedder_batches_into_single_http_request ... ok
+test auth::gateway_kill_switch_forces_non_blocking_path ... ok
+test auth::gateway_pair_endpoint_enforces_retry_after_lockout ... ok
+test auth::gateway_warn_mode_returns_warning_path_without_deny ... ok
+test auth::gateway_auth_enforces_deny_and_allows_authorized_path ... ok
+test auth::gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths ... ok
+test auth::gateway_audit_mode_records_violations_without_blocking ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+EXIT: 0
+
+--- injection_guard ---
+    Blocking waiting for file lock on artifact directory
+warning: fields `layer` and `provenance` are never read
+  --> src/memory/markdown.rs:26:5
+   |
+23 | struct ParsedMarkdownLine {
+   |        ------------------ fields in this struct
+...
+26 |     layer: Option<MemoryLayer>,
+   |     ^^^^^
+27 |     provenance: Option<MemoryProvenance>,
+   |     ^^^^^^^^^^
+   |
+   = note: `ParsedMarkdownLine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.79s
+     Running tests/persona.rs (target/debug/deps/persona-7b3188981642b375)
+
+running 1 test
+test injection_guard::prompt_injection_payload_is_rejected_and_writeback_is_not_persisted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.01s
+
+EXIT: 0
+
+--- governance ---
+    Blocking waiting for file lock on artifact directory
+warning: fields `layer` and `provenance` are never read
+  --> src/memory/markdown.rs:26:5
+   |
+23 | struct ParsedMarkdownLine {
+   |        ------------------ fields in this struct
+...
+26 |     layer: Option<MemoryLayer>,
+   |     ^^^^^
+27 |     provenance: Option<MemoryProvenance>,
+   |     ^^^^^^^^^^
+   |
+   = note: `ParsedMarkdownLine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/memory.rs (target/debug/deps/memory-9629044d5321e8dd)
+
+running 5 tests
+test governance::memory_governance_delete_denied_is_audited ... ok
+test governance_delete::dsar_delete_completeness_detects_residue ... ok
+test governance::memory_governance_export_returns_scoped_bundle ... ok
+test governance_export::dsar_export_then_delete_flow ... ok
+test governance::memory_governance_inspect_export_delete ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.03s
+
+EXIT: 0
+
+--- revocation_gate ---
+warning: fields `layer` and `provenance` are never read
+  --> src/memory/markdown.rs:26:5
+   |
+23 | struct ParsedMarkdownLine {
+   |        ------------------ fields in this struct
+...
+26 |     layer: Option<MemoryLayer>,
+   |     ^^^^^
+27 |     provenance: Option<MemoryProvenance>,
+   |     ^^^^^^^^^^
+   |
+   = note: `ParsedMarkdownLine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/memory.rs (target/debug/deps/memory-9629044d5321e8dd)
+
+running 3 tests
+test revocation_gate::memory_revocation_gate_applies_in_context_builder ... ok
+test revocation_gate::memory_revocation_gate_blocks_cached_replay ... ok
+test revocation_gate::memory_revocation_gate_blocks_replay ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.01s
+
+EXIT: 0
+
+--- tenant_recall ---
+warning: fields `layer` and `provenance` are never read
+  --> src/memory/markdown.rs:26:5
+   |
+23 | struct ParsedMarkdownLine {
+   |        ------------------ fields in this struct
+...
+26 |     layer: Option<MemoryLayer>,
+   |     ^^^^^
+27 |     provenance: Option<MemoryProvenance>,
+   |     ^^^^^^^^^^
+   |
+   = note: `ParsedMarkdownLine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/memory.rs (target/debug/deps/memory-9629044d5321e8dd)
+
+running 6 tests
+test tenant_recall::tenant_mode_disables_default_fallback ... ok
+test tenant_recall::tenant_recall_all_entrypoints_block_cross_scope ... ok
+test tenant_recall::tenant_recall_e2e_cross_tenant_block ... ok
+test tenant_recall::tenant_recall_blocks_cross_scope ... ok
+test tenant_recall::tenant_recall_all_entrypoints_allow_same_tenant ... ok
+test tenant_recall::tenant_recall_e2e_same_tenant_paths ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in 0.02s
+
+EXIT: 0

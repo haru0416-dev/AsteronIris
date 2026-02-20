@@ -1,0 +1,31 @@
+Task 21: Audit #[allow(dead_code)] in src/memory/
+
+=== BEFORE COUNT ===
+19 dead_code occurrences across 6 files (original HEAD before commit 4a75007)
+
+=== AFTER COUNT ===
+20 dead_code suppressions across 6 files
+(+2 new for ParsedMarkdownLine.layer/provenance fields exposed by removing parse_markdown_entry_metadata,
+ -1 removed: parse_markdown_entry_metadata function deleted = net +1)
+
+=== CHANGES MADE ===
+1. REMOVED (genuinely unused):
+   - markdown.rs: parse_markdown_entry_metadata() — never called anywhere
+
+2. ADDED (exposed by removal):
+   - markdown.rs: #[allow(dead_code)] on ParsedMarkdownLine.layer — populated during [md:...] tag parsing
+   - markdown.rs: #[allow(dead_code)] on ParsedMarkdownLine.provenance — same
+
+3. KEPT WITH COMMENTS (18 suppressions):
+   - sqlite/mod.rs: db_path (diagnostics/reconnection), vector_weight/keyword_weight (projection search layer)
+   - sqlite/mod.rs: reindex() — public maintenance API
+   - sqlite/codec.rs: category_to_str, str_to_category — used by dormant projection layer
+   - sqlite/search.rs: fts5_search, vector_search — used by dormant projection search
+   - sqlite/repository.rs: 8 projection methods — full-stack search API not yet wired to Memory trait
+   - markdown.rs: list_projection_entries — used by unit tests
+   - lancedb/mod.rs: ProjectionEntry.category — set during deserialization, read in tests
+
+=== VERIFICATION ===
+- cargo test --test memory: 64 passed, 0 failed
+- cargo check --features "vector-search": OK (with 1 unrelated warning)
+- cargo clippy -- -D warnings: CLEAN

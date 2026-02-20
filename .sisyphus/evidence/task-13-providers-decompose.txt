@@ -1,0 +1,152 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 20s
+     Running unittests src/lib.rs (target/debug/deps/asteroniris-243f17f032d82fe6)
+
+running 133 tests
+test onboard::domain::tests::provider_env_var_known_providers ... ok
+test providers::anthropic::tests::chat_response_empty_content ... ok
+test providers::anthropic::tests::chat_response_deserializes ... ok
+test providers::anthropic::tests::chat_response_multiple_blocks ... ok
+test providers::anthropic::tests::chat_request_serializes_with_system ... ok
+test providers::anthropic::tests::chat_request_serializes_without_system ... ok
+test providers::anthropic::tests::setup_token_detection_works ... ok
+test providers::anthropic::tests::temperature_range_serializes ... ok
+test providers::anthropic::tests::custom_base_url_trims_trailing_slash ... ok
+test providers::anthropic::tests::creates_with_custom_base_url ... ok
+test providers::anthropic::tests::creates_without_key ... ok
+test providers::compatible::tests::chat_completions_url_custom_full_endpoint ... ok
+test providers::anthropic::tests::default_base_url_when_none_provided ... ok
+test providers::compatible::tests::chat_completions_url_opencode ... ok
+test providers::anthropic::tests::chat_fails_without_key ... ok
+test providers::anthropic::tests::creates_with_empty_key ... ok
+test providers::anthropic::tests::creates_with_key ... ok
+test providers::compatible::tests::request_serializes_correctly ... ok
+test providers::compatible::tests::response_deserializes ... ok
+test providers::compatible::tests::response_empty_choices ... ok
+test providers::compatible::tests::responses_extracts_any_text_as_fallback ... ok
+test providers::compatible::tests::responses_extracts_nested_output_text ... ok
+test providers::compatible::tests::responses_extracts_top_level_output_text ... ok
+test providers::anthropic::tests::chat_with_system_fails_without_key ... ok
+test providers::anthropic::tests::creates_with_whitespace_key ... ok
+test providers::compatible::tests::chat_completions_url_glm ... ok
+test providers::compatible::tests::chat_completions_url_base_with_v1 ... ok
+test providers::compatible::tests::chat_completions_url_standard_openai ... ok
+test providers::gemini::tests::error_response_deserialization ... ok
+test providers::gemini::tests::gemini_cli_dir_returns_path ... ok
+test providers::gemini::tests::model_name_formatting ... ok
+test providers::compatible::tests::chat_completions_url_trailing_slash ... ok
+test providers::compatible::tests::chat_fails_without_key ... ok
+test providers::gemini::tests::request_serialization ... ok
+test providers::gemini::tests::response_deserialization ... ok
+test providers::oauth_recovery::tests::cooldown_skips_repeat_recovery_after_failure ... ok
+test providers::oauth_recovery::tests::retries_once_after_recovery_and_rebuild ... ok
+test providers::compatible::tests::creates_without_key ... ok
+test providers::compatible::tests::chat_completions_url_zai ... ok
+test providers::compatible::tests::responses_url_standard ... ok
+test providers::compatible::tests::strips_trailing_slash ... ok
+test providers::compatible::tests::responses_url_custom_full_endpoint ... ok
+test providers::compatible::tests::creates_with_key ... ok
+test providers::ollama::tests::request_serializes_with_system ... ok
+test providers::ollama::tests::response_deserializes ... ok
+test providers::ollama::tests::response_with_empty_content ... ok
+test providers::ollama::tests::response_with_multiline ... ok
+test providers::compatible::tests::custom_auth_style ... ok
+test providers::ollama::tests::request_serializes_without_system ... ok
+test providers::compatible::tests::chat_error_messages_redact_sensitive_fields ... ok
+test providers::gemini::tests::auth_source_reports_correctly ... ok
+test providers::compatible::tests::chat_completions_url_volcengine_ark ... ok
+test providers::openai::tests::request_serializes_with_system_message ... ok
+test providers::openai::tests::request_serializes_without_system ... ok
+test providers::openai::tests::response_deserializes_empty_choices ... ok
+test providers::openai::tests::response_deserializes_multiple_choices ... ok
+test providers::openai::tests::response_deserializes_single_choice ... ok
+test providers::openai::tests::response_with_unicode ... ok
+test providers::openai::tests::response_with_long_content ... ok
+test providers::reliable::tests::non_retryable_detects_common_patterns ... ok
+test providers::compatible::tests::chat_completions_url_without_v1 ... ok
+test providers::reliable::tests::returns_aggregated_error_when_all_providers_fail ... ok
+test providers::reliable::tests::skips_retries_on_non_retryable_error ... ok
+test providers::reliable::tests::succeeds_without_retry ... ok
+test providers::compatible::tests::x_api_key_auth_style ... ok
+test providers::gemini::tests::provider_creates_without_key ... ok
+test providers::tests::factory_anthropic_custom_empty_url_errors ... ok
+test providers::gemini::tests::provider_creates_with_key ... ok
+test providers::ollama::tests::custom_url_no_trailing_slash ... ok
+test providers::reliable::tests::retries_then_recovers ... ok
+test providers::reliable::tests::falls_back_after_retries_exhausted ... ok
+test providers::ollama::tests::custom_url_trailing_slash ... ok
+test providers::ollama::tests::default_url ... ok
+test providers::openai::tests::creates_without_key ... ok
+test providers::ollama::tests::empty_url_uses_empty ... ok
+test providers::tests::factory_custom_empty_url_errors ... ok
+test providers::openai::tests::chat_with_system_fails_without_key ... ok
+test providers::openai::tests::creates_with_key ... ok
+test providers::openai::tests::creates_with_empty_key ... ok
+test providers::tests::factory_empty_name_errors ... ok
+test providers::tests::factory_anthropic ... ok
+test providers::openai::tests::chat_fails_without_key ... ok
+test providers::tests::factory_anthropic_custom_trailing_slash ... ok
+test providers::tests::factory_anthropic_custom_url ... ok
+test providers::tests::factory_cohere ... ok
+test providers::tests::factory_anthropic_custom_no_key ... ok
+test providers::tests::factory_custom_localhost ... ok
+test providers::tests::factory_custom_url ... ok
+test providers::tests::factory_deepseek ... ok
+test providers::tests::factory_minimax ... ok
+test providers::tests::factory_groq ... ok
+test providers::tests::factory_cloudflare ... ok
+test providers::tests::factory_custom_no_key ... ok
+test providers::tests::factory_bedrock ... ok
+test providers::tests::factory_mistral ... ok
+test providers::tests::factory_unknown_provider_errors ... ok
+test providers::tests::factory_glm ... ok
+test providers::tests::factory_openai ... ok
+test providers::tests::factory_copilot ... ok
+test providers::tests::factory_fireworks ... ok
+test providers::tests::resilient_provider_errors_for_invalid_primary ... ok
+test providers::tests::factory_synthetic ... ok
+test providers::tests::factory_perplexity ... ok
+test providers::tests::sanitize_handles_delimiter_boundaries ... ok
+test providers::tests::sanitize_handles_json_wrapped_key ... ok
+test providers::tests::sanitize_keeps_bare_prefix ... ok
+test providers::tests::sanitize_keeps_non_secret_key_value_pairs ... ok
+test providers::tests::sanitize_no_secret_no_change ... ok
+test providers::tests::sanitize_preserves_unicode_boundaries ... ok
+test providers::tests::sanitize_scrubs_additional_token_prefixes ... ok
+test providers::tests::sanitize_scrubs_bearer_authorization_headers ... ok
+test providers::tests::sanitize_scrubs_multiple_prefixes ... ok
+test providers::tests::sanitize_scrubs_query_and_json_token_fields ... ok
+test providers::tests::sanitize_scrubs_sk_prefix ... ok
+test providers::tests::sanitize_short_prefix_then_real_key ... ok
+test providers::tests::sanitize_sk_proj_comment_then_real_key ... ok
+test providers::tests::sanitize_truncates_after_scrub ... ok
+test providers::tests::sanitize_truncates_long_error ... ok
+test providers::compatible::tests::all_compatible_providers_fail_without_key ... ok
+test providers::tests::factory_moonshot ... ok
+test providers::tests::factory_opencode ... ok
+test providers::tests::factory_venice ... ok
+test providers::tests::factory_qianfan ... ok
+test providers::tests::factory_openrouter ... ok
+test providers::tests::factory_gemini ... ok
+test providers::tests::factory_together ... ok
+test providers::tests::factory_xai ... ok
+test providers::tests::factory_ollama ... ok
+test providers::tests::factory_vercel ... ok
+test providers::tests::factory_zai ... ok
+test providers::tests::resilient_provider_ignores_duplicate_and_invalid_fallbacks ... ok
+test providers::tests::resilient_provider_with_resolver_uses_per_provider_credentials ... ok
+test providers::tests::factory_all_providers_create_successfully ... ok
+
+test result: ok. 133 passed; 0 failed; 0 ignored; 0 measured; 948 filtered out; finished in 1.27s
+
+
+=== Line Counts ===
+   23 src/providers/mod.rs
+  381 src/providers/factory.rs
+  116 src/providers/scrub.rs
+  520 合計
+
+=== Feature Matrix Gate ===
+NOTE: cargo check --lib and --bin fail due to PRE-EXISTING channel decomposition conflicts (telegram.rs + telegram/mod.rs, imessage.rs + imessage/mod.rs coexist from other tasks). NOT caused by providers changes.
+LSP diagnostics: 0 errors on providers/mod.rs, providers/factory.rs, providers/scrub.rs
+cargo test --lib -- providers: 133 passed, 0 failed

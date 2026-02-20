@@ -1,0 +1,35 @@
+TASK 20: Arc::clone() Stylistic Improvements in src/tools/mod.rs
+================================================================
+
+CHANGES MADE:
+1. all_tools() function (lines 98-135):
+   - Replaced security.clone() with Arc::clone(security) for all 5 uses
+   - Replaced memory.clone() with Arc::clone(&memory) for all 3 uses
+   - Last use of memory moved without clone (MemoryGovernanceTool::new)
+   - Browser section: security.clone() → Arc::clone(security) for both tools
+   - Kept browser_config.allowed_domains.clone() and session_name.clone() as-is (not Arc types)
+
+2. default_tools() function (lines 32-38):
+   - Replaced security.clone() with Arc::clone(&security) for consistency
+   - Last use of security moved without clone
+
+RATIONALE:
+- Arc::clone(ptr) is idiomatic when ptr is already a reference (&Arc<T>)
+- Arc::clone(&x) is idiomatic when x is an owned Arc<T>
+- Signals explicit intent: "I'm cloning the Arc pointer, not the inner value"
+- Improves code clarity and follows Rust best practices
+
+VERIFICATION:
+✓ cargo test --lib -- tools: 103 passed
+✓ cargo clippy -- -D warnings: Clean (no warnings)
+✓ All tool tests pass
+✓ No behavior changes, only stylistic improvements
+
+FILES MODIFIED:
+- src/tools/mod.rs (2 functions, 8 Arc::clone replacements)
+
+NOTES:
+- No changes to tool behavior or registration order
+- No new clippy suppressions added
+- Baseline clippy allowances remain at 84
+- Both lib and bin crates verified clean

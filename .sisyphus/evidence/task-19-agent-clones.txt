@@ -1,0 +1,60 @@
+=== Task 19: Agent Loop Arc Clone Cleanup ===
+Date: 2026-02-20T09:57:32Z
+
+=== Change Summary ===
+File: src/agent/loop_/mod.rs
+- observer.clone() at line 449 → Arc::clone(observer)
+- mem.clone() already converted to Arc::clone(&mem) in prior work (6 sites)
+- config.persona.state_mirror_filename.clone(): NOT eliminable (SystemPromptOptions requires Option<String>)
+- config.workspace_dir.clone(): NOT eliminable (PathBuf ownership for spawned task)
+- write_context.policy_context.clone(): struct clone, not Arc
+
+=== Clippy ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s
+
+=== Agent Integration Tests ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/agent.rs (target/debug/deps/agent-2966eabba70d4f7f)
+
+running 13 tests
+test external_content::external_ingress_never_replays_blocked_raw_payload_to_model_input ... ok
+test action_intent::action_intent_requires_policy_verdict ... ok
+test scheduler_routes::autonomy_policy_blocks_bypass ... ok
+test action_intent::noop_operator_never_executes_external_action ... ok
+test scheduler_routes::autonomy_policy_applies_all_routes ... ok
+test scheduler_routes::scheduler_routes_user_vs_agent ... ok
+test autonomy_cross_layer_flow::public_integration_turn_with_policy_happy_path ... ok
+test autonomy_cross_layer_flow::public_integration_turn_happy_path ... ok
+test autonomy_cross_layer_flow::public_integration_turn_with_policy_scope_mismatch ... ok
+test autonomy_cross_layer_flow::external_content_injection_is_blocked_and_raw_payload_not_replayed_from_memory ... ok
+test autonomy_cross_layer_flow::verify_repair_escalates_with_policy_governance_under_retry_pressure ... ok
+test autonomy_cross_layer_flow::public_integration_turn_propagates_error ... ok
+test autonomy_cross_layer_flow::autonomy_cycle_reflect_queue_verify_and_intent_seam_stays_bounded ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+=== Agent Lib Tests ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/asteroniris-243f17f032d82fe6)
+
+running 16 tests
+test cron::scheduler::tests::scheduler_agent_retry_budget_is_bounded_by_max_attempts ... ok
+test cron::scheduler::tests::scheduler_agent_jobs_never_direct_shell ... ok
+test cron::scheduler::tests::scheduler_expires_agent_jobs ... ok
+test cron::scheduler::tests::scheduler_agent_queue_bounded ... ok
+test agent::loop_::tests::autonomy_temperature_clamped ... ok
+test agent::loop_::context::tests::build_context_replay_ban_hides_raw_external_payload ... ok
+test agent::loop_::tests::persona_loop_policy_blocks_when_action_limit_is_exhausted ... ok
+test agent::loop_::tests::persona_loop_call2_failure_preserves_answer ... ok
+test agent::loop_::tests::verify_repair_recovers_within_attempt_cap ... ok
+test agent::loop_::tests::verify_repair_emits_escalation_event ... ok
+test agent::loop_::tests::persona_loop_two_calls_per_turn ... ok
+test agent::loop_::tests::post_turn_inference_hook_appends_tagged_events ... ok
+test agent::loop_::tests::verify_repair_retries_still_enforce_policy_limits ... ok
+test agent::loop_::tests::verify_repair_stops_at_max_attempts ... ok
+test agent::loop_::tests::persona_budget_counter_stable ... ok
+test agent::loop_::tests::persona_reflect_no_retry ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 1065 filtered out; finished in 0.09s
+

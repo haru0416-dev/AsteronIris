@@ -1,0 +1,31 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.42s
+     Running unittests src/lib.rs (target/debug/deps/asteroniris-243f17f032d82fe6)
+
+running 18 tests
+test skills::tests::tests::init_skills_creates_readme ... ok
+test skills::tests::tests::init_skills_idempotent ... ok
+test skills::tests::tests::load_empty_skills_dir ... ok
+test skills::tests::tests::load_ignores_dir_without_manifest ... ok
+test skills::tests::tests::load_nonexistent_dir ... ok
+test skills::tests::tests::load_ignores_files_in_skills_dir ... ok
+test skills::tests::tests::skills_dir_path ... ok
+test skills::tests::tests::skills_to_prompt_empty ... ok
+test skills::tests::tests::load_skill_from_md ... ok
+test skills::tests::tests::md_skill_heading_only ... ok
+test skills::tests::tests::load_multiple_skills ... ok
+test skills::tests::tests::skills_to_prompt_with_skills ... ok
+test skills::tests::tests::skills_to_prompt_includes_tools ... ok
+test skills::tests::tests::toml_skill_invalid_syntax_skipped ... ok
+test skills::tests::tests::load_skill_from_toml ... ok
+test skills::tests::tests::toml_prefers_over_md ... ok
+test skills::tests::tests::toml_skill_minimal ... ok
+test skills::tests::tests::toml_skill_with_multiple_tools ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1063 filtered out; finished in 0.00s
+
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.68s

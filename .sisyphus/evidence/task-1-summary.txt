@@ -1,0 +1,30 @@
+TASK 1: Extract security::policy tests
+========================================
+
+OBJECTIVE:
+Extract #[cfg(test)] mod tests { ... } block from src/security/policy/mod.rs 
+into new file src/security/policy/tests.rs
+
+COMPLETION STATUS: ✓ COMPLETE
+
+FILES CREATED:
+- src/security/policy/tests.rs (873 lines)
+
+FILES MODIFIED:
+- src/security/policy/mod.rs (1016 → 140 lines)
+
+VERIFICATION RESULTS:
+✓ All 87 tests pass: cargo test --lib -- security::policy
+✓ Clippy clean: cargo clippy -- -D warnings
+✓ No production logic changes
+✓ Test module path preserved: security::policy::tests::*
+
+EVIDENCE FILES:
+- .sisyphus/evidence/task-1-security-policy-tests.txt (test output)
+- .sisyphus/evidence/task-1-clippy-check.txt (clippy output)
+- .sisyphus/notepads/codebase-tuning/learnings.md (updated with findings)
+
+SUMMARY:
+Successfully extracted 877 lines of test code from mod.rs into separate tests.rs file.
+Module facade now follows AGENTS.md pattern with thin mod.rs (140 lines) and 
+separate test file. All tests pass, no regressions.

@@ -1,0 +1,63 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.51s
+     Running unittests src/lib.rs (target/debug/deps/asteroniris-243f17f032d82fe6)
+
+running 54 tests
+test providers::tests::factory_anthropic_custom_empty_url_errors ... ok
+test providers::tests::factory_custom_empty_url_errors ... ok
+test providers::tests::factory_empty_name_errors ... ok
+test providers::tests::factory_cohere ... ok
+test providers::tests::factory_custom_url ... ok
+test providers::tests::factory_custom_no_key ... ok
+test providers::tests::factory_anthropic_custom_no_key ... ok
+test providers::tests::factory_deepseek ... ok
+test providers::tests::factory_anthropic ... ok
+test providers::tests::factory_anthropic_custom_url ... ok
+test providers::tests::factory_anthropic_custom_trailing_slash ... ok
+test providers::tests::factory_custom_localhost ... ok
+test providers::tests::factory_cloudflare ... ok
+test providers::tests::factory_bedrock ... ok
+test providers::tests::factory_fireworks ... ok
+test providers::tests::factory_minimax ... ok
+test providers::tests::factory_unknown_provider_errors ... ok
+test providers::tests::factory_copilot ... ok
+test providers::tests::factory_mistral ... ok
+test providers::tests::factory_groq ... ok
+test providers::tests::factory_glm ... ok
+test providers::tests::resilient_provider_errors_for_invalid_primary ... ok
+test providers::tests::factory_perplexity ... ok
+test providers::tests::factory_openai ... ok
+test providers::tests::sanitize_handles_delimiter_boundaries ... ok
+test providers::tests::sanitize_handles_json_wrapped_key ... ok
+test providers::tests::sanitize_keeps_bare_prefix ... ok
+test providers::tests::sanitize_keeps_non_secret_key_value_pairs ... ok
+test providers::tests::sanitize_no_secret_no_change ... ok
+test providers::tests::sanitize_preserves_unicode_boundaries ... ok
+test providers::tests::sanitize_scrubs_additional_token_prefixes ... ok
+test providers::tests::sanitize_scrubs_bearer_authorization_headers ... ok
+test providers::tests::sanitize_scrubs_multiple_prefixes ... ok
+test providers::tests::sanitize_scrubs_query_and_json_token_fields ... ok
+test providers::tests::sanitize_scrubs_sk_prefix ... ok
+test providers::tests::sanitize_short_prefix_then_real_key ... ok
+test providers::tests::sanitize_sk_proj_comment_then_real_key ... ok
+test providers::tests::sanitize_truncates_after_scrub ... ok
+test providers::tests::sanitize_truncates_long_error ... ok
+test providers::tests::factory_venice ... ok
+test providers::tests::factory_synthetic ... ok
+test providers::tests::factory_moonshot ... ok
+test providers::tests::factory_openrouter ... ok
+test providers::tests::factory_opencode ... ok
+test providers::tests::factory_qianfan ... ok
+test providers::tests::factory_zai ... ok
+test providers::tests::factory_gemini ... ok
+test providers::tests::factory_together ... ok
+test providers::tests::factory_vercel ... ok
+test providers::tests::factory_ollama ... ok
+test providers::tests::resilient_provider_ignores_duplicate_and_invalid_fallbacks ... ok
+test providers::tests::resilient_provider_with_resolver_uses_per_provider_credentials ... ok
+test providers::tests::factory_xai ... ok
+test providers::tests::factory_all_providers_create_successfully ... ok
+
+test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 1027 filtered out; finished in 1.08s
+
+No clippy warnings for providers

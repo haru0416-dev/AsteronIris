@@ -1,0 +1,54 @@
+Diff in /home/haru/Project/asteroniris/src/memory/lancedb/mod.rs:72:
+     id: String,
+     key: String,
+     content: String,
+[31m-    #[allow(dead_code)] // Set during deserialization; read in tests (e.g. lancedb_store_get_upsert_and_recall)
+(B[m[32m+    #[allow(dead_code)]
+(B[m[32m+    // Set during deserialization; read in tests (e.g. lancedb_store_get_upsert_and_recall)
+(B[m     category: MemoryCategory,
+     timestamp: String,
+     source: MemorySource,
+Diff in /home/haru/Project/asteroniris/src/memory/markdown.rs:289:
+         None
+     }
+ 
+[31m-
+(B[m     async fn read_all_entries(&self) -> anyhow::Result<Vec<MemoryEntry>> {
+         let mut entries = Vec::new();
+ 
+Diff in /home/haru/Project/asteroniris/src/memory/sqlite/codec.rs:16:
+ 
+     #[allow(dead_code)]
+     pub(super) fn str_to_category(s: &str) -> MemoryCategory {
+[31m-    // Used by projection layer methods (fetch/list/keyword search) — currently dormant
+(B[m[32m+        // Used by projection layer methods (fetch/list/keyword search) — currently dormant
+(B[m         match s {
+             "core" => MemoryCategory::Core,
+             "daily" => MemoryCategory::Daily,
+Diff in /home/haru/Project/asteroniris/src/memory/lancedb/mod.rs:72:
+     id: String,
+     key: String,
+     content: String,
+[31m-    #[allow(dead_code)] // Set during deserialization; read in tests (e.g. lancedb_store_get_upsert_and_recall)
+(B[m[32m+    #[allow(dead_code)]
+(B[m[32m+    // Set during deserialization; read in tests (e.g. lancedb_store_get_upsert_and_recall)
+(B[m     category: MemoryCategory,
+     timestamp: String,
+     source: MemorySource,
+Diff in /home/haru/Project/asteroniris/src/memory/markdown.rs:289:
+         None
+     }
+ 
+[31m-
+(B[m     async fn read_all_entries(&self) -> anyhow::Result<Vec<MemoryEntry>> {
+         let mut entries = Vec::new();
+ 
+Diff in /home/haru/Project/asteroniris/src/memory/sqlite/codec.rs:16:
+ 
+     #[allow(dead_code)]
+     pub(super) fn str_to_category(s: &str) -> MemoryCategory {
+[31m-    // Used by projection layer methods (fetch/list/keyword search) — currently dormant
+(B[m[32m+        // Used by projection layer methods (fetch/list/keyword search) — currently dormant
+(B[m         match s {
+             "core" => MemoryCategory::Core,
+             "daily" => MemoryCategory::Daily,

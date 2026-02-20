@@ -1,0 +1,18 @@
+    Blocking waiting for file lock on build directory
+    Checking asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+warning: fields `layer` and `provenance` are never read
+  --> src/memory/markdown.rs:26:5
+   |
+23 | struct ParsedMarkdownLine {
+   |        ------------------ fields in this struct
+...
+26 |     layer: Option<MemoryLayer>,
+   |     ^^^^^
+27 |     provenance: Option<MemoryProvenance>,
+   |     ^^^^^^^^^^
+   |
+   = note: `ParsedMarkdownLine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `asteroniris` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 41.92s
