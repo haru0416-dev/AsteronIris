@@ -157,7 +157,10 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
     let ctx = ExecutionContext {
         security: Arc::clone(&rt.security),
         autonomy_level: effective_autonomy,
-        entity_id: format!("{}:{}", msg.channel, msg.sender),
+        entity_id: match &msg.conversation_id {
+            Some(conv_id) => format!("{}:{}:{}", msg.channel, conv_id, msg.sender),
+            None => format!("{}:{}", msg.channel, msg.sender),
+        },
         turn_number: 0,
         workspace_dir,
         allowed_tools: tool_allowlist,
