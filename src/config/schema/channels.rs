@@ -48,9 +48,19 @@ pub struct TelegramConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscordConfig {
     pub bot_token: String,
+    #[serde(default)]
+    pub application_id: Option<String>,
     pub guild_id: Option<String>,
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    #[serde(default)]
+    pub intents: Option<u64>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub activity_type: Option<u8>,
+    #[serde(default)]
+    pub activity_name: Option<String>,
     /// Per-channel autonomy level override. Effective level = min(global, channel).
     #[serde(default, deserialize_with = "deserialize_autonomy_level_opt")]
     pub autonomy_level: Option<AutonomyLevel>,

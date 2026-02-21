@@ -294,6 +294,11 @@ fn advance_channel_sub_step(state: &mut WizardState) {
                 allowed_users: allowed,
                 autonomy_level: None,
                 tool_allowlist: None,
+                application_id: None,
+                intents: None,
+                status: None,
+                activity_type: None,
+                activity_name: None,
             });
             state.channel_sub_step = ChannelSubStep::Picker;
         }

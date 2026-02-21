@@ -309,6 +309,11 @@ fn setup_discord(config: &mut ChannelsConfig) -> Result<()> {
         allowed_users,
         autonomy_level: None,
         tool_allowlist: None,
+        application_id: None,
+        intents: None,
+        status: None,
+        activity_type: None,
+        activity_name: None,
     });
 
     Ok(())
