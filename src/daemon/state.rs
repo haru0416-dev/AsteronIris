@@ -1,0 +1,71 @@
+use crate::config::Config;
+use chrono::Utc;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::task::JoinHandle;
+use tokio::time::Duration;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub(super) struct DaemonStatus {
+    #[serde(flatten)]
+    snapshot: serde_json::Map<String, serde_json::Value>,
+    written_at: String,
+}
+
+pub(super) fn state_file_path(config: &Config) -> PathBuf {
+    config
+        .config_path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), PathBuf::from)
+        .join("daemon_state.json")
+}
+
+pub(super) fn spawn_state_writer(config: Arc<Config>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let path = state_file_path(&config);
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+
+        let mut interval = tokio::time::interval(Duration::from_secs(super::STATUS_FLUSH_SECONDS));
+        loop {
+            interval.tick().await;
+            let mut json = crate::health::snapshot_json();
+            if let Some(snapshot) = json.as_object().cloned() {
+                let status = DaemonStatus {
+                    snapshot,
+                    written_at: Utc::now().to_rfc3339(),
+                };
+                json = serde_json::to_value(status).unwrap_or_else(|_| serde_json::json!({}));
+            }
+
+            let data = serde_json::to_vec_pretty(&json).unwrap_or_else(|_| b"{}".to_vec());
+            let _ = tokio::fs::write(&path, data).await;
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn test_config(tmp: &TempDir) -> Config {
+        let config = Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        config
+    }
+
+    #[test]
+    fn state_file_path_uses_config_directory() {
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp);
+
+        let path = state_file_path(&config);
+        assert_eq!(path, tmp.path().join("daemon_state.json"));
+    }
+}
