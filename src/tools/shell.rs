@@ -221,6 +221,9 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let original = std::env::var(key).ok();
+            // SAFETY: This helper is used only in test code to set process env vars.
+            // Tests that use EnvGuard run on the current-thread Tokio runtime and this
+            // guard restores the original value on drop, keeping access scoped.
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -231,9 +234,12 @@ mod tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             match &self.original {
+                // SAFETY: Test-only restoration of a variable that was previously read by
+                // this guard, returning process state to its original value.
                 Some(val) => unsafe {
                     std::env::set_var(self.key, val);
                 },
+                // SAFETY: Test-only cleanup for variables introduced by EnvGuard::set.
                 None => unsafe {
                     std::env::remove_var(self.key);
                 },
