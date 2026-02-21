@@ -21,6 +21,79 @@ pub struct ComposioTool {
     client: Client,
 }
 
+fn composio_parameters_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "description": "The operation: 'list' (list available actions), 'execute' (run an action), or 'connect' (get OAuth URL)",
+                "enum": ["list", "execute", "connect"]
+            },
+            "app": {
+                "type": "string",
+                "description": "App name filter for 'list', or app name for 'connect' (e.g. 'gmail', 'notion', 'github')"
+            },
+            "action_name": {
+                "type": "string",
+                "description": "The Composio action name to execute (e.g. 'GMAIL_FETCH_EMAILS')"
+            },
+            "params": {
+                "type": "object",
+                "description": "Parameters to pass to the action"
+            },
+            "entity_id": {
+                "type": "string",
+                "description": "Entity ID for multi-user setups (defaults to 'default')"
+            }
+        },
+        "required": ["action"]
+    })
+}
+
+fn format_actions_output(actions: &[ComposioAction]) -> String {
+    let summary: Vec<String> = actions
+        .iter()
+        .take(20)
+        .map(|action| {
+            format!(
+                "- {} ({}): {}",
+                action.name,
+                action.app_name.as_deref().unwrap_or("?"),
+                action.description.as_deref().unwrap_or("")
+            )
+        })
+        .collect();
+    let total = actions.len();
+    format!(
+        "Found {total} available actions:\n{}{}",
+        summary.join("\n"),
+        if total > 20 {
+            format!("\n... and {} more", total - 20)
+        } else {
+            String::new()
+        }
+    )
+}
+
+fn success_tool_result(output: String) -> ToolResult {
+    ToolResult {
+        success: true,
+        output,
+        error: None,
+        attachments: Vec::new(),
+    }
+}
+
+fn error_tool_result(message: impl Into<String>) -> ToolResult {
+    ToolResult {
+        success: false,
+        output: String::new(),
+        error: Some(message.into()),
+        attachments: Vec::new(),
+    }
+}
+
 impl ComposioTool {
     pub fn new(api_key: &str) -> Self {
         Self {
@@ -126,9 +199,57 @@ impl ComposioTool {
             .map(String::from)
             .ok_or_else(|| anyhow::anyhow!("No redirect URL in response"))
     }
+
+    async fn handle_list_action(&self, app: Option<&str>) -> ToolResult {
+        match self.list_actions(app).await {
+            Ok(actions) => success_tool_result(format_actions_output(&actions)),
+            Err(error) => error_tool_result(format!("Failed to list actions: {error}")),
+        }
+    }
+
+    async fn handle_execute_action(
+        &self,
+        args: &serde_json::Value,
+        entity_id: &str,
+    ) -> anyhow::Result<ToolResult> {
+        let action_name = args
+            .get("action_name")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'action_name' for execute"))?;
+        let params = args.get("params").cloned().unwrap_or(json!({}));
+
+        let result = match self
+            .execute_action(action_name, params, Some(entity_id))
+            .await
+        {
+            Ok(value) => {
+                let output =
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"));
+                success_tool_result(output)
+            }
+            Err(error) => error_tool_result(format!("Action execution failed: {error}")),
+        };
+        Ok(result)
+    }
+
+    async fn handle_connect_action(
+        &self,
+        args: &serde_json::Value,
+        entity_id: &str,
+    ) -> anyhow::Result<ToolResult> {
+        let app = args
+            .get("app")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'app' for connect"))?;
+
+        let result = match self.get_connection_url(app, entity_id).await {
+            Ok(url) => success_tool_result(format!("Open this URL to connect {app}:\n{url}")),
+            Err(error) => error_tool_result(format!("Failed to get connection URL: {error}")),
+        };
+        Ok(result)
+    }
 }
 
-#[allow(clippy::too_many_lines)]
 #[async_trait]
 impl Tool for ComposioTool {
     fn name(&self) -> &str {
@@ -141,33 +262,7 @@ impl Tool for ComposioTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "description": "The operation: 'list' (list available actions), 'execute' (run an action), or 'connect' (get OAuth URL)",
-                    "enum": ["list", "execute", "connect"]
-                },
-                "app": {
-                    "type": "string",
-                    "description": "App name filter for 'list', or app name for 'connect' (e.g. 'gmail', 'notion', 'github')"
-                },
-                "action_name": {
-                    "type": "string",
-                    "description": "The Composio action name to execute (e.g. 'GMAIL_FETCH_EMAILS')"
-                },
-                "params": {
-                    "type": "object",
-                    "description": "Parameters to pass to the action"
-                },
-                "entity_id": {
-                    "type": "string",
-                    "description": "Entity ID for multi-user setups (defaults to 'default')"
-                }
-            },
-            "required": ["action"]
-        })
+        composio_parameters_schema()
     }
 
     async fn execute(
@@ -186,114 +281,14 @@ impl Tool for ComposioTool {
             .unwrap_or("default");
 
         match action {
-            "list" => {
-                let app = args.get("app").and_then(|v| v.as_str());
-                match self.list_actions(app).await {
-                    Ok(actions) => {
-                        let summary: Vec<String> = actions
-                            .iter()
-                            .take(20)
-                            .map(|a| {
-                                format!(
-                                    "- {} ({}): {}",
-                                    a.name,
-                                    a.app_name.as_deref().unwrap_or("?"),
-                                    a.description.as_deref().unwrap_or("")
-                                )
-                            })
-                            .collect();
-                        let total = actions.len();
-                        let output = format!(
-                            "Found {total} available actions:\n{}{}",
-                            summary.join("\n"),
-                            if total > 20 {
-                                format!("\n... and {} more", total - 20)
-                            } else {
-                                String::new()
-                            }
-                        );
-                        Ok(ToolResult {
-                            success: true,
-                            output,
-                            error: None,
-                            attachments: Vec::new(),
-                        })
-                    }
-                    Err(e) => Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!("Failed to list actions: {e}")),
-
-                        attachments: Vec::new(),
-                    }),
-                }
-            }
-
-            "execute" => {
-                let action_name = args
-                    .get("action_name")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'action_name' for execute"))?;
-
-                let params = args.get("params").cloned().unwrap_or(json!({}));
-
-                match self
-                    .execute_action(action_name, params, Some(entity_id))
-                    .await
-                {
-                    Ok(result) => {
-                        let output = serde_json::to_string_pretty(&result)
-                            .unwrap_or_else(|_| format!("{result:?}"));
-                        Ok(ToolResult {
-                            success: true,
-                            output,
-                            error: None,
-                            attachments: Vec::new(),
-                        })
-                    }
-                    Err(e) => Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!("Action execution failed: {e}")),
-
-                        attachments: Vec::new(),
-                    }),
-                }
-            }
-
-            "connect" => {
-                let app = args
-                    .get("app")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'app' for connect"))?;
-
-                match self.get_connection_url(app, entity_id).await {
-                    Ok(url) => Ok(ToolResult {
-                        success: true,
-                        output: format!("Open this URL to connect {app}:\n{url}"),
-                        error: None,
-
-                        attachments: Vec::new(),
-                    }),
-                    Err(e) => Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!("Failed to get connection URL: {e}")),
-
-                        attachments: Vec::new(),
-                    }),
-                }
-            }
-
-            _ => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Unknown action '{action}'. Use 'list', 'execute', or 'connect'."
-                )),
-
-                attachments: Vec::new(),
-            }),
+            "list" => Ok(self
+                .handle_list_action(args.get("app").and_then(|v| v.as_str()))
+                .await),
+            "execute" => self.handle_execute_action(&args, entity_id).await,
+            "connect" => self.handle_connect_action(&args, entity_id).await,
+            _ => Ok(error_tool_result(format!(
+                "Unknown action '{action}'. Use 'list', 'execute', or 'connect'."
+            ))),
         }
     }
 }

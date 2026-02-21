@@ -141,6 +141,8 @@ async fn skillforge_hf_discover() {
         .mount(&server)
         .await;
 
+    // SAFETY: Test-only env-var mutation. HF_ENV_LOCK (acquired above)
+    // serialises all HuggingFace tests, preventing concurrent access.
     unsafe {
         std::env::set_var("ASTERONIRIS_SKILLFORGE_HF_API_BASE", server.uri());
     }
@@ -166,6 +168,7 @@ async fn skillforge_hf_discover() {
     assert_eq!(report.results[0].candidate.owner, "openai");
     assert!(report.results[0].candidate.has_license);
 
+    // SAFETY: Test-only cleanup; HF_ENV_LOCK is still held.
     unsafe {
         std::env::remove_var("ASTERONIRIS_SKILLFORGE_HF_API_BASE");
     }
@@ -184,6 +187,8 @@ async fn skillforge_hf_rate_limit_handling() {
         .mount(&server)
         .await;
 
+    // SAFETY: Test-only env-var mutation. HF_ENV_LOCK (acquired above)
+    // serialises all HuggingFace tests, preventing concurrent access.
     unsafe {
         std::env::set_var("ASTERONIRIS_SKILLFORGE_HF_API_BASE", server.uri());
     }
@@ -203,6 +208,7 @@ async fn skillforge_hf_rate_limit_handling() {
     );
     assert_eq!(report.evaluated, 0, "no candidates should be evaluated");
 
+    // SAFETY: Test-only cleanup; HF_ENV_LOCK is still held.
     unsafe {
         std::env::remove_var("ASTERONIRIS_SKILLFORGE_HF_API_BASE");
     }

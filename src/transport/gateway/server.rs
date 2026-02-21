@@ -48,8 +48,137 @@ pub async fn run_gateway(host: &str, port: u16, config: Arc<Config>) -> Result<(
     run_gateway_with_listener(host, listener, config).await
 }
 
+struct GatewayResources {
+    provider: Arc<dyn Provider>,
+    model: String,
+    temperature: f64,
+    mem: Arc<dyn Memory>,
+    security: Arc<SecurityPolicy>,
+    rate_limiter: Arc<EntityRateLimiter>,
+    permission_store: Arc<PermissionStore>,
+    registry: Arc<ToolRegistry>,
+}
+
+fn composio_key(config: &Config) -> Option<&str> {
+    if config.composio.enabled {
+        config.composio.api_key.as_deref()
+    } else {
+        None
+    }
+}
+
+fn build_gateway_resources(config: &Config, auth_broker: &AuthBroker) -> Result<GatewayResources> {
+    let provider: Arc<dyn Provider> = Arc::from(
+        providers::create_resilient_provider_with_oauth_recovery(
+            config,
+            config.default_provider.as_deref().unwrap_or("openrouter"),
+            &config.reliability,
+            |name| auth_broker.resolve_provider_api_key(name),
+        )
+        .context("create resilient LLM provider")?,
+    );
+    let model = config
+        .default_model
+        .clone()
+        .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
+    let temperature = config.default_temperature;
+
+    let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
+    let mem: Arc<dyn Memory> = Arc::from(
+        memory::create_memory(
+            &config.memory,
+            &config.workspace_dir,
+            memory_api_key.as_deref(),
+        )
+        .context("create memory backend for gateway")?,
+    );
+
+    let security = Arc::new(SecurityPolicy::from_config(
+        &config.autonomy,
+        &config.workspace_dir,
+    ));
+    let rate_limiter = Arc::new(EntityRateLimiter::new(
+        config.autonomy.max_actions_per_hour,
+        config.autonomy.max_actions_per_entity_per_hour,
+    ));
+    let permission_store = Arc::new(PermissionStore::load(&config.workspace_dir));
+
+    let tools = tools::all_tools(
+        &security,
+        Arc::clone(&mem),
+        composio_key(config),
+        &config.browser,
+        &config.tools,
+        Some(&config.mcp),
+    );
+    let middleware = tools::default_middleware_chain();
+    let mut registry = ToolRegistry::new(middleware);
+    for tool in tools {
+        registry.register(tool);
+    }
+
+    Ok(GatewayResources {
+        provider,
+        model,
+        temperature,
+        mem,
+        security,
+        rate_limiter,
+        permission_store,
+        registry: Arc::new(registry),
+    })
+}
+
+fn resolve_webhook_secret(config: &Config) -> Option<Arc<str>> {
+    config
+        .channels_config
+        .webhook
+        .as_ref()
+        .and_then(|webhook| webhook.secret.as_deref())
+        .map(Arc::from)
+}
+
+fn build_whatsapp_channel(config: &Config) -> Option<Arc<WhatsAppChannel>> {
+    config.channels_config.whatsapp.as_ref().map(|whatsapp| {
+        Arc::new(WhatsAppChannel::new(
+            whatsapp.access_token.clone(),
+            whatsapp.phone_number_id.clone(),
+            whatsapp.verify_token.clone(),
+            whatsapp.allowed_numbers.clone(),
+        ))
+    })
+}
+
+fn build_gateway_state(
+    config: &Config,
+    resources: GatewayResources,
+    pairing: Arc<PairingGuard>,
+    webhook_secret: Option<Arc<str>>,
+    whatsapp_channel: Option<Arc<WhatsAppChannel>>,
+    whatsapp_app_secret: Option<Arc<str>>,
+) -> AppState {
+    AppState {
+        provider: resources.provider,
+        registry: resources.registry,
+        rate_limiter: resources.rate_limiter,
+        max_tool_loop_iterations: config.autonomy.max_tool_loop_iterations,
+        permission_store: resources.permission_store,
+        model: resources.model,
+        temperature: resources.temperature,
+        openai_compat_api_keys: None,
+        mem: resources.mem,
+        auto_save: config.memory.auto_save,
+        webhook_secret,
+        pairing,
+        whatsapp: whatsapp_channel,
+        whatsapp_app_secret,
+        defense_mode: config.gateway.defense_mode,
+        defense_kill_switch: config.gateway.defense_kill_switch,
+        security: resources.security,
+    }
+}
+
 /// Run the HTTP gateway from a pre-bound listener.
-#[allow(clippy::too_many_lines)]
 pub async fn run_gateway_with_listener(
     host: &str,
     listener: tokio::net::TcpListener,
@@ -63,73 +192,9 @@ pub async fn run_gateway_with_listener(
 
     let auth_broker = AuthBroker::load_or_init(&config).context("load auth broker for gateway")?;
 
-    let provider: Arc<dyn Provider> = Arc::from(
-        providers::create_resilient_provider_with_oauth_recovery(
-            &config,
-            config.default_provider.as_deref().unwrap_or("openrouter"),
-            &config.reliability,
-            |name| auth_broker.resolve_provider_api_key(name),
-        )
-        .context("create resilient LLM provider")?,
-    );
-    let model = config
-        .default_model
-        .clone()
-        .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
-    let temperature = config.default_temperature;
-    let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
-    let mem: Arc<dyn Memory> = Arc::from(
-        memory::create_memory(
-            &config.memory,
-            &config.workspace_dir,
-            memory_api_key.as_deref(),
-        )
-        .context("create memory backend for gateway")?,
-    );
-    let security = Arc::new(SecurityPolicy::from_config(
-        &config.autonomy,
-        &config.workspace_dir,
-    ));
-    let rate_limiter = Arc::new(EntityRateLimiter::new(
-        config.autonomy.max_actions_per_hour,
-        config.autonomy.max_actions_per_entity_per_hour,
-    ));
-    let permission_store = Arc::new(PermissionStore::load(&config.workspace_dir));
-    let composio_key = if config.composio.enabled {
-        config.composio.api_key.as_deref()
-    } else {
-        None
-    };
-    let tools = tools::all_tools(
-        &security,
-        Arc::clone(&mem),
-        composio_key,
-        &config.browser,
-        &config.tools,
-        Some(&config.mcp),
-    );
-    let middleware = tools::default_middleware_chain();
-    let mut registry = ToolRegistry::new(middleware);
-    for tool in tools {
-        registry.register(tool);
-    }
-
-    let webhook_secret: Option<Arc<str>> = config
-        .channels_config
-        .webhook
-        .as_ref()
-        .and_then(|w| w.secret.as_deref())
-        .map(Arc::from);
-
-    let whatsapp_channel: Option<Arc<WhatsAppChannel>> =
-        config.channels_config.whatsapp.as_ref().map(|wa| {
-            Arc::new(WhatsAppChannel::new(
-                wa.access_token.clone(),
-                wa.phone_number_id.clone(),
-                wa.verify_token.clone(),
-                wa.allowed_numbers.clone(),
-            ))
-        });
+    let resources = build_gateway_resources(&config, &auth_broker)?;
+    let webhook_secret = resolve_webhook_secret(&config);
+    let whatsapp_channel = build_whatsapp_channel(&config);
 
     let whatsapp_app_secret = resolve_whatsapp_app_secret(&config);
 
@@ -152,25 +217,14 @@ pub async fn run_gateway_with_listener(
 
     crate::runtime::diagnostics::health::mark_component_ok("gateway");
 
-    let state = AppState {
-        provider,
-        registry: Arc::new(registry),
-        rate_limiter,
-        max_tool_loop_iterations: config.autonomy.max_tool_loop_iterations,
-        permission_store,
-        model,
-        temperature,
-        openai_compat_api_keys: None,
-        mem,
-        auto_save: config.memory.auto_save,
-        webhook_secret,
+    let state = build_gateway_state(
+        &config,
+        resources,
         pairing,
-        whatsapp: whatsapp_channel,
+        webhook_secret,
+        whatsapp_channel,
         whatsapp_app_secret,
-        defense_mode: config.gateway.defense_mode,
-        defense_kill_switch: config.gateway.defense_kill_switch,
-        security,
-    };
+    );
 
     let app = build_app(state);
     axum::serve(listener, app)

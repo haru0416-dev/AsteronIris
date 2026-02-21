@@ -3,7 +3,7 @@ use crate::core::providers;
 use crate::core::tools::middleware::ExecutionContext;
 use crate::security::pairing::constant_time_eq;
 use crate::security::policy::TenantPolicyContext;
-use crate::transport::channels::Channel;
+use crate::transport::channels::{Channel, WhatsAppChannel};
 use crate::utils::text::truncate_with_ellipsis;
 use axum::{
     body::Bytes,
@@ -88,6 +88,106 @@ async fn run_gateway_tool_loop(
         anyhow::bail!("tool loop failed: {error}");
     }
     Ok(result)
+}
+
+fn whatsapp_not_configured_response() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "WhatsApp not configured"})),
+    )
+}
+
+fn invalid_whatsapp_signature_response() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({"error": "Invalid signature"})),
+    )
+}
+
+fn invalid_whatsapp_payload_response() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "Invalid JSON payload"})),
+    )
+}
+
+fn whatsapp_ack_response() -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
+}
+
+async fn send_whatsapp_reply_or_log(wa: &WhatsAppChannel, sender: &str, message: &str) {
+    if let Err(error) = wa.send_chunked(message, sender).await {
+        tracing::error!("Failed to send WhatsApp reply: {error}");
+    }
+}
+
+async fn process_whatsapp_message(
+    state: &AppState,
+    wa: &WhatsAppChannel,
+    sender: &str,
+    content: &str,
+) {
+    let source = "gateway:whatsapp";
+    let ingress = apply_external_ingress_policy(source, content);
+
+    if state.auto_save {
+        let policy_context = gateway_runtime_policy_context();
+        if let Err(error) = policy_context.enforce_recall_scope(GATEWAY_AUTOSAVE_ENTITY_ID) {
+            tracing::warn!(
+                error,
+                "gateway whatsapp autosave skipped due to policy context"
+            );
+        } else {
+            let _ = state
+                .mem
+                .append_event(gateway_whatsapp_autosave_event(
+                    sender,
+                    ingress.persisted_summary.clone(),
+                ))
+                .await;
+        }
+    }
+
+    if ingress.blocked {
+        tracing::warn!(
+            source,
+            "blocked high-risk external content at whatsapp ingress"
+        );
+        let _ = wa
+            .send_chunked("I could not process that external content safely.", sender)
+            .await;
+        return;
+    }
+
+    if let Err(policy_error) = state.security.consume_action_and_cost(0) {
+        let _ = wa
+            .send_chunked("I cannot respond right now due to policy limits.", sender)
+            .await;
+        tracing::warn!("{policy_error}");
+        return;
+    }
+
+    match run_gateway_tool_loop(
+        state,
+        None,
+        &ingress.model_input,
+        &state.model,
+        state.temperature,
+        sender,
+    )
+    .await
+    {
+        Ok(result) => {
+            log_tool_loop_stop("gateway:whatsapp", &result.stop_reason, result.iterations);
+            send_whatsapp_reply_or_log(wa, sender, &result.final_text).await;
+        }
+        Err(error) => {
+            tracing::error!("LLM error for WhatsApp message: {error:#}");
+            let _ = wa
+                .send_chunked("Sorry, I couldn't process your message right now.", sender)
+                .await;
+        }
+    }
 }
 
 /// GET /health — always public (no secrets leaked)
@@ -288,17 +388,13 @@ pub(super) async fn handle_whatsapp_verify(
 }
 
 /// POST /whatsapp — incoming message webhook
-#[allow(clippy::too_many_lines)]
 pub(super) async fn handle_whatsapp_message(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     let Some(ref wa) = state.whatsapp else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "WhatsApp not configured"})),
-        );
+        return whatsapp_not_configured_response();
     };
 
     // ── Security: Verify X-Hub-Signature-256 if app_secret is configured ──
@@ -317,25 +413,19 @@ pub(super) async fn handle_whatsapp_message(
                     "invalid"
                 }
             );
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "Invalid signature"})),
-            );
+            return invalid_whatsapp_signature_response();
         }
     }
 
     let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&body) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid JSON payload"})),
-        );
+        return invalid_whatsapp_payload_response();
     };
 
     let messages = wa.parse_webhook_payload(&payload);
 
     if messages.is_empty() {
         // Acknowledge the webhook even if no messages (could be status updates)
-        return (StatusCode::OK, Json(serde_json::json!({"status": "ok"})));
+        return whatsapp_ack_response();
     }
 
     for msg in &messages {
@@ -344,133 +434,9 @@ pub(super) async fn handle_whatsapp_message(
             msg.sender,
             truncate_with_ellipsis(&msg.content, 50)
         );
-        let source = "gateway:whatsapp";
-
-        // Auto-save to memory
-        if state.auto_save {
-            let ingress = apply_external_ingress_policy(source, &msg.content);
-            let policy_context = gateway_runtime_policy_context();
-            if let Err(error) = policy_context.enforce_recall_scope(GATEWAY_AUTOSAVE_ENTITY_ID) {
-                tracing::warn!(
-                    error,
-                    "gateway whatsapp autosave skipped due to policy context"
-                );
-            } else {
-                let _ = state
-                    .mem
-                    .append_event(gateway_whatsapp_autosave_event(
-                        &msg.sender,
-                        ingress.persisted_summary.clone(),
-                    ))
-                    .await;
-            }
-
-            if ingress.blocked {
-                tracing::warn!(
-                    source,
-                    "blocked high-risk external content at whatsapp ingress"
-                );
-                let _ = wa
-                    .send_chunked(
-                        "I could not process that external content safely.",
-                        &msg.sender,
-                    )
-                    .await;
-                continue;
-            }
-
-            if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-                let _ = wa
-                    .send_chunked(
-                        "I cannot respond right now due to policy limits.",
-                        &msg.sender,
-                    )
-                    .await;
-                tracing::warn!("{policy_error}");
-                continue;
-            }
-
-            match run_gateway_tool_loop(
-                &state,
-                None,
-                &ingress.model_input,
-                &state.model,
-                state.temperature,
-                &msg.sender,
-            )
-            .await
-            {
-                Ok(result) => {
-                    log_tool_loop_stop("gateway:whatsapp", &result.stop_reason, result.iterations);
-                    if let Err(e) = wa.send_chunked(&result.final_text, &msg.sender).await {
-                        tracing::error!("Failed to send WhatsApp reply: {e}");
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("LLM error for WhatsApp message: {e:#}");
-                    let _ = wa
-                        .send_chunked(
-                            "Sorry, I couldn't process your message right now.",
-                            &msg.sender,
-                        )
-                        .await;
-                }
-            }
-
-            continue;
-        }
-
-        let ingress = apply_external_ingress_policy("gateway:whatsapp", &msg.content);
-        if ingress.blocked {
-            tracing::warn!("blocked high-risk external content at whatsapp ingress");
-            let _ = wa
-                .send_chunked(
-                    "I could not process that external content safely.",
-                    &msg.sender,
-                )
-                .await;
-            continue;
-        }
-
-        if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-            let _ = wa
-                .send_chunked(
-                    "I cannot respond right now due to policy limits.",
-                    &msg.sender,
-                )
-                .await;
-            tracing::warn!("{policy_error}");
-            continue;
-        }
-
-        match run_gateway_tool_loop(
-            &state,
-            None,
-            &ingress.model_input,
-            &state.model,
-            state.temperature,
-            &msg.sender,
-        )
-        .await
-        {
-            Ok(result) => {
-                log_tool_loop_stop("gateway:whatsapp", &result.stop_reason, result.iterations);
-                if let Err(e) = wa.send_chunked(&result.final_text, &msg.sender).await {
-                    tracing::error!("Failed to send WhatsApp reply: {e}");
-                }
-            }
-            Err(e) => {
-                tracing::error!("LLM error for WhatsApp message: {e:#}");
-                let _ = wa
-                    .send_chunked(
-                        "Sorry, I couldn't process your message right now.",
-                        &msg.sender,
-                    )
-                    .await;
-            }
-        }
+        process_whatsapp_message(&state, wa, &msg.sender, &msg.content).await;
     }
 
     // Acknowledge the webhook
-    (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
+    whatsapp_ack_response()
 }

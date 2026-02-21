@@ -17,6 +17,215 @@ pub struct BrowserTool {
     session_name: Option<String>,
 }
 
+fn parse_u32_arg(args: &Value, key: &str) -> Option<u32> {
+    args.get(key)
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| u32::try_from(value).unwrap_or(u32::MAX))
+}
+
+fn required_arg<'a>(args: &'a Value, key: &str, action: &str) -> anyhow::Result<&'a str> {
+    args.get(key)
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Missing '{key}' for {action}"))
+}
+
+fn parse_browser_action(action: &str, args: &Value) -> anyhow::Result<BrowserAction> {
+    let parsed = match action {
+        "open" => BrowserAction::Open {
+            url: required_arg(args, "url", "open action")?.into(),
+        },
+        "snapshot" => BrowserAction::Snapshot {
+            interactive_only: args
+                .get("interactive_only")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            compact: args
+                .get("compact")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            depth: parse_u32_arg(args, "depth"),
+        },
+        "click" => BrowserAction::Click {
+            selector: required_arg(args, "selector", "click")?.into(),
+        },
+        "fill" => BrowserAction::Fill {
+            selector: required_arg(args, "selector", "fill")?.into(),
+            value: required_arg(args, "value", "fill")?.into(),
+        },
+        "type" => BrowserAction::Type {
+            selector: required_arg(args, "selector", "type")?.into(),
+            text: required_arg(args, "text", "type")?.into(),
+        },
+        "get_text" => BrowserAction::GetText {
+            selector: required_arg(args, "selector", "get_text")?.into(),
+        },
+        "get_title" => BrowserAction::GetTitle,
+        "get_url" => BrowserAction::GetUrl,
+        "screenshot" => BrowserAction::Screenshot {
+            path: args
+                .get("path")
+                .and_then(|value| value.as_str())
+                .map(String::from),
+            full_page: args
+                .get("full_page")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        },
+        "wait" => BrowserAction::Wait {
+            selector: args
+                .get("selector")
+                .and_then(|value| value.as_str())
+                .map(String::from),
+            ms: args.get("ms").and_then(serde_json::Value::as_u64),
+            text: args
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(String::from),
+        },
+        "press" => BrowserAction::Press {
+            key: required_arg(args, "key", "press")?.into(),
+        },
+        "hover" => BrowserAction::Hover {
+            selector: required_arg(args, "selector", "hover")?.into(),
+        },
+        "scroll" => BrowserAction::Scroll {
+            direction: required_arg(args, "direction", "scroll")?.into(),
+            pixels: parse_u32_arg(args, "pixels"),
+        },
+        "is_visible" => BrowserAction::IsVisible {
+            selector: required_arg(args, "selector", "is_visible")?.into(),
+        },
+        "close" => BrowserAction::Close,
+        "find" => BrowserAction::Find {
+            by: required_arg(args, "by", "find")?.into(),
+            value: required_arg(args, "value", "find")?.into(),
+            action: required_arg(args, "find_action", "find")?.into(),
+            fill_value: args
+                .get("fill_value")
+                .and_then(|value| value.as_str())
+                .map(String::from),
+        },
+        _ => anyhow::bail!("Unknown action: {action}"),
+    };
+
+    Ok(parsed)
+}
+
+fn format_browser_output(data: Option<Value>) -> String {
+    data.map(|value| serde_json::to_string_pretty(&value).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+fn is_known_browser_action(action: &str) -> bool {
+    matches!(
+        action,
+        "open"
+            | "snapshot"
+            | "click"
+            | "fill"
+            | "type"
+            | "get_text"
+            | "get_title"
+            | "get_url"
+            | "screenshot"
+            | "wait"
+            | "press"
+            | "hover"
+            | "scroll"
+            | "is_visible"
+            | "close"
+            | "find"
+    )
+}
+
+fn browser_action_args(action: &BrowserAction) -> Vec<String> {
+    match action {
+        BrowserAction::Open { url } => vec!["open".to_string(), url.clone()],
+        BrowserAction::Snapshot {
+            interactive_only,
+            compact,
+            depth,
+        } => {
+            let mut args = vec!["snapshot".to_string()];
+            if *interactive_only {
+                args.push("-i".to_string());
+            }
+            if *compact {
+                args.push("-c".to_string());
+            }
+            if let Some(depth) = depth {
+                args.push("-d".to_string());
+                args.push(depth.to_string());
+            }
+            args
+        }
+        BrowserAction::Click { selector } => vec!["click".to_string(), selector.clone()],
+        BrowserAction::Fill { selector, value } => {
+            vec!["fill".to_string(), selector.clone(), value.clone()]
+        }
+        BrowserAction::Type { selector, text } => {
+            vec!["type".to_string(), selector.clone(), text.clone()]
+        }
+        BrowserAction::GetText { selector } => {
+            vec!["get".to_string(), "text".to_string(), selector.clone()]
+        }
+        BrowserAction::GetTitle => vec!["get".to_string(), "title".to_string()],
+        BrowserAction::GetUrl => vec!["get".to_string(), "url".to_string()],
+        BrowserAction::Screenshot { path, full_page } => {
+            let mut args = vec!["screenshot".to_string()];
+            if let Some(path) = path {
+                args.push(path.clone());
+            }
+            if *full_page {
+                args.push("--full".to_string());
+            }
+            args
+        }
+        BrowserAction::Wait { selector, ms, text } => {
+            let mut args = vec!["wait".to_string()];
+            if let Some(selector) = selector {
+                args.push(selector.clone());
+            } else if let Some(ms) = ms {
+                args.push(ms.to_string());
+            } else if let Some(text) = text {
+                args.push("--text".to_string());
+                args.push(text.clone());
+            }
+            args
+        }
+        BrowserAction::Press { key } => vec!["press".to_string(), key.clone()],
+        BrowserAction::Hover { selector } => vec!["hover".to_string(), selector.clone()],
+        BrowserAction::Scroll { direction, pixels } => {
+            let mut args = vec!["scroll".to_string(), direction.clone()];
+            if let Some(pixels) = pixels {
+                args.push(pixels.to_string());
+            }
+            args
+        }
+        BrowserAction::IsVisible { selector } => {
+            vec!["is".to_string(), "visible".to_string(), selector.clone()]
+        }
+        BrowserAction::Close => vec!["close".to_string()],
+        BrowserAction::Find {
+            by,
+            value,
+            action,
+            fill_value,
+        } => {
+            let mut args = vec![
+                "find".to_string(),
+                by.clone(),
+                value.clone(),
+                action.clone(),
+            ];
+            if let Some(fill_value) = fill_value {
+                args.push(fill_value.clone());
+            }
+            args
+        }
+    }
+}
+
 impl BrowserTool {
     pub fn new(
         security: Arc<SecurityPolicy>,
@@ -128,149 +337,21 @@ impl BrowserTool {
     }
 
     /// Execute a browser action
-    #[allow(clippy::too_many_lines)]
     async fn execute_action(&self, action: BrowserAction) -> anyhow::Result<ToolResult> {
-        match action {
-            BrowserAction::Open { url } => {
-                self.validate_url(&url)?;
-                let resp = self.run_command(&["open", &url]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Snapshot {
-                interactive_only,
-                compact,
-                depth,
-            } => {
-                let mut args = vec!["snapshot"];
-                if interactive_only {
-                    args.push("-i");
-                }
-                if compact {
-                    args.push("-c");
-                }
-                let depth_str;
-                if let Some(d) = depth {
-                    args.push("-d");
-                    depth_str = d.to_string();
-                    args.push(&depth_str);
-                }
-                let resp = self.run_command(&args).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Click { selector } => {
-                let resp = self.run_command(&["click", &selector]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Fill { selector, value } => {
-                let resp = self.run_command(&["fill", &selector, &value]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Type { selector, text } => {
-                let resp = self.run_command(&["type", &selector, &text]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::GetText { selector } => {
-                let resp = self.run_command(&["get", "text", &selector]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::GetTitle => {
-                let resp = self.run_command(&["get", "title"]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::GetUrl => {
-                let resp = self.run_command(&["get", "url"]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Screenshot { path, full_page } => {
-                let mut args = vec!["screenshot"];
-                if let Some(ref p) = path {
-                    args.push(p);
-                }
-                if full_page {
-                    args.push("--full");
-                }
-                let resp = self.run_command(&args).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Wait { selector, ms, text } => {
-                let mut args = vec!["wait"];
-                let ms_str;
-                if let Some(sel) = selector.as_ref() {
-                    args.push(sel);
-                } else if let Some(millis) = ms {
-                    ms_str = millis.to_string();
-                    args.push(&ms_str);
-                } else if let Some(ref t) = text {
-                    args.push("--text");
-                    args.push(t);
-                }
-                let resp = self.run_command(&args).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Press { key } => {
-                let resp = self.run_command(&["press", &key]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Hover { selector } => {
-                let resp = self.run_command(&["hover", &selector]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Scroll { direction, pixels } => {
-                let mut args = vec!["scroll", &direction];
-                let px_str;
-                if let Some(px) = pixels {
-                    px_str = px.to_string();
-                    args.push(&px_str);
-                }
-                let resp = self.run_command(&args).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::IsVisible { selector } => {
-                let resp = self.run_command(&["is", "visible", &selector]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Close => {
-                let resp = self.run_command(&["close"]).await?;
-                self.to_result(resp)
-            }
-
-            BrowserAction::Find {
-                by,
-                value,
-                action,
-                fill_value,
-            } => {
-                let mut args = vec!["find", &by, &value, &action];
-                if let Some(ref fv) = fill_value {
-                    args.push(fv);
-                }
-                let resp = self.run_command(&args).await?;
-                self.to_result(resp)
-            }
+        if let BrowserAction::Open { url } = &action {
+            self.validate_url(url)?;
         }
+
+        let args = browser_action_args(&action);
+        let command_args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let response = self.run_command(&command_args).await?;
+        self.to_result(response)
     }
 
     #[allow(clippy::unnecessary_wraps, clippy::unused_self)]
     fn to_result(&self, resp: AgentBrowserResponse) -> anyhow::Result<ToolResult> {
         if resp.success {
-            let output = resp
-                .data
-                .map(|d| serde_json::to_string_pretty(&d).unwrap_or_default())
-                .unwrap_or_default();
+            let output = format_browser_output(resp.data);
             Ok(ToolResult {
                 success: true,
                 output,
@@ -289,7 +370,6 @@ impl BrowserTool {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 #[async_trait]
 impl Tool for BrowserTool {
     fn name(&self) -> &str {
@@ -422,170 +502,20 @@ impl Tool for BrowserTool {
             });
         }
 
-        // Parse action from args
-        let action_str = args
+        let action = args
             .get("action")
-            .and_then(|v| v.as_str())
+            .and_then(|value| value.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
 
-        let action = match action_str {
-            "open" => {
-                let url = args
-                    .get("url")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'url' for open action"))?;
-                BrowserAction::Open { url: url.into() }
-            }
-            "snapshot" => BrowserAction::Snapshot {
-                interactive_only: args
-                    .get("interactive_only")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true), // Default to interactive for AI
-                compact: args
-                    .get("compact")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true),
-                depth: args
-                    .get("depth")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|d| u32::try_from(d).unwrap_or(u32::MAX)),
-            },
-            "click" => {
-                let selector = args
-                    .get("selector")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'selector' for click"))?;
-                BrowserAction::Click {
-                    selector: selector.into(),
-                }
-            }
-            "fill" => {
-                let selector = args
-                    .get("selector")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'selector' for fill"))?;
-                let value = args
-                    .get("value")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'value' for fill"))?;
-                BrowserAction::Fill {
-                    selector: selector.into(),
-                    value: value.into(),
-                }
-            }
-            "type" => {
-                let selector = args
-                    .get("selector")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'selector' for type"))?;
-                let text = args
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'text' for type"))?;
-                BrowserAction::Type {
-                    selector: selector.into(),
-                    text: text.into(),
-                }
-            }
-            "get_text" => {
-                let selector = args
-                    .get("selector")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'selector' for get_text"))?;
-                BrowserAction::GetText {
-                    selector: selector.into(),
-                }
-            }
-            "get_title" => BrowserAction::GetTitle,
-            "get_url" => BrowserAction::GetUrl,
-            "screenshot" => BrowserAction::Screenshot {
-                path: args.get("path").and_then(|v| v.as_str()).map(String::from),
-                full_page: args
-                    .get("full_page")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false),
-            },
-            "wait" => BrowserAction::Wait {
-                selector: args
-                    .get("selector")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                ms: args.get("ms").and_then(serde_json::Value::as_u64),
-                text: args.get("text").and_then(|v| v.as_str()).map(String::from),
-            },
-            "press" => {
-                let key = args
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'key' for press"))?;
-                BrowserAction::Press { key: key.into() }
-            }
-            "hover" => {
-                let selector = args
-                    .get("selector")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'selector' for hover"))?;
-                BrowserAction::Hover {
-                    selector: selector.into(),
-                }
-            }
-            "scroll" => {
-                let direction = args
-                    .get("direction")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'direction' for scroll"))?;
-                BrowserAction::Scroll {
-                    direction: direction.into(),
-                    pixels: args
-                        .get("pixels")
-                        .and_then(serde_json::Value::as_u64)
-                        .map(|p| u32::try_from(p).unwrap_or(u32::MAX)),
-                }
-            }
-            "is_visible" => {
-                let selector = args
-                    .get("selector")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'selector' for is_visible"))?;
-                BrowserAction::IsVisible {
-                    selector: selector.into(),
-                }
-            }
-            "close" => BrowserAction::Close,
-            "find" => {
-                let by = args
-                    .get("by")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'by' for find"))?;
-                let value = args
-                    .get("value")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'value' for find"))?;
-                let action = args
-                    .get("find_action")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'find_action' for find"))?;
-                BrowserAction::Find {
-                    by: by.into(),
-                    value: value.into(),
-                    action: action.into(),
-                    fill_value: args
-                        .get("fill_value")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                }
-            }
-            _ => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Unknown action: {action_str}")),
-
-                    attachments: Vec::new(),
-                });
-            }
-        };
-
-        self.execute_action(action).await
+        match parse_browser_action(action, &args) {
+            Ok(parsed) => self.execute_action(parsed).await,
+            Err(_) if !is_known_browser_action(action) => Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Unknown action: {action}")),
+                attachments: Vec::new(),
+            }),
+            Err(error) => Err(error),
+        }
     }
 }

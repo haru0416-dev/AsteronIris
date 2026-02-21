@@ -20,7 +20,7 @@ use crate::core::tools;
 use crate::core::tools::middleware::ExecutionContext;
 use crate::runtime::observability::traits::AutonomyLifecycleSignal;
 use crate::runtime::observability::{NoopObserver, Observer};
-use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
+use crate::security::policy::{AutonomyLevel, EntityRateLimiter, TenantPolicyContext};
 use crate::security::{PermissionStore, SecurityPolicy};
 use crate::utils::text::truncate_with_ellipsis;
 use anyhow::{Context, Result};
@@ -139,6 +139,69 @@ async fn execute_main_session_turn_with_policy(
     .map(|outcome| outcome.response)
 }
 
+fn enrich_user_message(context: &str, user_message: &str) -> String {
+    if context.is_empty() {
+        user_message.to_string()
+    } else {
+        format!("{context}{user_message}")
+    }
+}
+
+fn build_main_session_execution_context(
+    config: &Config,
+    security: &SecurityPolicy,
+    params: &MainSessionTurnParams<'_>,
+    effective_autonomy_level: AutonomyLevel,
+) -> ExecutionContext {
+    ExecutionContext {
+        security: Arc::new(security.clone()),
+        autonomy_level: effective_autonomy_level,
+        entity_id: "cli:local".to_string(),
+        turn_number: 0,
+        workspace_dir: config.workspace_dir.clone(),
+        allowed_tools: None,
+        permission_store: Some(Arc::clone(&params.permission_store)),
+        rate_limiter: Arc::clone(&params.rate_limiter),
+        tenant_context: TenantPolicyContext::disabled(),
+        approval_broker: None,
+    }
+}
+
+fn handle_tool_loop_stop_reason(stop_reason: &LoopStopReason, iterations: u32) -> Result<()> {
+    match stop_reason {
+        LoopStopReason::Completed => Ok(()),
+        LoopStopReason::MaxIterations => {
+            tracing::warn!(iterations, "tool loop hit max iterations");
+            Ok(())
+        }
+        LoopStopReason::RateLimited => {
+            tracing::warn!("tool loop halted by rate limiter");
+            Ok(())
+        }
+        LoopStopReason::ApprovalDenied => {
+            tracing::warn!("tool loop halted by approval requirement");
+            Ok(())
+        }
+        LoopStopReason::Error(message) => anyhow::bail!("tool loop failed: {message}"),
+    }
+}
+
+async fn build_enriched_message(
+    mem: &dyn Memory,
+    write_context: &RuntimeMemoryWriteContext,
+    user_message: &str,
+) -> String {
+    let context = build_context_with_policy(
+        mem,
+        &write_context.entity_id,
+        user_message,
+        write_context.policy_context.clone(),
+    )
+    .await
+    .unwrap_or_default();
+    enrich_user_message(&context, user_message)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_main_session_turn_for_integration(
     config: &Config,
@@ -228,7 +291,6 @@ pub async fn run_main_session_turn_for_integration_with_policy(
     .await
 }
 
-#[allow(clippy::too_many_lines)]
 pub(super) async fn execute_main_session_turn_with_accounting(
     config: &Config,
     security: &SecurityPolicy,
@@ -244,19 +306,7 @@ pub(super) async fn execute_main_session_turn_with_accounting(
 
     save_user_message_if_enabled(config, mem.as_ref(), write_context, user_message).await;
 
-    let context = build_context_with_policy(
-        mem.as_ref(),
-        &write_context.entity_id,
-        user_message,
-        write_context.policy_context.clone(),
-    )
-    .await
-    .unwrap_or_default();
-    let enriched = if context.is_empty() {
-        user_message.to_string()
-    } else {
-        format!("{context}{user_message}")
-    };
+    let enriched = build_enriched_message(mem.as_ref(), write_context, user_message).await;
 
     match security.consume_action_and_cost(0) {
         Ok(()) => {
@@ -285,18 +335,8 @@ pub(super) async fn execute_main_session_turn_with_accounting(
         );
     }
     let tool_loop = ToolLoop::new(Arc::clone(&params.registry), params.max_tool_iterations);
-    let ctx = ExecutionContext {
-        security: Arc::new(security.clone()),
-        autonomy_level: effective_autonomy_level,
-        entity_id: "cli:local".to_string(),
-        turn_number: 0,
-        workspace_dir: config.workspace_dir.clone(),
-        allowed_tools: None,
-        permission_store: Some(Arc::clone(&params.permission_store)),
-        rate_limiter: Arc::clone(&params.rate_limiter),
-        tenant_context: TenantPolicyContext::disabled(),
-        approval_broker: None,
-    };
+    let ctx =
+        build_main_session_execution_context(config, security, params, effective_autonomy_level);
     let tool_result = tool_loop
         .run(
             params.answer_provider,
@@ -316,24 +356,7 @@ pub(super) async fn execute_main_session_turn_with_accounting(
         stop_reason = ?tool_result.stop_reason,
         "main session tool loop completed"
     );
-    match &tool_result.stop_reason {
-        LoopStopReason::Completed => {}
-        LoopStopReason::MaxIterations => {
-            tracing::warn!(
-                iterations = tool_result.iterations,
-                "tool loop hit max iterations"
-            );
-        }
-        LoopStopReason::RateLimited => {
-            tracing::warn!("tool loop halted by rate limiter");
-        }
-        LoopStopReason::ApprovalDenied => {
-            tracing::warn!("tool loop halted by approval requirement");
-        }
-        LoopStopReason::Error(message) => {
-            anyhow::bail!("tool loop failed: {message}");
-        }
-    }
+    handle_tool_loop_stop_reason(&tool_result.stop_reason, tool_result.iterations)?;
     let tokens_used = tool_result.tokens_used;
     let response = tool_result.final_text;
 

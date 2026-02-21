@@ -30,6 +30,7 @@ BACKEND=sqlite cargo test --release --test memory -- throughput --nocapture
 # Other aliases (defined in .cargo/config.toml)
 cargo build-fast                          # trimmed feature set build
 cargo build-minimal                       # bundled-sqlite only
+cargo test-fast                           # trimmed feature set test
 cargo check-all                           # check with all features
 cargo coverage                            # llvm-cov HTML report
 
@@ -47,13 +48,13 @@ Trait + factory dispatch everywhere. Each subsystem defines a trait and a factor
 
 | Module | Trait / Entry | Role |
 |--------|--------------|------|
-| `core/` | Domain facade | AI core namespace (agent, memory, providers, tools, planner, sessions, persona, eval) |
+| `core/` | Domain facade | Agent, memory, providers, tools, planner, sessions, persona, eval |
 | `core/memory/` | `Memory` trait, `create_memory()` | SQLite / LanceDB / Markdown backends |
 | `core/providers/` | `Provider` trait | LLM provider factory + secret scrubbing |
 | `transport/channels/` | `Channel` trait | CLI / Telegram / Discord / Slack / WhatsApp / Matrix / Email / IRC |
 | `core/tools/` | `Tool` trait, `default_tools()` / `all_tools()` | Shell, file, memory, browser, composio |
 | `security/` | `SecurityPolicy` | Deny-by-default allowlist, pairing, vault, writeback guard |
-| `transport/gateway/` | Axum HTTP server | Pairing, webhooks, autosave (64KB body, 30s timeout) |
+| `transport/gateway/` | Axum HTTP server | Pairing, webhooks, autosave (64 KB body, 30 s timeout) |
 | `core/agent/` | Conversation loop | Tool execution, reflection |
 | `platform/daemon/` | Supervisor | Gateway + channels + heartbeat + cron |
 | `config/` | `Config` | TOML schema + env-var overrides |
@@ -63,6 +64,25 @@ Trait + factory dispatch everywhere. Each subsystem defines a trait and a factor
 
 `mod.rs` is a thin facade with `pub mod` + `pub use` re-exports.
 Extract logic into focused sub-modules: `handlers.rs`, `autosave.rs`, `defense.rs`, `tests.rs`, etc.
+
+### Factory & Ownership Conventions
+
+Factory functions follow the `create_<subsystem>()` naming pattern and return `Box<dyn Trait>`:
+
+| Factory | Returns | Module |
+|---------|---------|--------|
+| `create_memory()` | `Box<dyn Memory>` | `core/memory/factory.rs` |
+| `create_provider()` | `Box<dyn Provider>` | `core/providers/factory.rs` |
+| `create_observer()` | `Box<dyn Observer>` | `runtime/observability/mod.rs` |
+| `create_runtime()` | `Box<dyn RuntimeAdapter>` | `runtime/environment/mod.rs` |
+| `create_tunnel()` | `Option<Box<dyn Tunnel>>` | `runtime/tunnel/factory.rs` |
+| `create_embedding_provider()` | `Box<dyn EmbeddingProvider>` | `core/memory/embeddings.rs` |
+
+**Ownership rules:**
+- `Box<dyn Trait>` — factory return type, single owner.
+- `Arc<dyn Trait>` — shared across async tasks (e.g., `Arc<dyn Memory>` passed to tool loop, consolidation).
+- Callers wrap `Box` → `Arc` at the boundary where sharing begins.
+- Tools are collected as `Vec<Box<dyn Tool>>` from `all_tools()` / `default_tools()`, then registered into `ToolRegistry`.
 
 ## Code Style
 
@@ -87,7 +107,7 @@ LF line endings, UTF-8, trailing newline required (see `.editorconfig`).
 
 ### Imports
 
-`cargo fmt` manages ordering. Typical grouping seen in the codebase:
+`cargo fmt` manages ordering. Typical grouping:
 1. `crate::` imports first
 2. External crates alphabetized (`anyhow`, `async_trait`, `serde`, etc.)
 3. `std::` at the end
@@ -103,7 +123,6 @@ Use braced imports to merge from the same crate: `use serde::{Deserialize, Seria
 - `#[derive(Debug, Clone, Serialize, Deserialize)]` is the standard derive set.
 - `#[derive(..., PartialEq, Eq)]` for enums used in comparisons.
 - `strum::Display` + `#[strum(serialize_all = "snake_case")]` when string representation needed.
-- `#[must_use]` on pure functions that return values.
 
 ### Error Handling
 
@@ -129,7 +148,7 @@ Use braced imports to merge from the same crate: `use serde::{Deserialize, Seria
 ### Feature Gates
 
 - `#[cfg(feature = "...")]` for optional modules/code.
-- Default features: `email`, `vector-search`, `tui`, `bundled-sqlite`, `media`, `link-extraction`.
+- Default features: `discord`, `email`, `vector-search`, `tui`, `bundled-sqlite`, `media`, `link-extraction`.
 - Feature-gated modules: `lancedb` (vector-search), `ratatui`/`crossterm` (tui), `lettre`/`mail-parser` (email), `infer`/`mime` (media), `scraper` (link-extraction), `rmcp` (mcp).
 
 ## Test Structure
@@ -165,6 +184,7 @@ Shared helpers (e.g., `temp_sqlite()`) live in the root test file (`tests/memory
 
 **Known pre-existing failure**: `inventory_scope_lock::inventory_scope_lock`
 (skillforge data drift — not a regression, do not attempt to fix).
+CI coverage explicitly skips this test.
 
 ## Security (Non-Negotiable)
 
@@ -173,7 +193,7 @@ These layers must never be bypassed or weakened:
 1. **Deny-by-default** shell/file allowlist (`security/policy/`)
 2. **Public gateway bind** refused unless tunnel or explicit opt-in (`security/pairing.rs`)
 3. **ChaCha20Poly1305** encrypted secret vault (`security/secrets.rs`)
-4. **Writeback guard** prevents persona self-corruption (`security/writeback_guard.rs`)
+4. **Writeback guard** prevents persona self-corruption (`security/writeback_guard/`)
 5. **Secret scrubbing** — `scrub_secret_patterns()` strips tokens/keys from LLM I/O
 
 ## Dependencies
@@ -187,7 +207,8 @@ Allowed licenses: MIT, Apache-2.0, BSD-2/3-Clause, ISC, MPL-2.0, Zlib, BSL-1.0, 
 Conventional Commits format: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`.
 Keep changes small and coherent. One logical change per commit.
 
-## Channel Implementation
+## Adding a Channel
 
-New channel-specific providers go in `src/channels/providers/<channel>.rs`.
-Keep `channels/mod.rs` as a thin facade with re-exports only.
+New channel modules go in `src/transport/channels/<channel>.rs`.
+Implement the `Channel` trait, add to the factory, and re-export from `channels/mod.rs`.
+Keep `mod.rs` as a thin facade with re-exports only.
