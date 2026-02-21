@@ -40,6 +40,7 @@ pub async fn extract_content(url: &Url, config: &LinkConfig) -> Result<Extracted
     }
 }
 
+#[cfg(feature = "link-extraction")]
 fn extract_from_html(url: &str, html: &str, max_chars: usize) -> ExtractedContent {
     use scraper::{Html, Selector};
 
@@ -66,6 +67,7 @@ fn extract_from_html(url: &str, html: &str, max_chars: usize) -> ExtractedConten
     }
 }
 
+#[cfg(feature = "link-extraction")]
 fn extract_element_text(document: &scraper::Html, selector: &str) -> Option<String> {
     let sel = scraper::Selector::parse(selector).ok()?;
     let element = document.select(&sel).next()?;
@@ -152,6 +154,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "link-extraction")]
     fn extract_html_title_and_body() {
         let html =
             r#"<html><head><title>Test Page</title></head><body><p>Hello world</p></body></html>"#;
@@ -161,6 +164,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "link-extraction")]
     fn extract_html_article_preferred() {
         let html = r#"<html><body><nav>Nav stuff</nav><article><p>Article content</p></article></body></html>"#;
         let result = extract_from_html("https://example.com", html, 2000);
@@ -168,6 +172,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "link-extraction")]
     fn extract_html_falls_back_to_body() {
         let html = r#"<html><body><p>Body content here</p></body></html>"#;
         let result = extract_from_html("https://example.com", html, 2000);
@@ -175,6 +180,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "link-extraction")]
     fn extract_html_truncates() {
         let html = r#"<html><body><p>A long paragraph of text</p></body></html>"#;
         let result = extract_from_html("https://example.com", html, 10);

@@ -13,7 +13,7 @@ extern crate rust_i18n;
 
 i18n!("locales", fallback = "en");
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use std::sync::Arc;
 use tracing::Level;
@@ -71,7 +71,8 @@ async fn main() -> Result<()> {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber)
+        .context("setting default subscriber failed")?;
 
     let cli = Cli::parse();
     let config = Arc::new(Config::load_or_init()?);

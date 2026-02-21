@@ -210,3 +210,55 @@ pub fn write_evidence_files(
 
     Ok(vec![txt_path, csv_path, json_path])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn run_is_deterministic_for_same_seed_and_inputs() {
+        let suites = default_baseline_suites();
+        let harness = EvalHarness::new(42);
+
+        let first = harness.run(&suites);
+        let second = harness.run(&suites);
+
+        assert_eq!(first, second);
+        assert_eq!(first.seed, 42);
+        assert_eq!(first.suites.len(), suites.len());
+    }
+
+    #[test]
+    fn detect_seed_change_warning_reports_fingerprint_change() {
+        let suites = default_baseline_suites();
+        let previous = EvalHarness::new(100).run(&suites);
+        let current = EvalHarness::new(200).run(&suites);
+
+        let warning = detect_seed_change_warning(&previous, &current)
+            .expect("different seeds should produce a warning");
+
+        assert!(warning.contains("seed changed (100 -> 200)"));
+        assert!(warning.contains("summary fingerprint changed"));
+    }
+
+    #[test]
+    fn write_evidence_files_creates_expected_files_and_content() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let report = EvalHarness::new(7).run(&default_baseline_suites());
+
+        let files = write_evidence_files(temp_dir.path(), &report, "unit", Some("warn"))
+            .expect("writing evidence files should succeed");
+
+        assert_eq!(files.len(), 3);
+        assert!(files.iter().all(|path| path.exists()));
+
+        let txt = std::fs::read_to_string(&files[0]).expect("txt file should be readable");
+        let csv = std::fs::read_to_string(&files[1]).expect("csv file should be readable");
+        let json = std::fs::read_to_string(&files[2]).expect("json file should be readable");
+
+        assert!(txt.contains("warning=warn"));
+        assert!(csv.starts_with("suite,success-rate,cost,latency,retries"));
+        assert!(json.contains("\"seed\": 7"));
+    }
+}

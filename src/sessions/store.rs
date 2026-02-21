@@ -1,5 +1,5 @@
 use super::types::{ChatMessage, MessageRole, Session, SessionState};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{Connection, Error as SqlError, OptionalExtension, params, types::Type};
 use std::path::Path;
@@ -70,7 +70,7 @@ impl SqliteSessionStore {
     fn lock_connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
         self.conn
             .lock()
-            .map_err(|error| anyhow::anyhow!("Lock error: {error}"))
+            .map_err(|error| anyhow::anyhow!("lock session store connection: {error}"))
     }
 
     fn state_to_str(state: SessionState) -> &'static str {
@@ -198,7 +198,7 @@ impl SessionStore for SqliteSessionStore {
 
         stmt.query_row(params![id], Self::map_session_row)
             .optional()
-            .map_err(Into::into)
+            .context("query session by id")
     }
 
     fn get_or_create_session(&self, channel: &str, user_id: &str) -> Result<Session> {
@@ -359,7 +359,7 @@ impl SessionStore for SqliteSessionStore {
             params![session_id],
             |row| row.get::<_, i64>(0),
         )?;
-        usize::try_from(count).map_err(Into::into)
+        usize::try_from(count).context("convert message count to usize")
     }
 
     fn delete_messages_before(&self, session_id: &str, before_id: &str) -> Result<usize> {

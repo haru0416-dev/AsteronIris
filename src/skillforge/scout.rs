@@ -1,6 +1,6 @@
 //! Scout — skill discovery from external sources.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -83,11 +83,11 @@ impl GitHubScout {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::ACCEPT,
-            "application/vnd.github+json".parse().expect("valid header"),
+            reqwest::header::HeaderValue::from_static("application/vnd.github+json"),
         );
         headers.insert(
             reqwest::header::USER_AGENT,
-            "AsteronIris-SkillForge/0.1".parse().expect("valid header"),
+            reqwest::header::HeaderValue::from_static("AsteronIris-SkillForge/0.1"),
         );
         if let Some(t) = token
             && let Ok(val) = format!("Bearer {t}").parse()
@@ -99,7 +99,9 @@ impl GitHubScout {
             .default_headers(headers)
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("failed to build reqwest client");
+            .map_err(anyhow::Error::from)
+            .context("Failed to build HTTP client")
+            .unwrap_or_else(|error| panic!("{error:#}"));
 
         Self {
             client,
@@ -166,7 +168,9 @@ impl HuggingFaceScout {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("failed to build reqwest client");
+            .map_err(anyhow::Error::from)
+            .context("Failed to build HTTP client")
+            .unwrap_or_else(|error| panic!("{error:#}"));
 
         let api_base = std::env::var("ASTERONIRIS_SKILLFORGE_HF_API_BASE")
             .unwrap_or_else(|_| "https://huggingface.co".to_string());
@@ -255,11 +259,11 @@ impl ClawHubScout {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::ACCEPT,
-            "application/json".parse().expect("valid header"),
+            reqwest::header::HeaderValue::from_static("application/json"),
         );
         headers.insert(
             reqwest::header::USER_AGENT,
-            "AsteronIris-SkillForge/0.1".parse().expect("valid header"),
+            reqwest::header::HeaderValue::from_static("AsteronIris-SkillForge/0.1"),
         );
         if let Some(t) = token
             && let Ok(val) = format!("Bearer {t}").parse()
@@ -271,7 +275,9 @@ impl ClawHubScout {
             .default_headers(headers)
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("failed to build reqwest client");
+            .map_err(anyhow::Error::from)
+            .context("Failed to build HTTP client")
+            .unwrap_or_else(|error| panic!("{error:#}"));
 
         let base_url = base_url
             .map(str::to_string)
@@ -515,7 +521,7 @@ impl Scout for ClawHubScout {
                 .get(&url)
                 .send()
                 .await
-                .map_err(|e| anyhow::anyhow!("ClawHub API request failed: {e}"))?;
+                .context("ClawHub API request failed")?;
 
             let status = resp.status();
             if !status.is_success() {
@@ -529,7 +535,7 @@ impl Scout for ClawHubScout {
             let body: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to parse ClawHub response: {e}"))?;
+                .context("Failed to parse ClawHub response")?;
 
             let mut items = Self::parse_items(&body);
             debug!(

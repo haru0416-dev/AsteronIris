@@ -1,5 +1,5 @@
 use crate::planner::{DagContract, DagEdge, DagNode, Plan, PlanStep, StepAction, StepStatus};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 pub struct PlanParser;
@@ -46,8 +46,7 @@ impl PlanParser {
     }
 
     pub fn parse(json_str: &str) -> Result<Plan> {
-        let raw: RawPlan = serde_json::from_str(json_str)
-            .map_err(|e| anyhow::anyhow!("invalid plan JSON: {e}"))?;
+        let raw: RawPlan = serde_json::from_str(json_str).context("invalid plan JSON")?;
 
         if raw.steps.is_empty() {
             bail!("plan must have at least one step");

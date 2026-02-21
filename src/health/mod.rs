@@ -104,3 +104,78 @@ pub fn snapshot_json() -> serde_json::Value {
         })
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn unique_component(prefix: &str) -> String {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("{prefix}-{id}")
+    }
+
+    #[test]
+    fn mark_component_ok_sets_ok_state() {
+        let component = unique_component("health-ok");
+        mark_component_ok(&component);
+
+        let snap = snapshot();
+        let state = snap
+            .components
+            .get(&component)
+            .expect("component should exist in snapshot");
+
+        assert_eq!(state.status, "ok");
+        assert!(state.last_ok.is_some());
+        assert_eq!(state.last_error, None);
+    }
+
+    #[test]
+    fn mark_component_error_sets_error_and_preserves_last_ok() {
+        let component = unique_component("health-error");
+        mark_component_ok(&component);
+        mark_component_error(&component, "boom");
+
+        let snap = snapshot();
+        let state = snap
+            .components
+            .get(&component)
+            .expect("component should exist in snapshot");
+
+        assert_eq!(state.status, "error");
+        assert_eq!(state.last_error.as_deref(), Some("boom"));
+        assert!(state.last_ok.is_some());
+    }
+
+    #[test]
+    fn bump_component_restart_increments_counter() {
+        let component = unique_component("health-restart");
+        bump_component_restart(&component);
+        bump_component_restart(&component);
+
+        let snap = snapshot();
+        let state = snap
+            .components
+            .get(&component)
+            .expect("component should exist in snapshot");
+
+        assert_eq!(state.restart_count, 2);
+    }
+
+    #[test]
+    fn snapshot_json_includes_component_data() {
+        let component = unique_component("health-json");
+        mark_component_ok(&component);
+
+        let json = snapshot_json();
+        let status = json
+            .get("components")
+            .and_then(|components| components.get(&component))
+            .and_then(|entry| entry.get("status"))
+            .and_then(serde_json::Value::as_str);
+
+        assert_eq!(status, Some("ok"));
+    }
+}
