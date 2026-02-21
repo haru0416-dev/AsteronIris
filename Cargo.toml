@@ -28,24 +28,24 @@ reqwest = { version = "0.13", default-features = false, features = [
 # Serialization
 serde      = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
-strum       = { version = "0.27", features = ["derive"] }
+strum       = { version = "0.27", default-features = false, features = ["derive"] }
 
 # Config
-directories  = "6"
+directories  = { version = "6", default-features = false }
 toml         = "1"
-shellexpand  = "3.1"
+shellexpand  = { version = "3.1", default-features = false, features = ["base-0", "tilde"] }
 
 # Logging
 tracing            = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
 
 # Error handling
-anyhow    = "1"
-thiserror = "2"
+anyhow    = { version = "1", default-features = false, features = ["std"] }
+thiserror = { version = "2", default-features = false }
 
 # URL / HTML parsing (link understanding)
-url     = "2"
-scraper = "0.25"
+url     = { version = "2", default-features = false }
+scraper = { version = "0.25", optional = true }
 
 # MIME detection (media pipeline)
 infer = { version = "0.19", optional = true }
@@ -58,36 +58,36 @@ uuid = { version = "1", default-features = false, features = ["v4", "std"] }
 chacha20poly1305 = "0.10"
 
 # HMAC for webhook signature verification
-hmac = "0.12"
-sha2 = "0.10"
-hex  = "0.4"
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+hex  = { version = "0.4", default-features = false, features = ["alloc"] }
 
 # Async traits
-async-trait = "0.1"
+async-trait = { version = "0.1", default-features = false }
 
 # Memory / persistence
 rusqlite    = { version = "0.38" }
 chrono      = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
-cron        = "0.15"
+cron        = { version = "0.15", default-features = false }
 lancedb     = { version = "0.26.2", default-features = false, optional = true }
 arrow-array  = { version = "57.2", optional = true }
 arrow-schema = { version = "57.2", optional = true }
 
 # Interactive CLI prompts
-dialoguer = { version = "0.12", features = ["fuzzy-select"] }
-console   = "0.16"
+dialoguer = { version = "0.12", default-features = false, features = ["fuzzy-select", "password"] }
+console   = { version = "0.16", default-features = false }
 
 # TUI wizard
 ratatui   = { version = "0.30", default-features = false, features = ["crossterm"], optional = true }
 crossterm = { version = "0.29", default-features = false, optional = true }
 
 # Internationalisation (compile-time i18n)
-rust-i18n = "3"
+rust-i18n = { version = "3", default-features = false }
 
 # Channel transports
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util      = { version = "0.3", default-features = false, features = ["sink", "std"] }
-hostname          = "0.4"
+hostname          = { version = "0.4", default-features = false }
 lettre            = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"], optional = true }
 mail-parser       = { version = "0.11", optional = true }
 rustls            = { version = "0.23", features = ["ring"] }
@@ -99,18 +99,19 @@ axum       = { version = "0.8", default-features = false, features = ["http1", "
 tower-http = { version = "0.6", default-features = false, features = ["limit", "timeout"] }
 
 # Streaming (OpenAI-compat SSE, WebSocket)
-async-stream = "0.3"
+async-stream = { version = "0.3", default-features = false }
 tokio-stream = { version = "0.1", features = ["sync"] }
 rmcp = { version = "0.16.0", features = ["client", "transport-child-process", "transport-io"], optional = true }
 
 [features]
-default = ["email", "vector-search", "tui", "bundled-sqlite", "media"]
+default = ["email", "vector-search", "tui", "bundled-sqlite", "media", "link-extraction"]
 bundled-sqlite = ["rusqlite/bundled"]
 email = ["dep:lettre", "dep:mail-parser"]
 vector-search = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema"]
 tui = ["dep:ratatui", "dep:crossterm"]
 media = ["dep:infer", "dep:mime"]
 mcp = ["dep:rmcp"]
+link-extraction = ["dep:scraper"]
 
 [profile.dev]
 codegen-units = 256

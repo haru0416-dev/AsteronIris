@@ -2,4 +2,7 @@
 test-dev = "test -- --test-threads=4"
 test-dev-tests = "test --tests -- --test-threads=4"
 build-fast = "build --no-default-features --features email,vector-search,tui"
-test-fast = "test --no-default-features --features email,vector-search,tui"
+test-fast = "test --no-default-features --features email,vector-search,tui,bundled-sqlite"
+build-minimal = "build --no-default-features --features bundled-sqlite"
+check-all = "check --all-features"
+coverage = "llvm-cov --html --open"
