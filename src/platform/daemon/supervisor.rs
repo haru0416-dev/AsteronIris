@@ -101,7 +101,7 @@ pub(super) fn spawn_supervised_components(
         max_backoff,
         move || {
             let cfg = Arc::clone(&scheduler_cfg);
-            async move { crate::cron::scheduler::run(cfg).await }
+            async move { crate::platform::cron::scheduler::run(cfg).await }
         },
     ));
 

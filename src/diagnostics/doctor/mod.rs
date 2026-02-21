@@ -54,7 +54,7 @@ fn print_setup_health(config: &Config) {
 fn print_daemon_health(config: &Config) -> Result<()> {
     println!("  Daemon Health");
     println!("  {}", "─".repeat(50));
-    let state_file = crate::daemon::state_file_path(config);
+    let state_file = crate::platform::daemon::state_file_path(config);
     if state_file.exists() {
         let raw = std::fs::read_to_string(&state_file)
             .with_context(|| format!("Failed to read {}", state_file.display()))?;
@@ -192,7 +192,7 @@ fn print_governance_and_rollout(config: &Config) {
     }
 
     println!("  {}", t!("doctor.memory_rollout"));
-    let state_file = crate::daemon::state_file_path(config);
+    let state_file = crate::platform::daemon::state_file_path(config);
     let snapshot = if state_file.exists() {
         std::fs::read_to_string(&state_file)
             .ok()

@@ -166,14 +166,14 @@ fn enqueue_reflect_self_tasks(config: &Config, self_tasks: &[SelfTaskWriteback])
             }
         };
 
-        let metadata = crate::cron::CronJobMetadata {
-            job_kind: crate::cron::CronJobKind::Agent,
-            origin: crate::cron::CronJobOrigin::Agent,
+        let metadata = crate::platform::cron::CronJobMetadata {
+            job_kind: crate::platform::cron::CronJobKind::Agent,
+            origin: crate::platform::cron::CronJobOrigin::Agent,
             expires_at: Some(parsed_expires_at),
             max_attempts: config.autonomy.verify_repair_max_attempts.max(1),
         };
 
-        if let Err(error) = crate::cron::add_job_with_metadata(
+        if let Err(error) = crate::platform::cron::add_job_with_metadata(
             config,
             "* * * * *",
             "echo agent-self-task",

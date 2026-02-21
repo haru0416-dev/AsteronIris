@@ -130,7 +130,7 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
 
 fn offer_install_daemon(install_daemon_flag: bool, config: &Config) -> Result<()> {
     if install_daemon_flag {
-        crate::service::handle_command(&crate::ServiceCommands::Install, config)?;
+        crate::platform::service::handle_command(&crate::ServiceCommands::Install, config)?;
         println!("  {} Daemon installed as OS service", ui::success("✓"));
     } else {
         let install: bool = Confirm::new()
@@ -139,7 +139,7 @@ fn offer_install_daemon(install_daemon_flag: bool, config: &Config) -> Result<()
             .interact()?;
 
         if install {
-            crate::service::handle_command(&crate::ServiceCommands::Install, config)?;
+            crate::platform::service::handle_command(&crate::ServiceCommands::Install, config)?;
             println!("  {} Daemon installed as OS service", ui::success("✓"));
         } else {
             println!(

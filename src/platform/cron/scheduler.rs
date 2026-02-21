@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::cron::{CronJob, due_jobs, reschedule_after_run};
+use crate::platform::cron::{CronJob, due_jobs, reschedule_after_run};
 use crate::security::SecurityPolicy;
 use anyhow::Result;
 use chrono::Utc;
@@ -83,7 +83,7 @@ async fn execute_job_with_retry(
 
 fn effective_retry_budget(config: &Config, job: &CronJob) -> u32 {
     let retries = config.reliability.scheduler_retries;
-    if job.origin == crate::cron::CronJobOrigin::Agent {
+    if job.origin == crate::platform::cron::CronJobOrigin::Agent {
         retries.min(job.max_attempts.saturating_sub(1))
     } else {
         retries
@@ -184,8 +184,10 @@ async fn run_job_command(
     job: &CronJob,
 ) -> (bool, String) {
     match job.origin {
-        crate::cron::CronJobOrigin::User => run_user_job_command(config, security, job).await,
-        crate::cron::CronJobOrigin::Agent => run_agent_job_command(security, job),
+        crate::platform::cron::CronJobOrigin::User => {
+            run_user_job_command(config, security, job).await
+        }
+        crate::platform::cron::CronJobOrigin::Agent => run_agent_job_command(security, job),
     }
 }
 
@@ -252,7 +254,7 @@ fn run_agent_job_command(security: &SecurityPolicy, job: &CronJob) -> (bool, Str
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::cron::{
+    use crate::platform::cron::{
         AGENT_PENDING_CAP, CronJobKind, CronJobMetadata, CronJobOrigin, add_job_with_metadata,
         due_jobs, list_jobs,
     };
