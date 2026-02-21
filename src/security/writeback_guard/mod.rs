@@ -1,4 +1,6 @@
 mod constants;
+mod field_validators;
+mod profile_validators;
 pub mod types;
 mod validation;
 

@@ -62,7 +62,7 @@ impl SecretStore {
         let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
         let ciphertext = cipher
             .encrypt(&nonce, plaintext.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Encryption failed: {e}"))?;
+            .map_err(|error| anyhow::anyhow!("encryption failed: {error}"))?;
 
         // Prepend nonce to ciphertext for storage
         let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
@@ -138,7 +138,7 @@ impl SecretStore {
 
         let plaintext_bytes = cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| anyhow::anyhow!("Decryption failed — wrong key or tampered data"))?;
+            .map_err(|_| anyhow::anyhow!("decryption failed — wrong key or tampered data"))?;
 
         String::from_utf8(plaintext_bytes)
             .context("Decrypted secret is not valid UTF-8 — corrupt data")
@@ -273,7 +273,7 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
         .step_by(2)
         .map(|i| {
             u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|e| anyhow::anyhow!("Invalid hex at position {i}: {e}"))
+                .with_context(|| format!("invalid hex at position {i}"))
         })
         .collect()
 }
