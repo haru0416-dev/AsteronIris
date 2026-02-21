@@ -9,8 +9,8 @@ use super::verify_repair::{
     emit_verify_repair_escalation_event,
 };
 
-use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::config::Config;
+use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::memory::traits::MemoryLayer;
 use crate::memory::{
     self, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,

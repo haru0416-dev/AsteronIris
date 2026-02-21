@@ -90,8 +90,8 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::SessionManager;
-    use crate::sessions::store::SessionStore;
-    use crate::sessions::types::{MessageRole, SessionConfig, SessionState};
+    use crate::intelligence::sessions::store::SessionStore;
+    use crate::intelligence::sessions::types::{MessageRole, SessionConfig, SessionState};
     use tempfile::NamedTempFile;
 
     fn manager() -> (NamedTempFile, SessionManager) {

@@ -1,4 +1,4 @@
-use crate::planner::DagContract;
+use crate::intelligence::planner::DagContract;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -113,7 +113,7 @@ impl Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::{DagEdge, DagNode};
+    use crate::intelligence::planner::{DagEdge, DagNode};
     use serde_json::json;
 
     fn step(id: &str) -> PlanStep {

@@ -15,7 +15,6 @@ extern crate rust_i18n;
 
 i18n!("locales", fallback = "en");
 
-pub mod agent;
 pub mod auth;
 pub mod channels;
 pub mod commands;
@@ -33,12 +32,10 @@ pub mod memory;
 pub mod observability;
 pub mod onboard;
 pub mod persona;
-pub mod planner;
 pub mod platform;
 pub mod providers;
 pub mod runtime;
 pub mod security;
-pub mod sessions;
 pub mod skills;
 pub mod tools;
 pub mod tunnel;

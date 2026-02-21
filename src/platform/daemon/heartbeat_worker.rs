@@ -26,7 +26,8 @@ pub(super) async fn run_heartbeat_worker(config: Arc<crate::config::Config>) -> 
             let prompt = format!("[Heartbeat Task] {task}");
             let temp = config.default_temperature;
             if let Err(e) =
-                crate::agent::run(Arc::clone(&config), Some(prompt), None, None, temp).await
+                crate::intelligence::agent::run(Arc::clone(&config), Some(prompt), None, None, temp)
+                    .await
             {
                 crate::diagnostics::health::mark_component_error("heartbeat", e.to_string());
                 tracing::warn!("Heartbeat task failed: {e}");

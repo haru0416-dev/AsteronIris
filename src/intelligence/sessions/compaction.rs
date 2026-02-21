@@ -52,8 +52,8 @@ pub fn compact_session(
 #[cfg(test)]
 mod tests {
     use super::compact_session;
-    use crate::sessions::store::{SessionStore, SqliteSessionStore};
-    use crate::sessions::types::{MessageRole, SessionState};
+    use crate::intelligence::sessions::store::{SessionStore, SqliteSessionStore};
+    use crate::intelligence::sessions::types::{MessageRole, SessionState};
     use tempfile::NamedTempFile;
 
     fn store() -> (NamedTempFile, SqliteSessionStore) {

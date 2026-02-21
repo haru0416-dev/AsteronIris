@@ -1,4 +1,4 @@
-use crate::planner::{Plan, PlanStep, StepAction, StepStatus};
+use crate::intelligence::planner::{Plan, PlanStep, StepAction, StepStatus};
 use crate::tools::ToolRegistry;
 use crate::tools::middleware::ExecutionContext;
 use anyhow::Result;
@@ -170,7 +170,9 @@ fn mark_downstream_skipped(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::{DagContract, DagEdge, DagNode, Plan, PlanStep, StepAction, StepStatus};
+    use crate::intelligence::planner::{
+        DagContract, DagEdge, DagNode, Plan, PlanStep, StepAction, StepStatus,
+    };
     use anyhow::bail;
     use async_trait::async_trait;
     use serde_json::json;

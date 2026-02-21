@@ -3,8 +3,8 @@ use super::streaming::build_sse_response;
 use super::types::{
     ChatCompletion, ChatCompletionRequest, Choice, ChoiceMessage, CompletionUsage, RequestMessage,
 };
-use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::gateway::AppState;
+use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::security::policy::TenantPolicyContext;
 use crate::tools::middleware::ExecutionContext;
 use axum::extract::State;

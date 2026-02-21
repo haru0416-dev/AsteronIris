@@ -1,5 +1,5 @@
-use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::channels::Channel;
+use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::providers;
 use crate::security::pairing::constant_time_eq;
 use crate::security::policy::TenantPolicyContext;
@@ -57,7 +57,7 @@ async fn run_gateway_tool_loop(
     model: &str,
     temperature: f64,
     source_identifier: &str,
-) -> anyhow::Result<crate::agent::tool_loop::ToolLoopResult> {
+) -> anyhow::Result<crate::intelligence::agent::tool_loop::ToolLoopResult> {
     let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
     let full_prompt = system_prompt.unwrap_or_default();
     let ctx = ExecutionContext {

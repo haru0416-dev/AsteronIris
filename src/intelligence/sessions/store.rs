@@ -387,7 +387,7 @@ fn i64_to_u64(value: i64, column_index: usize) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{SessionStore, SqliteSessionStore};
-    use crate::sessions::types::{MessageRole, SessionState};
+    use crate::intelligence::sessions::types::{MessageRole, SessionState};
     use tempfile::NamedTempFile;
 
     fn store() -> (NamedTempFile, SqliteSessionStore) {

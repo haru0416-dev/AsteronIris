@@ -73,9 +73,9 @@ pub(super) struct MainSessionTurnParams<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::agent) struct RuntimeMemoryWriteContext {
-    pub(in crate::agent) entity_id: String,
-    pub(in crate::agent) policy_context: TenantPolicyContext,
+pub(in crate::intelligence::agent) struct RuntimeMemoryWriteContext {
+    pub(in crate::intelligence::agent) entity_id: String,
+    pub(in crate::intelligence::agent) policy_context: TenantPolicyContext,
 }
 
 impl RuntimeMemoryWriteContext {
@@ -96,7 +96,7 @@ impl RuntimeMemoryWriteContext {
         }
     }
 
-    pub(in crate::agent) fn enforce_write_scope(&self) -> Result<()> {
+    pub(in crate::intelligence::agent) fn enforce_write_scope(&self) -> Result<()> {
         self.policy_context
             .enforce_recall_scope(&self.entity_id)
             .map_err(anyhow::Error::msg)

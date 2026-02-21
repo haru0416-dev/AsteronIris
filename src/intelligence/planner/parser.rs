@@ -1,4 +1,6 @@
-use crate::planner::{DagContract, DagEdge, DagNode, Plan, PlanStep, StepAction, StepStatus};
+use crate::intelligence::planner::{
+    DagContract, DagEdge, DagNode, Plan, PlanStep, StepAction, StepStatus,
+};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 

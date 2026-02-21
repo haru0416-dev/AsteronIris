@@ -1,5 +1,5 @@
-use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::config::Config;
+use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::media::MediaProcessor;
 use crate::providers::streaming::{ChannelStreamSink, StreamSink};
 use crate::security::{ChannelApprovalContext, broker_for_channel};
