@@ -1,4 +1,4 @@
-use crate::channels::traits::{Channel, ChannelMessage};
+use crate::channels::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
 use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -56,6 +56,16 @@ struct EventContent {
     body: Option<String>,
     #[serde(default)]
     msgtype: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    info: Option<EventContentInfo>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct EventContentInfo {
+    #[serde(default)]
+    mimetype: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,6 +120,45 @@ impl MatrixChannel {
 
         let who: WhoAmIResponse = resp.json().await.context("parse Matrix whoami response")?;
         Ok(who.user_id)
+    }
+
+    fn mxc_to_http(&self, mxc_url: &str) -> Option<String> {
+        let stripped = mxc_url.strip_prefix("mxc://")?;
+        let (server, media_id) = stripped.split_once('/')?;
+        Some(format!(
+            "{}/_matrix/media/v3/download/{server}/{media_id}",
+            self.homeserver
+        ))
+    }
+
+    fn parse_media_attachments(&self, content: &EventContent) -> Vec<MediaAttachment> {
+        let Some(msgtype) = content.msgtype.as_deref() else {
+            return Vec::new();
+        };
+
+        if !matches!(msgtype, "m.image" | "m.audio" | "m.video" | "m.file") {
+            return Vec::new();
+        }
+
+        let Some(mxc_url) = content.url.as_deref() else {
+            return Vec::new();
+        };
+        let Some(download_url) = self.mxc_to_http(mxc_url) else {
+            return Vec::new();
+        };
+
+        let mime_type = content
+            .info
+            .as_ref()
+            .and_then(|info| info.mimetype.as_deref())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        vec![MediaAttachment {
+            mime_type,
+            data: MediaData::Url(download_url),
+            filename: content.body.clone(),
+        }]
     }
 }
 
@@ -229,28 +278,34 @@ impl Channel for MatrixChannel {
                         continue;
                     }
 
-                    if event.content.msgtype.as_deref() != Some("m.text") {
+                    let msgtype = event.content.msgtype.as_deref().unwrap_or("");
+                    if !matches!(
+                        msgtype,
+                        "m.text" | "m.image" | "m.audio" | "m.video" | "m.file"
+                    ) {
                         continue;
                     }
 
-                    let Some(ref body) = event.content.body else {
-                        continue;
-                    };
-
                     if !self.is_user_allowed(&event.sender) {
+                        continue;
+                    }
+
+                    let attachments = self.parse_media_attachments(&event.content);
+                    let body = event.content.body.clone().unwrap_or_default();
+                    if body.is_empty() && attachments.is_empty() {
                         continue;
                     }
 
                     let msg = ChannelMessage {
                         id: format!("mx_{}", chrono::Utc::now().timestamp_millis()),
                         sender: event.sender.clone(),
-                        content: body.clone(),
+                        content: body,
                         channel: "matrix".to_string(),
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
-                        attachments: Vec::new(),
+                        attachments,
                     };
 
                     if tx.send(msg).await.is_err() {
@@ -274,6 +329,98 @@ impl Channel for MatrixChannel {
         };
 
         resp.status().is_success()
+    }
+
+    async fn send_media(
+        &self,
+        attachment: &MediaAttachment,
+        _recipient: &str,
+    ) -> anyhow::Result<()> {
+        let bytes = match &attachment.data {
+            MediaData::Url(media_url) => self
+                .client
+                .get(media_url)
+                .send()
+                .await
+                .context("download Matrix media before upload")?
+                .bytes()
+                .await
+                .context("read Matrix media bytes")?
+                .to_vec(),
+            MediaData::Bytes(raw_bytes) => raw_bytes.clone(),
+        };
+
+        let upload_url = format!("{}/_matrix/media/v3/upload", self.homeserver);
+        let upload_resp = self
+            .client
+            .post(&upload_url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .header("Content-Type", attachment.mime_type.clone())
+            .body(bytes.clone())
+            .send()
+            .await
+            .context("send Matrix upload request")?;
+
+        if !upload_resp.status().is_success() {
+            let err = upload_resp.text().await?;
+            anyhow::bail!("Matrix media upload failed: {err}");
+        }
+
+        let upload_data: serde_json::Value = upload_resp
+            .json()
+            .await
+            .context("parse Matrix upload response")?;
+        let Some(content_uri) = upload_data
+            .get("content_uri")
+            .and_then(serde_json::Value::as_str)
+        else {
+            anyhow::bail!("Matrix upload response missing content_uri");
+        };
+
+        let txn_id = format!("zc_{}", chrono::Utc::now().timestamp_millis());
+        let send_url = format!(
+            "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+            self.homeserver, self.room_id, txn_id
+        );
+        let filename = attachment
+            .filename
+            .clone()
+            .unwrap_or_else(|| "attachment".to_string());
+        let msgtype = if attachment.mime_type.starts_with("image/") {
+            "m.image"
+        } else if attachment.mime_type.starts_with("audio/") {
+            "m.audio"
+        } else if attachment.mime_type.starts_with("video/") {
+            "m.video"
+        } else {
+            "m.file"
+        };
+
+        let body = serde_json::json!({
+            "msgtype": msgtype,
+            "body": filename,
+            "url": content_uri,
+            "info": {
+                "mimetype": attachment.mime_type,
+                "size": bytes.len()
+            }
+        });
+
+        let send_resp = self
+            .client
+            .put(&send_url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .json(&body)
+            .send()
+            .await
+            .context("send Matrix media message")?;
+
+        if !send_resp.status().is_success() {
+            let err = send_resp.text().await?;
+            anyhow::bail!("Matrix send media failed: {err}");
+        }
+
+        Ok(())
     }
 }
 
@@ -478,5 +625,136 @@ mod tests {
         let json = r#"{"next_batch":"s0"}"#;
         let resp: SyncResponse = serde_json::from_str(json).unwrap();
         assert!(resp.rooms.join.is_empty());
+    }
+
+    #[test]
+    fn mxc_to_http_converts_valid_mxc_url() {
+        let ch = make_channel();
+        let http = ch.mxc_to_http("mxc://matrix.org/abc123");
+        assert_eq!(
+            http.as_deref(),
+            Some("https://matrix.org/_matrix/media/v3/download/matrix.org/abc123")
+        );
+    }
+
+    #[test]
+    fn mxc_to_http_rejects_non_mxc_url() {
+        let ch = make_channel();
+        assert!(ch.mxc_to_http("https://matrix.org/media").is_none());
+    }
+
+    #[test]
+    fn parse_media_attachments_for_image_event() {
+        let ch = make_channel();
+        let content = EventContent {
+            body: Some("photo.png".to_string()),
+            msgtype: Some("m.image".to_string()),
+            url: Some("mxc://matrix.org/image123".to_string()),
+            info: Some(EventContentInfo {
+                mimetype: Some("image/png".to_string()),
+            }),
+        };
+
+        let attachments = ch.parse_media_attachments(&content);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].mime_type, "image/png");
+        assert_eq!(attachments[0].filename.as_deref(), Some("photo.png"));
+        assert!(matches!(
+            &attachments[0].data,
+            MediaData::Url(url) if url.contains("/download/matrix.org/image123")
+        ));
+    }
+
+    #[test]
+    fn parse_media_attachments_for_file_event() {
+        let ch = make_channel();
+        let content = EventContent {
+            body: Some("doc.pdf".to_string()),
+            msgtype: Some("m.file".to_string()),
+            url: Some("mxc://matrix.org/file123".to_string()),
+            info: Some(EventContentInfo {
+                mimetype: Some("application/pdf".to_string()),
+            }),
+        };
+
+        let attachments = ch.parse_media_attachments(&content);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].mime_type, "application/pdf");
+        assert_eq!(attachments[0].filename.as_deref(), Some("doc.pdf"));
+    }
+
+    #[test]
+    fn parse_media_attachments_text_event_has_no_attachments() {
+        let ch = make_channel();
+        let content = EventContent {
+            body: Some("hello".to_string()),
+            msgtype: Some("m.text".to_string()),
+            url: None,
+            info: None,
+        };
+
+        let attachments = ch.parse_media_attachments(&content);
+        assert!(attachments.is_empty());
+        assert_eq!(content.body.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn parse_media_attachments_requires_url_for_media_msgtypes() {
+        let ch = make_channel();
+        let content = EventContent {
+            body: Some("clip.mp4".to_string()),
+            msgtype: Some("m.video".to_string()),
+            url: None,
+            info: Some(EventContentInfo {
+                mimetype: Some("video/mp4".to_string()),
+            }),
+        };
+
+        assert!(ch.parse_media_attachments(&content).is_empty());
+    }
+
+    #[test]
+    fn parse_media_attachments_defaults_mime_type() {
+        let ch = make_channel();
+        let content = EventContent {
+            body: Some("audio.ogg".to_string()),
+            msgtype: Some("m.audio".to_string()),
+            url: Some("mxc://matrix.org/audio999".to_string()),
+            info: None,
+        };
+
+        let attachments = ch.parse_media_attachments(&content);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].mime_type, "application/octet-stream");
+    }
+
+    #[test]
+    fn event_content_deserializes_media_fields() {
+        let json = r#"{
+            "type":"m.room.message",
+            "sender":"@u:m",
+            "content":{
+                "msgtype":"m.image",
+                "body":"cat.png",
+                "url":"mxc://matrix.org/cat123",
+                "info":{"mimetype":"image/png"}
+            }
+        }"#;
+
+        let event: TimelineEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.content.msgtype.as_deref(), Some("m.image"));
+        assert_eq!(event.content.body.as_deref(), Some("cat.png"));
+        assert_eq!(
+            event.content.url.as_deref(),
+            Some("mxc://matrix.org/cat123")
+        );
+        assert_eq!(
+            event
+                .content
+                .info
+                .as_ref()
+                .and_then(|info| info.mimetype.as_deref()),
+            Some("image/png")
+        );
     }
 }

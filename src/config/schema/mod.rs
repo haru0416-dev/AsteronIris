@@ -8,6 +8,7 @@ mod observability;
 mod tools;
 mod tunnel;
 
+pub use crate::media::types::MediaConfig;
 pub use autonomy::{AutonomyConfig, AutonomyRolloutStage};
 #[allow(unused_imports)]
 pub use autonomy::{AutonomyRolloutConfig, TemperatureBand, TemperatureBandsConfig};

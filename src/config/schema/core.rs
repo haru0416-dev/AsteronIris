@@ -2,6 +2,7 @@ use super::{
     AutonomyConfig, ChannelsConfig, GatewayConfig, McpConfig, MemoryConfig, ObservabilityConfig,
     ToolsConfig, TunnelConfig,
 };
+use crate::media::types::MediaConfig;
 use crate::security::SecretStore;
 use anyhow::{Context, Result};
 use directories::UserDirs;
@@ -42,6 +43,9 @@ pub struct Config {
 
     #[serde(default)]
     pub memory: MemoryConfig,
+
+    #[serde(default)]
+    pub media: MediaConfig,
 
     #[serde(default)]
     pub tunnel: TunnelConfig,
@@ -421,6 +425,7 @@ impl Default for Config {
             heartbeat: HeartbeatConfig::default(),
             channels_config: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
+            media: MediaConfig::default(),
             tunnel: TunnelConfig::default(),
             gateway: GatewayConfig::default(),
             composio: ComposioConfig::default(),
@@ -844,6 +849,12 @@ mod tests {
         assert_eq!(deserialized.default_model, config.default_model);
         assert_eq!(deserialized.default_temperature, config.default_temperature);
         assert_eq!(deserialized.locale, config.locale);
+        assert_eq!(deserialized.media.enabled, config.media.enabled);
+        assert_eq!(deserialized.media.storage_dir, config.media.storage_dir);
+        assert_eq!(
+            deserialized.media.max_file_size_mb,
+            config.media.max_file_size_mb
+        );
         assert_eq!(deserialized.autonomy.level, config.autonomy.level);
         assert_eq!(
             deserialized.autonomy.external_action_execution,
@@ -851,5 +862,45 @@ mod tests {
         );
         assert_eq!(deserialized.workspace_dir, PathBuf::new());
         assert_eq!(deserialized.config_path, PathBuf::new());
+    }
+
+    #[test]
+    fn config_round_trip_with_default_media_config() {
+        let config = Config::default();
+
+        let serialized = toml::to_string(&config).unwrap();
+        let deserialized: Config = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.media.enabled, MediaConfig::default().enabled);
+        assert_eq!(
+            deserialized.media.storage_dir,
+            MediaConfig::default().storage_dir
+        );
+        assert_eq!(
+            deserialized.media.max_file_size_mb,
+            MediaConfig::default().max_file_size_mb
+        );
+    }
+
+    #[test]
+    fn config_round_trip_with_custom_media_config() {
+        let config = Config {
+            media: MediaConfig {
+                enabled: true,
+                storage_dir: Some("/tmp/custom-media".to_string()),
+                max_file_size_mb: 64,
+            },
+            ..Config::default()
+        };
+
+        let serialized = toml::to_string(&config).unwrap();
+        let deserialized: Config = toml::from_str(&serialized).unwrap();
+
+        assert!(deserialized.media.enabled);
+        assert_eq!(
+            deserialized.media.storage_dir,
+            Some("/tmp/custom-media".to_string())
+        );
+        assert_eq!(deserialized.media.max_file_size_mb, 64);
     }
 }

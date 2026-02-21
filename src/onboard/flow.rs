@@ -1,6 +1,6 @@
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, HeartbeatConfig,
-    MemoryConfig, ObservabilityConfig, PersonaConfig, RuntimeConfig, SecretsConfig,
+    MediaConfig, MemoryConfig, ObservabilityConfig, PersonaConfig, RuntimeConfig, SecretsConfig,
 };
 use anyhow::{Context, Result};
 use dialoguer::Confirm;
@@ -91,6 +91,7 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
         heartbeat: HeartbeatConfig::default(),
         channels_config,
         memory: memory_config,
+        media: MediaConfig::default(),
         tunnel: tunnel_config,
         gateway: crate::config::GatewayConfig::default(),
         composio: composio_config,
@@ -275,6 +276,7 @@ pub fn run_quick_setup(
         heartbeat: HeartbeatConfig::default(),
         channels_config: ChannelsConfig::default(),
         memory: memory_config,
+        media: MediaConfig::default(),
         tunnel: crate::config::TunnelConfig::default(),
         gateway: crate::config::GatewayConfig::default(),
         composio: ComposioConfig::default(),

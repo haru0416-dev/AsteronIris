@@ -1,5 +1,7 @@
-use super::traits::{Channel, ChannelMessage};
+use super::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
+use anyhow::Context;
 use async_trait::async_trait;
+use serde_json::Value;
 use uuid::Uuid;
 
 /// Slack channel — polls conversations.history via Web API
@@ -43,6 +45,34 @@ impl SlackChannel {
         resp.get("user_id")
             .and_then(|u| u.as_str())
             .map(String::from)
+    }
+
+    fn parse_files(msg: &Value) -> Vec<MediaAttachment> {
+        msg.get("files")
+            .and_then(Value::as_array)
+            .map(|files| {
+                files
+                    .iter()
+                    .filter_map(|file| {
+                        let url = file.get("url_private").and_then(Value::as_str)?;
+                        let mime_type = file
+                            .get("mimetype")
+                            .and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream")
+                            .to_string();
+                        let filename = file
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string);
+                        Some(MediaAttachment {
+                            mime_type,
+                            data: MediaData::Url(url.to_string()),
+                            filename,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -144,6 +174,7 @@ impl Channel for SlackChannel {
                         .and_then(|u| u.as_str())
                         .unwrap_or("unknown");
                     let text = msg.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                    let attachments = Self::parse_files(msg);
 
                     // Skip bot's own messages
                     if user == bot_user_id {
@@ -157,7 +188,7 @@ impl Channel for SlackChannel {
                     }
 
                     // Skip empty or already-seen
-                    if text.is_empty() || ts <= last_ts.as_str() {
+                    if (text.is_empty() && attachments.is_empty()) || ts <= last_ts.as_str() {
                         continue;
                     }
 
@@ -172,7 +203,7 @@ impl Channel for SlackChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
-                        attachments: Vec::new(),
+                        attachments,
                     };
 
                     if tx.send(channel_msg).await.is_err() {
@@ -191,6 +222,66 @@ impl Channel for SlackChannel {
             .await
             .map(|r| r.status().is_success())
             .unwrap_or(false)
+    }
+
+    async fn send_media(
+        &self,
+        attachment: &MediaAttachment,
+        recipient: &str,
+    ) -> anyhow::Result<()> {
+        let bytes = match &attachment.data {
+            MediaData::Url(media_url) => self
+                .client
+                .get(media_url)
+                .bearer_auth(&self.bot_token)
+                .send()
+                .await
+                .context("download Slack media before upload")?
+                .bytes()
+                .await
+                .context("read Slack media bytes")?
+                .to_vec(),
+            MediaData::Bytes(raw_bytes) => raw_bytes.clone(),
+        };
+
+        let filename = attachment
+            .filename
+            .clone()
+            .unwrap_or_else(|| "attachment".to_string());
+        let file_part = reqwest::multipart::Part::bytes(bytes).file_name(filename);
+        let form = reqwest::multipart::Form::new()
+            .text("channels", recipient.to_string())
+            .part("file", file_part);
+
+        let resp = self
+            .client
+            .post("https://slack.com/api/files.upload")
+            .bearer_auth(&self.bot_token)
+            .multipart(form)
+            .send()
+            .await
+            .context("send Slack files.upload request")?;
+
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+
+        if !status.is_success() {
+            anyhow::bail!("Slack files.upload failed ({status}): {body}");
+        }
+
+        let parsed: Value = serde_json::from_str(&body).unwrap_or_default();
+        if parsed.get("ok") == Some(&Value::Bool(false)) {
+            let err = parsed
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            anyhow::bail!("Slack files.upload failed: {err}");
+        }
+
+        Ok(())
     }
 }
 
@@ -256,5 +347,93 @@ mod tests {
         let ch = SlackChannel::new("xoxb-fake".into(), None, vec!["U111".into(), "*".into()]);
         assert!(ch.is_user_allowed("U111"));
         assert!(ch.is_user_allowed("anyone"));
+    }
+
+    #[test]
+    fn parse_files_extracts_media_attachment() {
+        let msg = serde_json::json!({
+            "files": [
+                {
+                    "id": "F123",
+                    "name": "report.pdf",
+                    "mimetype": "application/pdf",
+                    "url_private": "https://files.slack.com/files-pri/T/F/report.pdf"
+                }
+            ]
+        });
+
+        let attachments = SlackChannel::parse_files(&msg);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].mime_type, "application/pdf");
+        assert_eq!(attachments[0].filename.as_deref(), Some("report.pdf"));
+        assert!(matches!(
+            &attachments[0].data,
+            MediaData::Url(url) if url.contains("files-pri")
+        ));
+    }
+
+    #[test]
+    fn parse_files_empty_array_returns_none() {
+        let msg = serde_json::json!({ "files": [] });
+        assert!(SlackChannel::parse_files(&msg).is_empty());
+    }
+
+    #[test]
+    fn parse_files_missing_field_returns_none() {
+        let msg = serde_json::json!({ "text": "hello" });
+        assert!(SlackChannel::parse_files(&msg).is_empty());
+    }
+
+    #[test]
+    fn parse_files_skips_entries_without_private_url() {
+        let msg = serde_json::json!({
+            "files": [
+                {"id": "F1", "name": "no_url.txt", "mimetype": "text/plain"},
+                {
+                    "id": "F2",
+                    "name": "with_url.txt",
+                    "mimetype": "text/plain",
+                    "url_private": "https://files.slack.com/files-pri/T/F/with_url.txt"
+                }
+            ]
+        });
+
+        let attachments = SlackChannel::parse_files(&msg);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].filename.as_deref(), Some("with_url.txt"));
+    }
+
+    #[test]
+    fn parse_files_defaults_mime_type() {
+        let msg = serde_json::json!({
+            "files": [
+                {
+                    "id": "F123",
+                    "name": "blob.bin",
+                    "url_private": "https://files.slack.com/files-pri/T/F/blob.bin"
+                }
+            ]
+        });
+
+        let attachments = SlackChannel::parse_files(&msg);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].mime_type, "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn send_media_uses_files_upload_endpoint() {
+        let ch = SlackChannel::new("xoxb-fake".into(), Some("C12345".into()), vec!["*".into()]);
+        let attachment = MediaAttachment {
+            mime_type: "text/plain".to_string(),
+            data: MediaData::Bytes(b"hello".to_vec()),
+            filename: Some("note.txt".to_string()),
+        };
+
+        let err = ch
+            .send_media(&attachment, "C12345")
+            .await
+            .expect_err("network failure expected")
+            .to_string();
+        assert!(err.contains("files.upload") || err.contains("Slack"));
     }
 }

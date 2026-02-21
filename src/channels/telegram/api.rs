@@ -200,6 +200,40 @@ impl TelegramChannel {
         Ok(())
     }
 
+    pub async fn send_video_bytes(
+        &self,
+        chat_id: &str,
+        file_bytes: Vec<u8>,
+        file_name: &str,
+        caption: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let part = Part::bytes(file_bytes).file_name(file_name.to_string());
+
+        let mut form = Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("video", part);
+
+        if let Some(cap) = caption {
+            form = form.text("caption", cap.to_string());
+        }
+
+        let resp = self
+            .client
+            .post(self.api_url("sendVideo"))
+            .multipart(form)
+            .send()
+            .await
+            .context("send Telegram video bytes")?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram sendVideo failed: {err}");
+        }
+
+        tracing::info!("Telegram video sent to {chat_id}: {file_name}");
+        Ok(())
+    }
+
     /// Send an audio file to a Telegram chat
     pub async fn send_audio(
         &self,
@@ -232,6 +266,40 @@ impl TelegramChannel {
             .send()
             .await
             .context("send Telegram audio")?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram sendAudio failed: {err}");
+        }
+
+        tracing::info!("Telegram audio sent to {chat_id}: {file_name}");
+        Ok(())
+    }
+
+    pub async fn send_audio_bytes(
+        &self,
+        chat_id: &str,
+        file_bytes: Vec<u8>,
+        file_name: &str,
+        caption: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let part = Part::bytes(file_bytes).file_name(file_name.to_string());
+
+        let mut form = Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("audio", part);
+
+        if let Some(cap) = caption {
+            form = form.text("caption", cap.to_string());
+        }
+
+        let resp = self
+            .client
+            .post(self.api_url("sendAudio"))
+            .multipart(form)
+            .send()
+            .await
+            .context("send Telegram audio bytes")?;
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
@@ -347,6 +415,70 @@ impl TelegramChannel {
         }
 
         tracing::info!("Telegram photo (URL) sent to {chat_id}: {url}");
+        Ok(())
+    }
+
+    pub async fn send_audio_by_url(
+        &self,
+        chat_id: &str,
+        url: &str,
+        caption: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({
+            "chat_id": chat_id,
+            "audio": url
+        });
+
+        if let Some(cap) = caption {
+            body["caption"] = serde_json::Value::String(cap.to_string());
+        }
+
+        let resp = self
+            .client
+            .post(self.api_url("sendAudio"))
+            .json(&body)
+            .send()
+            .await
+            .context("send Telegram audio by URL")?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram sendAudio by URL failed: {err}");
+        }
+
+        tracing::info!("Telegram audio (URL) sent to {chat_id}: {url}");
+        Ok(())
+    }
+
+    pub async fn send_video_by_url(
+        &self,
+        chat_id: &str,
+        url: &str,
+        caption: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({
+            "chat_id": chat_id,
+            "video": url
+        });
+
+        if let Some(cap) = caption {
+            body["caption"] = serde_json::Value::String(cap.to_string());
+        }
+
+        let resp = self
+            .client
+            .post(self.api_url("sendVideo"))
+            .json(&body)
+            .send()
+            .await
+            .context("send Telegram video by URL")?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram sendVideo by URL failed: {err}");
+        }
+
+        tracing::info!("Telegram video (URL) sent to {chat_id}: {url}");
         Ok(())
     }
 }

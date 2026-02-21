@@ -7,8 +7,8 @@ pub mod widgets;
 use anyhow::Result;
 
 use crate::config::{
-    AutonomyConfig, BrowserConfig, ComposioConfig, Config, HeartbeatConfig, MemoryConfig,
-    ObservabilityConfig, PersonaConfig, RuntimeConfig, SecretsConfig,
+    AutonomyConfig, BrowserConfig, ComposioConfig, Config, HeartbeatConfig, MediaConfig,
+    MemoryConfig, ObservabilityConfig, PersonaConfig, RuntimeConfig, SecretsConfig,
 };
 use crate::onboard::prompts::ProjectContext;
 use crate::onboard::scaffold::scaffold_workspace;
@@ -121,6 +121,7 @@ fn build_config_from_state(state: &state::WizardState) -> Result<Config> {
         heartbeat: HeartbeatConfig::default(),
         channels_config: state.channels_config.clone(),
         memory: memory_config,
+        media: MediaConfig::default(),
         tunnel: tunnel_config,
         gateway: crate::config::GatewayConfig::default(),
         composio: composio_config,

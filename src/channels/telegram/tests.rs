@@ -1,5 +1,5 @@
 use super::*;
-use crate::channels::traits::Channel;
+use crate::channels::traits::{Channel, MediaAttachment, MediaData};
 use std::path::Path;
 
 #[test]
@@ -322,4 +322,175 @@ async fn telegram_send_document_bytes_empty_chat_id() {
 
     // Should not panic
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn parse_telegram_attachments_photo_uses_largest_size() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let message = serde_json::json!({
+        "photo": [
+            {"file_id": "test_file_path:photos/small.jpg"},
+            {"file_id": "test_file_path:photos/large.jpg"}
+        ]
+    });
+
+    let attachments = ch.parse_telegram_attachments(&message).await;
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].mime_type, "image/jpeg");
+    assert!(matches!(
+        &attachments[0].data,
+        MediaData::Url(url) if url.ends_with("photos/large.jpg")
+    ));
+}
+
+#[tokio::test]
+async fn parse_telegram_attachments_document_includes_metadata() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let message = serde_json::json!({
+        "document": {
+            "file_id": "test_file_path:docs/spec.pdf",
+            "file_name": "spec.pdf",
+            "mime_type": "application/pdf"
+        }
+    });
+
+    let attachments = ch.parse_telegram_attachments(&message).await;
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].mime_type, "application/pdf");
+    assert_eq!(attachments[0].filename.as_deref(), Some("spec.pdf"));
+    assert!(matches!(
+        &attachments[0].data,
+        MediaData::Url(url) if url.ends_with("docs/spec.pdf")
+    ));
+}
+
+#[tokio::test]
+async fn parse_telegram_attachments_voice_defaults_filename() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let message = serde_json::json!({
+        "voice": {
+            "file_id": "test_file_path:voice/clip.ogg",
+            "mime_type": "audio/ogg"
+        }
+    });
+
+    let attachments = ch.parse_telegram_attachments(&message).await;
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].mime_type, "audio/ogg");
+    assert_eq!(attachments[0].filename.as_deref(), Some("voice.ogg"));
+}
+
+#[tokio::test]
+async fn parse_telegram_attachments_with_text_and_photo() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let message = serde_json::json!({
+        "text": "hello",
+        "photo": [
+            {"file_id": "test_file_path:photos/one.jpg"}
+        ]
+    });
+
+    let attachments = ch.parse_telegram_attachments(&message).await;
+    assert_eq!(attachments.len(), 1);
+    assert!(matches!(attachments[0].data, MediaData::Url(_)));
+}
+
+#[tokio::test]
+async fn parse_telegram_attachments_audio_and_video_both_parse() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let message = serde_json::json!({
+        "audio": {
+            "file_id": "test_file_path:media/song.mp3",
+            "file_name": "song.mp3",
+            "mime_type": "audio/mpeg"
+        },
+        "video": {
+            "file_id": "test_file_path:media/clip.mp4",
+            "file_name": "clip.mp4",
+            "mime_type": "video/mp4"
+        }
+    });
+
+    let attachments = ch.parse_telegram_attachments(&message).await;
+    assert_eq!(attachments.len(), 2);
+    assert_eq!(attachments[0].filename.as_deref(), Some("song.mp3"));
+    assert_eq!(attachments[1].filename.as_deref(), Some("clip.mp4"));
+}
+
+#[tokio::test]
+async fn telegram_send_media_dispatch_image_bytes() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let attachment = MediaAttachment {
+        mime_type: "image/png".to_string(),
+        data: MediaData::Bytes(vec![0x89, 0x50, 0x4E, 0x47]),
+        filename: Some("image.png".to_string()),
+    };
+
+    let err = ch
+        .send_media(&attachment, "123456")
+        .await
+        .expect_err("network failure expected")
+        .to_string();
+    assert!(err.contains("photo") || err.contains("sendPhoto"));
+}
+
+#[tokio::test]
+async fn telegram_send_media_dispatch_audio_bytes() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let attachment = MediaAttachment {
+        mime_type: "audio/mpeg".to_string(),
+        data: MediaData::Bytes(vec![1, 2, 3, 4]),
+        filename: Some("track.mp3".to_string()),
+    };
+
+    let err = ch
+        .send_media(&attachment, "123456")
+        .await
+        .expect_err("network failure expected")
+        .to_string();
+    assert!(err.contains("audio") || err.contains("sendAudio"));
+}
+
+#[tokio::test]
+async fn telegram_send_media_dispatch_video_bytes() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let attachment = MediaAttachment {
+        mime_type: "video/mp4".to_string(),
+        data: MediaData::Bytes(vec![0, 0, 0, 1]),
+        filename: Some("clip.mp4".to_string()),
+    };
+
+    let err = ch
+        .send_media(&attachment, "123456")
+        .await
+        .expect_err("network failure expected")
+        .to_string();
+    assert!(err.contains("video") || err.contains("sendVideo"));
+}
+
+#[tokio::test]
+async fn telegram_send_media_dispatch_document_url() {
+    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()]);
+    let attachment = MediaAttachment {
+        mime_type: "application/pdf".to_string(),
+        data: MediaData::Url("https://example.com/spec.pdf".to_string()),
+        filename: Some("spec.pdf".to_string()),
+    };
+
+    let err = ch
+        .send_media(&attachment, "123456")
+        .await
+        .expect_err("network failure expected")
+        .to_string();
+    assert!(err.contains("document") || err.contains("sendDocument"));
+}
+
+#[test]
+fn telegram_file_url_is_constructed_correctly() {
+    let ch = TelegramChannel::new("123:ABC".into(), vec![]);
+    let url = ch.telegram_file_url("photos/file.jpg");
+    assert_eq!(
+        url,
+        "https://api.telegram.org/file/bot123:ABC/photos/file.jpg"
+    );
 }

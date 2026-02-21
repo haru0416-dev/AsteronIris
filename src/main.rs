@@ -32,6 +32,9 @@ mod gateway;
 mod health;
 mod heartbeat;
 mod integrations;
+#[cfg(feature = "media")]
+#[allow(unused_imports)]
+mod media;
 mod memory;
 mod observability;
 mod onboard;

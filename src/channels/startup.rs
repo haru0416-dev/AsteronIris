@@ -1,6 +1,7 @@
 use crate::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::auth::AuthBroker;
 use crate::config::Config;
+use crate::media::{MediaProcessor, MediaStore};
 use crate::memory::{self, Memory};
 use crate::providers::response::ContentBlock;
 use crate::providers::{self, Provider};
@@ -24,12 +25,9 @@ use super::ingress_policy::{
 use super::policy::{ChannelPolicy, min_autonomy};
 use super::prompt_builder::build_system_prompt;
 use super::runtime::{channel_backoff_settings, spawn_supervised_listener};
-use super::traits::{Channel, ChannelMessage};
+use super::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
 
-fn convert_attachments_to_images(
-    attachments: &[crate::channels::traits::MediaAttachment],
-) -> Vec<ContentBlock> {
-    use crate::channels::traits::MediaData;
+fn convert_attachments_to_images(attachments: &[MediaAttachment]) -> Vec<ContentBlock> {
     use crate::providers::response::ImageSource;
 
     attachments
@@ -46,6 +44,8 @@ fn convert_attachments_to_images(
 }
 
 fn encode_base64(bytes: &[u8]) -> String {
+    // `data_encoding`/`base64` are not direct dependencies in this crate, so this
+    // local encoder is kept until one of those crates is available here.
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -69,6 +69,121 @@ fn encode_base64(bytes: &[u8]) -> String {
     out
 }
 
+fn attachment_to_image_block(attachment: &MediaAttachment) -> Option<ContentBlock> {
+    use crate::providers::response::ImageSource;
+
+    if !attachment.mime_type.starts_with("image/") {
+        return None;
+    }
+
+    let source = match &attachment.data {
+        MediaData::Url(url) => ImageSource::url(url),
+        MediaData::Bytes(bytes) => ImageSource::base64(&attachment.mime_type, encode_base64(bytes)),
+    };
+    Some(ContentBlock::Image { source })
+}
+
+async fn load_attachment_bytes(attachment: &MediaAttachment) -> Result<Vec<u8>> {
+    match &attachment.data {
+        MediaData::Bytes(bytes) => Ok(bytes.clone()),
+        MediaData::Url(url) => {
+            let response = reqwest::get(url).await?;
+            let response = response.error_for_status()?;
+            let bytes = response.bytes().await?;
+            Ok(bytes.to_vec())
+        }
+    }
+}
+
+fn fallback_attachment_description(
+    attachment: &MediaAttachment,
+    size_bytes: Option<usize>,
+) -> String {
+    let filename = attachment.filename.as_deref().unwrap_or("unnamed");
+    let size_part = size_bytes
+        .map(|bytes| format!(", {}KB", bytes.div_ceil(1024)))
+        .unwrap_or_default();
+    format!(
+        "[Attachment: {filename} ({}{size_part})]",
+        attachment.mime_type
+    )
+}
+
+async fn prepare_channel_input_and_images(
+    model_input: &str,
+    attachments: &[MediaAttachment],
+    media_store: Option<&Arc<MediaStore>>,
+) -> (String, Vec<ContentBlock>) {
+    let Some(store) = media_store else {
+        return (
+            model_input.to_string(),
+            convert_attachments_to_images(attachments),
+        );
+    };
+    let processor = MediaProcessor::new();
+    let mut attachment_descriptions = Vec::new();
+    let mut image_blocks = Vec::new();
+
+    for attachment in attachments {
+        match load_attachment_bytes(attachment).await {
+            Ok(bytes) => match store.store(&bytes, attachment.filename.as_deref()) {
+                Ok(stored) => {
+                    if !attachment.mime_type.starts_with("image/") {
+                        match processor.describe(&stored, &bytes).await {
+                            Ok(description) => attachment_descriptions.push(description),
+                            Err(error) => {
+                                tracing::warn!(
+                                    channel_attachment = ?attachment.filename,
+                                    error = %error,
+                                    "failed to describe non-image attachment"
+                                );
+                                attachment_descriptions.push(fallback_attachment_description(
+                                    attachment,
+                                    Some(bytes.len()),
+                                ));
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        channel_attachment = ?attachment.filename,
+                        error = %error,
+                        "failed to persist attachment"
+                    );
+                    if !attachment.mime_type.starts_with("image/") {
+                        attachment_descriptions.push(fallback_attachment_description(
+                            attachment,
+                            Some(bytes.len()),
+                        ));
+                    }
+                }
+            },
+            Err(error) => {
+                tracing::warn!(
+                    channel_attachment = ?attachment.filename,
+                    error = %error,
+                    "failed to load attachment bytes"
+                );
+                if !attachment.mime_type.starts_with("image/") {
+                    attachment_descriptions.push(fallback_attachment_description(attachment, None));
+                }
+            }
+        }
+
+        if let Some(block) = attachment_to_image_block(attachment) {
+            image_blocks.push(block);
+        }
+    }
+
+    if attachment_descriptions.is_empty() {
+        (model_input.to_string(), image_blocks)
+    } else {
+        let prefix = attachment_descriptions.join("\n");
+        (format!("{prefix}\n\n{model_input}"), image_blocks)
+    }
+}
+
 struct ChannelRuntime {
     config: Arc<Config>,
     security: Arc<SecurityPolicy>,
@@ -79,6 +194,7 @@ struct ChannelRuntime {
     model: String,
     temperature: f64,
     mem: Arc<dyn Memory>,
+    media_store: Option<Arc<MediaStore>>,
     system_prompt: String,
     channels: Vec<Arc<dyn Channel>>,
     channel_policies: HashMap<String, ChannelPolicy>,
@@ -172,6 +288,12 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
         &config.workspace_dir,
         memory_api_key.as_deref(),
     )?);
+    let media_store = if config.media.enabled {
+        let workspace_dir = config.workspace_dir.to_string_lossy().into_owned();
+        Some(Arc::new(MediaStore::new(&config.media, &workspace_dir)?))
+    } else {
+        None
+    };
     let composio_key = if config.composio.enabled {
         config.composio.api_key.as_deref()
     } else {
@@ -225,6 +347,7 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
         model,
         temperature,
         mem,
+        media_store,
         system_prompt,
         channels,
         channel_policies,
@@ -339,13 +462,18 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
         Arc::clone(&rt.registry),
         rt.config.autonomy.max_tool_loop_iterations,
     );
-    let image_blocks = convert_attachments_to_images(&msg.attachments);
+    let (message_input, image_blocks) = prepare_channel_input_and_images(
+        &ingress.model_input,
+        &msg.attachments,
+        rt.media_store.as_ref(),
+    )
+    .await;
 
     match tool_loop
         .run(
             rt.provider.as_ref(),
             &rt.system_prompt,
-            &ingress.model_input,
+            &message_input,
             &image_blocks,
             &rt.model,
             rt.temperature,
@@ -466,7 +594,29 @@ pub async fn start_channels(config: Arc<Config>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::channels::traits::{MediaAttachment, MediaData};
+    use std::fs;
+
+    use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_media_store(temp_dir: &TempDir, max_file_size_mb: u64) -> Arc<MediaStore> {
+        let workspace = temp_dir.path().to_string_lossy().into_owned();
+        let config = crate::media::types::MediaConfig {
+            enabled: true,
+            storage_dir: None,
+            max_file_size_mb,
+        };
+        Arc::new(MediaStore::new(&config, &workspace).unwrap())
+    }
+
+    fn stored_file_count(temp_dir: &TempDir) -> usize {
+        fs::read_dir(temp_dir.path().join("media"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy() != "media.db")
+            .count()
+    }
 
     #[test]
     fn encode_base64_empty() {
@@ -543,5 +693,283 @@ mod tests {
     fn convert_attachments_empty() {
         let blocks = convert_attachments_to_images(&[]);
         assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn attachment_to_image_block_returns_none_for_non_images() {
+        let attachment = MediaAttachment {
+            mime_type: "audio/mpeg".to_string(),
+            data: MediaData::Bytes(vec![1, 2, 3]),
+            filename: Some("clip.mp3".to_string()),
+        };
+
+        assert!(attachment_to_image_block(&attachment).is_none());
+    }
+
+    #[test]
+    fn attachment_to_image_block_returns_url_variant() {
+        let attachment = MediaAttachment {
+            mime_type: "image/png".to_string(),
+            data: MediaData::Url("https://example.com/a.png".to_string()),
+            filename: Some("a.png".to_string()),
+        };
+
+        let block = attachment_to_image_block(&attachment).unwrap();
+        if let ContentBlock::Image { source } = block {
+            let json = serde_json::to_value(source).unwrap();
+            assert_eq!(json["type"], "url");
+            assert_eq!(json["url"], "https://example.com/a.png");
+        } else {
+            panic!("expected image block");
+        }
+    }
+
+    #[test]
+    fn fallback_attachment_description_includes_size_when_known() {
+        let attachment = MediaAttachment {
+            mime_type: "application/pdf".to_string(),
+            data: MediaData::Bytes(vec![0_u8; 2048]),
+            filename: Some("doc.pdf".to_string()),
+        };
+
+        let description = fallback_attachment_description(&attachment, Some(2048));
+        assert_eq!(description, "[Attachment: doc.pdf (application/pdf, 2KB)]");
+    }
+
+    #[test]
+    fn fallback_attachment_description_omits_size_when_unknown() {
+        let attachment = MediaAttachment {
+            mime_type: "application/octet-stream".to_string(),
+            data: MediaData::Url("https://example.com/blob".to_string()),
+            filename: None,
+        };
+
+        let description = fallback_attachment_description(&attachment, None);
+        assert_eq!(
+            description,
+            "[Attachment: unnamed (application/octet-stream)]"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_attachment_bytes_returns_raw_bytes_variant() {
+        let attachment = MediaAttachment {
+            mime_type: "text/plain".to_string(),
+            data: MediaData::Bytes(vec![7, 8, 9]),
+            filename: Some("note.txt".to_string()),
+        };
+
+        let loaded = load_attachment_bytes(&attachment).await.unwrap();
+        assert_eq!(loaded, vec![7, 8, 9]);
+    }
+
+    #[tokio::test]
+    async fn load_attachment_bytes_downloads_url_data() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/file.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1, 3, 3, 7]))
+            .mount(&server)
+            .await;
+
+        let attachment = MediaAttachment {
+            mime_type: "application/octet-stream".to_string(),
+            data: MediaData::Url(format!("{}/file.bin", server.uri())),
+            filename: Some("file.bin".to_string()),
+        };
+
+        let loaded = load_attachment_bytes(&attachment).await.unwrap();
+        assert_eq!(loaded, vec![1, 3, 3, 7]);
+    }
+
+    #[tokio::test]
+    async fn prepare_channel_input_media_disabled_keeps_behavior() {
+        let attachments = vec![
+            MediaAttachment {
+                mime_type: "image/png".to_string(),
+                data: MediaData::Bytes(vec![0x89, 0x50, 0x4E, 0x47]),
+                filename: Some("inline.png".to_string()),
+            },
+            MediaAttachment {
+                mime_type: "audio/mpeg".to_string(),
+                data: MediaData::Bytes(vec![1, 2, 3]),
+                filename: Some("sound.mp3".to_string()),
+            },
+        ];
+
+        let (input, images) = prepare_channel_input_and_images("hello", &attachments, None).await;
+
+        assert_eq!(input, "hello");
+        assert_eq!(images.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn prepare_channel_input_non_image_adds_description_and_stores() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = test_media_store(&temp_dir, 25);
+        let attachments = vec![MediaAttachment {
+            mime_type: "audio/mpeg".to_string(),
+            data: MediaData::Bytes(vec![1, 2, 3, 4]),
+            filename: Some("sound.mp3".to_string()),
+        }];
+
+        let (input, images) =
+            prepare_channel_input_and_images("hello", &attachments, Some(&store)).await;
+
+        assert!(input.starts_with("[Audio: sound.mp3 (audio/mpeg, 4 bytes)"));
+        assert!(input.ends_with("\n\nhello"));
+        assert!(images.is_empty());
+        assert_eq!(stored_file_count(&temp_dir), 1);
+    }
+
+    #[tokio::test]
+    async fn prepare_channel_input_image_bytes_remains_inline_and_is_stored() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = test_media_store(&temp_dir, 25);
+        let attachments = vec![MediaAttachment {
+            mime_type: "image/png".to_string(),
+            data: MediaData::Bytes(vec![0x89, 0x50, 0x4E, 0x47]),
+            filename: Some("img.png".to_string()),
+        }];
+
+        let (input, images) =
+            prepare_channel_input_and_images("hello", &attachments, Some(&store)).await;
+
+        assert_eq!(input, "hello");
+        assert_eq!(images.len(), 1);
+        assert_eq!(stored_file_count(&temp_dir), 1);
+    }
+
+    #[tokio::test]
+    async fn prepare_channel_input_image_url_is_downloaded_stored_and_forwarded_as_url() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/img.png"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "image/png")
+                    .set_body_bytes(vec![0x89, 0x50, 0x4E, 0x47]),
+            )
+            .mount(&server)
+            .await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = test_media_store(&temp_dir, 25);
+        let attachments = vec![MediaAttachment {
+            mime_type: "image/png".to_string(),
+            data: MediaData::Url(format!("{}/img.png", server.uri())),
+            filename: Some("img.png".to_string()),
+        }];
+
+        let (input, images) =
+            prepare_channel_input_and_images("hello", &attachments, Some(&store)).await;
+
+        assert_eq!(input, "hello");
+        assert_eq!(images.len(), 1);
+        if let ContentBlock::Image { source } = &images[0] {
+            let json = serde_json::to_value(source).unwrap();
+            assert_eq!(json["type"], "url");
+        } else {
+            panic!("expected image block");
+        }
+        assert_eq!(stored_file_count(&temp_dir), 1);
+    }
+
+    #[tokio::test]
+    async fn prepare_channel_input_non_image_url_downloads_and_describes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/voice.mp3"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "audio/mpeg")
+                    .set_body_bytes(vec![0x49, 0x44, 0x33, 0x00]),
+            )
+            .mount(&server)
+            .await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = test_media_store(&temp_dir, 25);
+        let attachments = vec![MediaAttachment {
+            mime_type: "audio/mpeg".to_string(),
+            data: MediaData::Url(format!("{}/voice.mp3", server.uri())),
+            filename: Some("voice.mp3".to_string()),
+        }];
+
+        let (input, images) =
+            prepare_channel_input_and_images("hello", &attachments, Some(&store)).await;
+
+        assert!(input.contains("[Audio: voice.mp3 (audio/mpeg, 4 bytes)"));
+        assert!(images.is_empty());
+        assert_eq!(stored_file_count(&temp_dir), 1);
+    }
+
+    #[tokio::test]
+    async fn prepare_channel_input_non_image_url_download_failure_falls_back() {
+        let attachments = vec![MediaAttachment {
+            mime_type: "application/pdf".to_string(),
+            data: MediaData::Url("http://127.0.0.1:9/missing.pdf".to_string()),
+            filename: Some("missing.pdf".to_string()),
+        }];
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = test_media_store(&temp_dir, 25);
+
+        let (input, images) =
+            prepare_channel_input_and_images("hello", &attachments, Some(&store)).await;
+
+        assert_eq!(
+            input,
+            "[Attachment: missing.pdf (application/pdf)]\n\nhello"
+        );
+        assert!(images.is_empty());
+        assert_eq!(stored_file_count(&temp_dir), 0);
+    }
+
+    #[tokio::test]
+    async fn prepare_channel_input_store_failure_falls_back_for_non_image() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = test_media_store(&temp_dir, 0);
+        let attachments = vec![MediaAttachment {
+            mime_type: "application/pdf".to_string(),
+            data: MediaData::Bytes(vec![1]),
+            filename: Some("doc.pdf".to_string()),
+        }];
+
+        let (input, images) =
+            prepare_channel_input_and_images("hello", &attachments, Some(&store)).await;
+
+        assert_eq!(
+            input,
+            "[Attachment: doc.pdf (application/pdf, 1KB)]\n\nhello"
+        );
+        assert!(images.is_empty());
+        assert_eq!(stored_file_count(&temp_dir), 0);
+    }
+
+    #[tokio::test]
+    async fn prepare_channel_input_mixed_attachments_preserves_images_and_adds_text_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = test_media_store(&temp_dir, 25);
+        let attachments = vec![
+            MediaAttachment {
+                mime_type: "audio/mpeg".to_string(),
+                data: MediaData::Bytes(vec![1, 2, 3]),
+                filename: Some("clip.mp3".to_string()),
+            },
+            MediaAttachment {
+                mime_type: "image/png".to_string(),
+                data: MediaData::Bytes(vec![0x89, 0x50, 0x4E, 0x47]),
+                filename: Some("img.png".to_string()),
+            },
+        ];
+
+        let (input, images) =
+            prepare_channel_input_and_images("hello", &attachments, Some(&store)).await;
+
+        assert!(input.starts_with("[Audio: clip.mp3 (audio/mpeg, 3 bytes)"));
+        assert!(input.ends_with("\n\nhello"));
+        assert_eq!(images.len(), 1);
+        assert_eq!(stored_file_count(&temp_dir), 2);
     }
 }
