@@ -1,7 +1,34 @@
 mod attachments;
 pub mod chunker;
 pub mod cli;
+#[cfg(feature = "discord")]
 pub mod discord;
+#[cfg(not(feature = "discord"))]
+pub mod discord {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DiscordConfig {
+        pub bot_token: String,
+        #[serde(default)]
+        pub application_id: Option<String>,
+        pub guild_id: Option<String>,
+        #[serde(default)]
+        pub allowed_users: Vec<String>,
+        #[serde(default)]
+        pub intents: Option<u64>,
+        #[serde(default)]
+        pub status: Option<String>,
+        #[serde(default)]
+        pub activity_type: Option<u8>,
+        #[serde(default)]
+        pub activity_name: Option<String>,
+        #[serde(default)]
+        pub autonomy_level: Option<crate::security::AutonomyLevel>,
+        #[serde(default)]
+        pub tool_allowlist: Option<Vec<String>>,
+    }
+}
 #[cfg(feature = "email")]
 pub mod email_channel;
 // Feature-gate stub: mirrors EmailConfig when "email" feature is disabled.
@@ -87,6 +114,7 @@ pub mod whatsapp;
 mod tests;
 
 pub use cli::CliChannel;
+#[cfg(feature = "discord")]
 pub use discord::DiscordChannel;
 #[cfg(feature = "email")]
 pub use email_channel::EmailChannel;

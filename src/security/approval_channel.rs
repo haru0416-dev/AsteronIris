@@ -1,4 +1,5 @@
 use crate::security::approval::{ApprovalBroker, ApprovalDecision, ApprovalRequest};
+#[cfg(feature = "discord")]
 use crate::security::approval_discord::DiscordApprovalBroker;
 use crate::security::approval_telegram::TelegramApprovalBroker;
 use async_trait::async_trait;
@@ -65,6 +66,7 @@ pub fn broker_for_channel(
     channel_config: &ChannelApprovalContext,
 ) -> Arc<dyn ApprovalBroker> {
     match channel_name {
+        #[cfg(feature = "discord")]
         "discord" => channel_config
             .bot_token
             .as_deref()

@@ -104,7 +104,8 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 rmcp = { version = "0.16.0", features = ["client", "transport-child-process", "transport-io"], optional = true }
 
 [features]
-default = ["email", "vector-search", "tui", "bundled-sqlite", "media", "link-extraction"]
+default = ["discord", "email", "vector-search", "tui", "bundled-sqlite", "media", "link-extraction"]
+discord = []
 bundled-sqlite = ["rusqlite/bundled"]
 email = ["dep:lettre", "dep:mail-parser"]
 vector-search = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema"]

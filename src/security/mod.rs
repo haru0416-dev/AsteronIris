@@ -1,6 +1,7 @@
 pub mod approval;
 pub mod approval_channel;
 pub mod approval_cli;
+#[cfg(feature = "discord")]
 pub mod approval_discord;
 pub mod approval_telegram;
 pub mod external_content;
@@ -19,6 +20,7 @@ pub use approval::{
 pub use approval_channel::{ChannelApprovalContext, TextReplyApprovalBroker, broker_for_channel};
 #[allow(unused_imports)]
 pub use approval_cli::CliApprovalBroker;
+#[cfg(feature = "discord")]
 #[allow(unused_imports)]
 pub use approval_discord::DiscordApprovalBroker;
 #[allow(unused_imports)]

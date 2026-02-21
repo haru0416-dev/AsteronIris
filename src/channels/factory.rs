@@ -1,9 +1,10 @@
+#[cfg(feature = "discord")]
+use crate::channels::DiscordChannel;
 #[cfg(feature = "email")]
 use crate::channels::EmailChannel;
 use crate::channels::policy::{ChannelEntry, ChannelPolicy};
 use crate::channels::{
-    DiscordChannel, IMessageChannel, IrcChannel, MatrixChannel, SlackChannel, TelegramChannel,
-    WhatsAppChannel,
+    IMessageChannel, IrcChannel, MatrixChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
 };
 use crate::config::ChannelsConfig;
 use std::collections::HashSet;
@@ -30,15 +31,13 @@ pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
         });
     }
 
+    #[cfg(feature = "discord")]
     if let Some(dc) = channels_config.discord {
+        let policy = build_policy(dc.autonomy_level, dc.tool_allowlist.clone());
         channels.push(ChannelEntry {
             name: "Discord",
-            channel: Arc::new(DiscordChannel::new(
-                dc.bot_token,
-                dc.guild_id,
-                dc.allowed_users,
-            )),
-            policy: build_policy(dc.autonomy_level, dc.tool_allowlist),
+            channel: Arc::new(DiscordChannel::new(dc)),
+            policy,
         });
     }
 
