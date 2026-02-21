@@ -4,7 +4,7 @@
 
 use super::sanitize_api_error;
 use crate::providers::{
-    ProviderMessage, ProviderResponse,
+    ProviderMessage, ProviderResponse, build_provider_client,
     fallback_tools::{augment_system_prompt_with_tools, build_fallback_response},
     traits::{Provider, messages_to_text},
 };
@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 /// Synthetic, `OpenCode` Zen, `Z.AI`, `GLM`, `MiniMax`, Bedrock, Qianfan, Groq, Mistral, `xAI`, etc.
 pub struct OpenAiCompatibleProvider {
     pub(crate) name: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for provider diagnostics/debug inspection
     pub(crate) base_url: String,
     pub(crate) api_key: Option<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for provider diagnostics/debug inspection
     pub(crate) auth_header: AuthStyle,
     /// Pre-computed `(header_name, header_value)` for auth (avoids `format!` per request).
     cached_auth: Option<(String, String)>,
@@ -72,14 +72,7 @@ impl OpenAiCompatibleProvider {
             cached_auth,
             cached_chat_url,
             cached_responses_url,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .pool_max_idle_per_host(10)
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .tcp_keepalive(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: build_provider_client(),
         }
     }
 

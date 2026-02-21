@@ -1,7 +1,9 @@
 use crate::providers::{
     ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
-    scrub_secret_patterns,
+    build_provider_client, scrub_secret_patterns,
+    sse::{SseBuffer, parse_data_lines_without_done},
     streaming::{ProviderChatRequest, ProviderStream},
+    tool_convert::{ToolFields, map_tools_optional},
     traits::Provider,
 };
 use crate::tools::traits::ToolSpec;
@@ -152,14 +154,7 @@ impl OpenAiProvider {
     pub fn new(api_key: Option<&str>) -> Self {
         Self {
             cached_auth_header: api_key.map(|k| format!("Bearer {k}")),
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .pool_max_idle_per_host(10)
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .tcp_keepalive(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: build_provider_client(),
         }
     }
 
@@ -309,23 +304,17 @@ impl OpenAiProvider {
     }
 
     fn build_openai_tools(tools: &[ToolSpec]) -> Option<Vec<OpenAiTool>> {
-        if tools.is_empty() {
-            None
-        } else {
-            Some(
-                tools
-                    .iter()
-                    .map(|tool| OpenAiTool {
-                        r#type: "function",
-                        function: OpenAiToolDefinition {
-                            name: tool.name.clone(),
-                            description: tool.description.clone(),
-                            parameters: tool.parameters.clone(),
-                        },
-                    })
-                    .collect(),
-            )
-        }
+        map_tools_optional(tools, |tool| {
+            let fields = ToolFields::from_tool(tool);
+            OpenAiTool {
+                r#type: "function",
+                function: OpenAiToolDefinition {
+                    name: fields.name,
+                    description: fields.description,
+                    parameters: fields.parameters,
+                },
+            }
+        })
     }
 
     fn build_tools_request(
@@ -456,11 +445,7 @@ impl OpenAiProvider {
     }
 
     fn parse_sse_data_lines(chunk: &str) -> Vec<&str> {
-        chunk
-            .lines()
-            .filter_map(|line| line.strip_prefix("data: "))
-            .filter(|data| *data != "[DONE]")
-            .collect()
+        parse_data_lines_without_done(chunk)
     }
 
     async fn chat_with_tools_stream_impl(
@@ -500,19 +485,14 @@ impl OpenAiProvider {
         let mut byte_stream = response.bytes_stream();
 
         let stream = async_stream::try_stream! {
-            let mut buffer = String::new();
+            let mut sse_buffer = SseBuffer::new();
             let mut sent_start = false;
 
             while let Some(chunk_result) = byte_stream.next().await {
                 let chunk = chunk_result?;
-                let text = String::from_utf8_lossy(&chunk);
-                buffer.push_str(&text);
+                sse_buffer.push_chunk(&chunk);
 
-                while let Some(boundary) = buffer.find("\n\n") {
-                    let remaining = buffer.split_off(boundary + 2);
-                    let event_block = std::mem::take(&mut buffer);
-                    buffer = remaining;
-
+                while let Some(event_block) = sse_buffer.next_event_block() {
                     for data in Self::parse_sse_data_lines(&event_block) {
                         let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data) else {
                             continue;
@@ -887,14 +867,14 @@ mod tests {
         let messages = OpenAiProvider::map_provider_message(&msg);
         assert_eq!(messages.len(), 1);
         let json = serde_json::to_value(&messages[0]).unwrap();
-        let content = json["content"].as_array().unwrap();
+        let content = json["content"].as_array().expect("content should be array");
         assert_eq!(content.len(), 2);
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[1]["type"], "image_url");
         assert!(
             content[1]["image_url"]["url"]
                 .as_str()
-                .unwrap()
+                .expect("image url should be string")
                 .starts_with("data:image/jpeg;base64,")
         );
     }

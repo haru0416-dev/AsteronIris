@@ -1,177 +1,26 @@
 use crate::providers::{
     ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
-    scrub_secret_patterns,
+    build_provider_client, scrub_secret_patterns,
+    sse::{SseBuffer, parse_event_data_pairs},
     streaming::{ProviderChatRequest, ProviderStream},
+    tool_convert::{ToolFields, map_tools_optional},
     traits::Provider,
 };
 use crate::tools::traits::ToolSpec;
 use async_trait::async_trait;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+
+use super::anthropic_types::{
+    AnthropicImageSource, AnthropicToolDef, ChatRequest, ChatResponse, InputContentBlock, Message,
+    MessageContent, ResponseContentBlock, StreamContentBlockDelta, StreamContentBlockStart,
+    StreamContentBlockType, StreamDelta, StreamMessageDelta, StreamMessageStart,
+};
 
 pub struct AnthropicProvider {
     /// Pre-computed auth: `("Authorization", "Bearer <token>")` or `("x-api-key", "<key>")`.
     cached_auth: Option<(&'static str, String)>,
     cached_messages_url: String,
     client: Client,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatRequest {
-    model: String,
-    max_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
-    messages: Vec<Message>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<AnthropicToolDef>>,
-    temperature: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<bool>,
-}
-
-#[derive(Debug, Serialize)]
-struct Message {
-    role: &'static str,
-    content: MessageContent,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum MessageContent {
-    Text(String),
-    Blocks(Vec<InputContentBlock>),
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum InputContentBlock {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-    },
-    ToolResult {
-        tool_use_id: String,
-        content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
-    },
-    Image {
-        source: AnthropicImageSource,
-    },
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum AnthropicImageSource {
-    Base64 { media_type: String, data: String },
-    Url { url: String },
-}
-
-#[derive(Debug, Serialize)]
-struct AnthropicToolDef {
-    name: String,
-    description: String,
-    input_schema: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    content: Vec<ResponseContentBlock>,
-    stop_reason: Option<String>,
-    usage: Option<Usage>,
-    model: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Usage {
-    input_tokens: u64,
-    output_tokens: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ResponseContentBlock {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-    },
-    #[serde(other)]
-    Unsupported,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamMessageStart {
-    message: StreamMessageInfo,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamMessageInfo {
-    model: Option<String>,
-    usage: Option<Usage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamContentBlockStart {
-    index: u32,
-    content_block: StreamContentBlockType,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum StreamContentBlockType {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamContentBlockDelta {
-    index: u32,
-    delta: StreamDelta,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum StreamDelta {
-    TextDelta {
-        text: String,
-    },
-    InputJsonDelta {
-        partial_json: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamMessageDelta {
-    delta: StreamMessageDeltaBody,
-    usage: Option<StreamDeltaUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamMessageDeltaBody {
-    stop_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamDeltaUsage {
-    output_tokens: u64,
 }
 
 impl AnthropicProvider {
@@ -194,14 +43,7 @@ impl AnthropicProvider {
         Self {
             cached_auth,
             cached_messages_url,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .pool_max_idle_per_host(10)
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .tcp_keepalive(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: build_provider_client(),
         }
     }
 
@@ -390,20 +232,7 @@ impl AnthropicProvider {
     }
 
     fn parse_sse_events(chunk: &str) -> Vec<(&str, &str)> {
-        let mut events = Vec::new();
-        let mut current_event = None;
-
-        for line in chunk.lines() {
-            if let Some(event_type) = line.strip_prefix("event: ") {
-                current_event = Some(event_type.trim());
-            } else if let Some(data) = line.strip_prefix("data: ")
-                && let Some(event_type) = current_event.take()
-            {
-                events.push((event_type, data.trim()));
-            }
-        }
-
-        events
+        parse_event_data_pairs(chunk)
     }
 
     fn stream_events_from_sse(
@@ -493,20 +322,18 @@ impl AnthropicProvider {
             .iter()
             .map(Self::provider_message_to_message)
             .collect();
-        let anthropic_tools = if req.tools.is_empty() {
-            None
-        } else {
-            Some(
-                req.tools
-                    .iter()
-                    .map(|tool| AnthropicToolDef {
-                        name: tool.name.clone(),
-                        description: scrub_secret_patterns(&tool.description).into_owned(),
-                        input_schema: tool.parameters.clone(),
-                    })
-                    .collect(),
-            )
-        };
+        let anthropic_tools = map_tools_optional(&req.tools, |tool| {
+            let fields = ToolFields::from_tool_with_description(
+                tool,
+                scrub_secret_patterns(&tool.description).into_owned(),
+            );
+
+            AnthropicToolDef {
+                name: fields.name,
+                description: fields.description,
+                input_schema: fields.parameters,
+            }
+        });
 
         let request = ChatRequest {
             model: req.model,
@@ -524,20 +351,15 @@ impl AnthropicProvider {
         let mut byte_stream = response.bytes_stream();
 
         let stream = async_stream::try_stream! {
-            let mut buffer = String::new();
+            let mut sse_buffer = SseBuffer::new();
             let mut input_tokens: Option<u64> = None;
             let mut output_tokens: Option<u64> = None;
 
             while let Some(chunk_result) = byte_stream.next().await {
                 let chunk = chunk_result?;
-                let text = String::from_utf8_lossy(&chunk);
-                buffer.push_str(&text);
+                sse_buffer.push_chunk(&chunk);
 
-                while let Some(boundary) = buffer.find("\n\n") {
-                    let remaining = buffer.split_off(boundary + 2);
-                    let event_block = std::mem::take(&mut buffer);
-                    buffer = remaining;
-
+                while let Some(event_block) = sse_buffer.next_event_block() {
                     for (event_type, data) in Self::parse_sse_events(&event_block) {
                         for event in Self::stream_events_from_sse(
                             event_type,
@@ -605,20 +427,18 @@ impl Provider for AnthropicProvider {
             .iter()
             .map(Self::provider_message_to_message)
             .collect();
-        let anthropic_tools = if tools.is_empty() {
-            None
-        } else {
-            Some(
-                tools
-                    .iter()
-                    .map(|tool| AnthropicToolDef {
-                        name: tool.name.clone(),
-                        description: scrub_secret_patterns(&tool.description).into_owned(),
-                        input_schema: tool.parameters.clone(),
-                    })
-                    .collect(),
-            )
-        };
+        let anthropic_tools = map_tools_optional(tools, |tool| {
+            let fields = ToolFields::from_tool_with_description(
+                tool,
+                scrub_secret_patterns(&tool.description).into_owned(),
+            );
+
+            AnthropicToolDef {
+                name: fields.name,
+                description: fields.description,
+                input_schema: fields.parameters,
+            }
+        });
 
         let request = ChatRequest {
             model: model.to_string(),
@@ -961,7 +781,7 @@ mod tests {
         assert_eq!(mapped.role, "user");
 
         let json = serde_json::to_value(&mapped.content).unwrap();
-        let blocks = json.as_array().unwrap();
+        let blocks = json.as_array().expect("content should be array");
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0]["type"], "text");
         assert_eq!(blocks[1]["type"], "image");

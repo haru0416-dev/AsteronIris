@@ -1,5 +1,5 @@
 use crate::providers::{
-    ProviderMessage, ProviderResponse,
+    ProviderMessage, ProviderResponse, build_provider_client_with_timeout,
     fallback_tools::{augment_system_prompt_with_tools, build_fallback_response},
     traits::{Provider, messages_to_text},
 };
@@ -52,14 +52,7 @@ impl OllamaProvider {
                 .unwrap_or("http://localhost:11434")
                 .trim_end_matches('/')
                 .to_string(),
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(300)) // Ollama runs locally, may be slow
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .pool_max_idle_per_host(10)
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .tcp_keepalive(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: build_provider_client_with_timeout(300),
         }
     }
 

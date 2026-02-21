@@ -5,150 +5,30 @@
 
 use crate::providers::{
     ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
-    scrub_secret_patterns,
+    build_provider_client, scrub_secret_patterns,
+    sse::{SseBuffer, parse_data_lines},
     streaming::{ProviderChatRequest, ProviderStream},
+    tool_convert::{ToolFields, map_tools_optional},
     traits::Provider,
 };
 use async_trait::async_trait;
 use directories::UserDirs;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use super::gemini_types::{
+    Candidate, Content, GeminiFileData, GeminiFunctionCall, GeminiFunctionDeclaration,
+    GeminiFunctionResponse, GeminiInlineData, GeminiTool, GenerateContentRequest,
+    GenerateContentResponse, GenerationConfig, Part, ResponsePart,
+};
 
 /// Gemini provider supporting multiple authentication methods.
 pub struct GeminiProvider {
     api_key: Option<String>,
     client: Client,
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// API REQUEST/RESPONSE TYPES
-// ══════════════════════════════════════════════════════════════════════════════
-
-#[derive(Debug, Serialize)]
-struct GenerateContentRequest {
-    contents: Vec<Content>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system_instruction: Option<Content>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<GeminiTool>>,
-    #[serde(rename = "generationConfig")]
-    generation_config: GenerationConfig,
-}
-
-#[derive(Debug, Serialize)]
-struct Content {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<String>,
-    parts: Vec<Part>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Part {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    text: Option<String>,
-    #[serde(rename = "functionCall", skip_serializing_if = "Option::is_none")]
-    function_call: Option<GeminiFunctionCall>,
-    #[serde(rename = "functionResponse", skip_serializing_if = "Option::is_none")]
-    function_response: Option<GeminiFunctionResponse>,
-    #[serde(rename = "inlineData", skip_serializing_if = "Option::is_none")]
-    inline_data: Option<GeminiInlineData>,
-    #[serde(rename = "fileData", skip_serializing_if = "Option::is_none")]
-    file_data: Option<GeminiFileData>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiInlineData {
-    #[serde(rename = "mimeType")]
-    mime_type: String,
-    data: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiFileData {
-    #[serde(rename = "mimeType")]
-    mime_type: String,
-    #[serde(rename = "fileUri")]
-    file_uri: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GeminiFunctionCall {
-    name: String,
-    #[serde(default)]
-    args: Value,
-    #[serde(default)]
-    id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GeminiFunctionResponse {
-    name: String,
-    response: Value,
-}
-
-#[derive(Debug, Serialize)]
-struct GeminiTool {
-    #[serde(rename = "function_declarations")]
-    function_declarations: Vec<GeminiFunctionDeclaration>,
-}
-
-#[derive(Debug, Serialize)]
-struct GeminiFunctionDeclaration {
-    name: String,
-    description: String,
-    parameters: Value,
-}
-
-#[derive(Debug, Serialize)]
-struct GenerationConfig {
-    temperature: f64,
-    #[serde(rename = "maxOutputTokens")]
-    max_output_tokens: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct GenerateContentResponse {
-    candidates: Option<Vec<Candidate>>,
-    error: Option<ApiError>,
-    #[serde(rename = "usageMetadata")]
-    usage_metadata: Option<UsageMetadata>,
-    #[serde(rename = "modelVersion")]
-    model_version: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct UsageMetadata {
-    #[serde(rename = "promptTokenCount")]
-    prompt_token_count: u64,
-    #[serde(rename = "candidatesTokenCount")]
-    candidates_token_count: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct Candidate {
-    content: CandidateContent,
-    #[serde(rename = "finishReason")]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CandidateContent {
-    parts: Vec<ResponsePart>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponsePart {
-    text: Option<String>,
-    #[serde(rename = "functionCall")]
-    function_call: Option<GeminiFunctionCall>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiError {
-    message: String,
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -159,7 +39,7 @@ struct ApiError {
 #[derive(Debug, Deserialize)]
 struct GeminiCliOAuthCreds {
     access_token: Option<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for future Gemini OAuth token refresh support
     refresh_token: Option<String>,
     expiry: Option<String>,
 }
@@ -181,14 +61,7 @@ impl GeminiProvider {
 
         Self {
             api_key: resolved_key,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .pool_max_idle_per_host(10)
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .tcp_keepalive(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: build_provider_client(),
         }
     }
 
@@ -308,20 +181,23 @@ impl GeminiProvider {
     }
 
     fn build_gemini_tools(tools: &[crate::tools::traits::ToolSpec]) -> Option<Vec<GeminiTool>> {
-        if tools.is_empty() {
-            None
-        } else {
-            Some(vec![GeminiTool {
-                function_declarations: tools
-                    .iter()
-                    .map(|tool| GeminiFunctionDeclaration {
-                        name: tool.name.clone(),
-                        description: scrub_secret_patterns(&tool.description).into_owned(),
-                        parameters: tool.parameters.clone(),
-                    })
-                    .collect(),
-            }])
-        }
+        map_tools_optional(tools, |tool| {
+            let fields = ToolFields::from_tool_with_description(
+                tool,
+                scrub_secret_patterns(&tool.description).into_owned(),
+            );
+
+            GeminiFunctionDeclaration {
+                name: fields.name,
+                description: fields.description,
+                parameters: fields.parameters,
+            }
+        })
+        .map(|function_declarations| {
+            vec![GeminiTool {
+                function_declarations,
+            }]
+        })
     }
 
     fn map_provider_message(
@@ -549,10 +425,7 @@ impl GeminiProvider {
     }
 
     fn parse_sse_data_lines(chunk: &str) -> Vec<&str> {
-        chunk
-            .lines()
-            .filter_map(|line| line.strip_prefix("data: "))
-            .collect()
+        parse_data_lines(chunk)
     }
 
     async fn chat_with_tools_stream_impl(
@@ -573,20 +446,15 @@ impl GeminiProvider {
         let mut byte_stream = response.bytes_stream();
 
         let stream = async_stream::try_stream! {
-            let mut buffer = String::new();
+            let mut sse_buffer = SseBuffer::new();
             let mut sent_start = false;
             let mut tool_call_index = 1usize;
 
             while let Some(chunk_result) = byte_stream.next().await {
                 let chunk = chunk_result?;
-                let text = String::from_utf8_lossy(&chunk);
-                buffer.push_str(&text);
+                sse_buffer.push_chunk(&chunk);
 
-                while let Some(boundary) = buffer.find("\n\n") {
-                    let remaining = buffer.split_off(boundary + 2);
-                    let event_block = std::mem::take(&mut buffer);
-                    buffer = remaining;
-
+                while let Some(event_block) = sse_buffer.next_event_block() {
                     for data in Self::parse_sse_data_lines(&event_block) {
                         let Ok(gen_response) = serde_json::from_str::<GenerateContentResponse>(data) else {
                             continue;
@@ -838,6 +706,7 @@ impl Provider for GeminiProvider {
 mod tests {
     use super::*;
     use crate::providers::Provider;
+    use crate::providers::gemini_types::CandidateContent;
     use crate::tools::traits::ToolSpec;
 
     #[test]
