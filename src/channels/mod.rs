@@ -1,3 +1,4 @@
+mod attachments;
 pub mod chunker;
 pub mod cli;
 pub mod discord;
@@ -72,6 +73,7 @@ pub mod imessage;
 pub mod ingress_policy;
 pub mod irc;
 pub mod matrix;
+mod message_handler;
 pub mod policy;
 pub mod prompt_builder;
 pub mod runtime;

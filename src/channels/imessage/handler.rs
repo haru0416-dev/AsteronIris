@@ -189,7 +189,8 @@ pub(super) async fn fetch_new_messages(
                     ))
                 })
                 .context("query iMessage new messages")?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            rows.collect::<Result<Vec<_>, _>>()
+                .context("collect iMessage query rows")
         })
         .await
         .context("join iMessage new messages task")??;
