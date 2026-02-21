@@ -5,8 +5,7 @@ use ratatui::widgets::Widget;
 
 use super::super::state::WizardState;
 use super::super::theme;
-use super::super::widgets::select_list::SelectListWidget;
-use super::super::widgets::toggle::ToggleWidget;
+use super::super::widgets::{SelectListWidget, ToggleWidget};
 
 pub struct MemoryStep<'a> {
     pub state: &'a WizardState,

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tempfile::TempDir;
 
-use asteroniris::memory::embeddings::EmbeddingProvider;
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::embeddings::EmbeddingProvider;
+use asteroniris::intelligence::memory::{
     CapabilitySupport, ForgetMode, LanceDbMemory, MarkdownMemory, Memory, MemoryCapabilityMatrix,
     MemoryCategory, MemoryEventInput, MemoryEventType, MemoryRecallItem, MemorySource,
     PrivacyLevel, RecallQuery, SqliteMemory, backend_capability_matrix,

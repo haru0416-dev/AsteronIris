@@ -1,6 +1,6 @@
 use super::memory_harness::append_test_event;
 use super::memory_harness::sqlite_fixture;
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::{
     Memory, MemoryCategory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource,
     PrivacyLevel,
 };

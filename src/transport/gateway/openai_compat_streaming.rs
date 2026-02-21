@@ -1,4 +1,6 @@
-use super::types::{ChatCompletionChunk, ChunkChoice, ChunkDelta};
+use crate::transport::gateway::openai_compat_types::{
+    ChatCompletionChunk, ChunkChoice, ChunkDelta,
+};
 use axum::body::Body;
 use axum::http::{Response, StatusCode, header};
 

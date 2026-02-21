@@ -169,7 +169,7 @@ fn sanitize_path_component(name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skillforge::scout::{ScoutResult, ScoutSource};
+    use crate::plugins::skillforge::scout::{ScoutResult, ScoutSource};
     use std::fs;
 
     fn sample_candidate() -> ScoutResult {

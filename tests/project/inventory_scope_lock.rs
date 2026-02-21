@@ -1,16 +1,16 @@
 use asteroniris::config::Config;
-use asteroniris::integrations::inventory::{
+use asteroniris::plugins::integrations::inventory::{
     IntegrationCapabilityDrift, IntegrationCapabilityMatrix, IntegrationCapabilityMatrixEntry,
     UnimplementedInventoryEntry, build_scope_lock_inventory, load_scope_lock_baseline_inventory,
     normalize_unimplemented_inventory_from_sources, parse_registry_coming_soon_count,
     parse_skillforge_unimplemented_sources, validate_integration_status_against_matrix,
     validate_inventory_against_sources,
 };
-use asteroniris::integrations::registry;
+use asteroniris::plugins::integrations::registry;
 
 fn baseline_matrix() -> Vec<IntegrationCapabilityMatrixEntry> {
     let matrix: IntegrationCapabilityMatrix = serde_json::from_str(include_str!(
-        "../../src/integrations/integration_capability_matrix.json"
+        "../../src/plugins/integrations/integration_capability_matrix.json"
     ))
     .expect("integration capability matrix should parse");
     matrix.entries
@@ -21,8 +21,8 @@ fn inventory_scope_lock() {
     let inventory = build_scope_lock_inventory().expect("scope-lock inventory should build");
     let artifact = inventory.to_json_pretty();
     let baseline = load_scope_lock_baseline_inventory().expect("baseline artifact should parse");
-    let registry_source = include_str!("../../src/integrations/registry.rs");
-    let skillforge_source = include_str!("../../src/skillforge/mod.rs");
+    let registry_source = include_str!("../../src/plugins/integrations/registry.rs");
+    let skillforge_source = include_str!("../../src/plugins/skillforge/mod.rs");
 
     let expected_coming_soon_count = parse_registry_coming_soon_count(registry_source)
         .expect("registry coming-soon parser should work");
@@ -48,7 +48,7 @@ fn inventory_detects_registry_drift() {
     let inventory = build_scope_lock_inventory().expect("baseline inventory should build");
     let expected_coming_soon_count = inventory.coming_soon_count;
 
-    let drifted_registry = include_str!("../../src/integrations/registry.rs").replacen(
+    let drifted_registry = include_str!("../../src/plugins/integrations/registry.rs").replacen(
         "IntegrationStatus::ComingSoon",
         "IntegrationStatus::Available",
         1,
@@ -59,7 +59,7 @@ fn inventory_detects_registry_drift() {
     let drift_error = validate_inventory_against_sources(
         &inventory,
         &drifted_registry,
-        include_str!("../../src/skillforge/mod.rs"),
+        include_str!("../../src/plugins/skillforge/mod.rs"),
     )
     .expect_err("drifted registry fixture should fail scope lock");
 
@@ -76,7 +76,7 @@ fn inventory_detects_registry_drift() {
 
 #[test]
 fn inventory_ignores_test_only_registry_coming_soon_tokens() {
-    let registry_source = include_str!("../../src/integrations/registry.rs");
+    let registry_source = include_str!("../../src/plugins/integrations/registry.rs");
     let baseline_count =
         parse_registry_coming_soon_count(registry_source).expect("baseline registry should parse");
 
@@ -325,9 +325,9 @@ pub fn build() -> () {
 fn integrations_status_matches_capability_matrix() {
     let matrix_entries = baseline_matrix();
     let registry_entries = registry::all_integrations();
-    let matrix = asteroniris::integrations::inventory::IntegrationCapabilityMatrix {
+    let matrix = asteroniris::plugins::integrations::inventory::IntegrationCapabilityMatrix {
         schema_version: "1".to_string(),
-        source_file: "src/integrations/registry.rs".to_string(),
+        source_file: "src/plugins/integrations/registry.rs".to_string(),
         entries: matrix_entries,
     };
 
@@ -349,9 +349,9 @@ fn integrations_status_matches_capability_matrix() {
 
 #[test]
 fn integrations_rejects_unbacked_active_status() {
-    let mut matrix = asteroniris::integrations::inventory::IntegrationCapabilityMatrix {
+    let mut matrix = asteroniris::plugins::integrations::inventory::IntegrationCapabilityMatrix {
         schema_version: "1".to_string(),
-        source_file: "src/integrations/registry.rs".to_string(),
+        source_file: "src/plugins/integrations/registry.rs".to_string(),
         entries: baseline_matrix()
             .into_iter()
             .filter(|entry| entry.name != "Shell")
@@ -380,8 +380,9 @@ fn integrations_rejects_unbacked_active_status() {
 
 #[test]
 fn load_capability_matrix_and_validate() {
-    let matrix = asteroniris::integrations::inventory::load_integration_capability_matrix()
-        .expect("matrix should parse through loader helper");
+    let matrix =
+        asteroniris::plugins::integrations::inventory::load_integration_capability_matrix()
+            .expect("matrix should parse through loader helper");
     let registry_entries = registry::all_integrations();
     let result =
         validate_integration_status_against_matrix(&matrix, &registry_entries, &Config::default());

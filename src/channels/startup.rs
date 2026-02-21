@@ -1,10 +1,10 @@
-use crate::auth::AuthBroker;
 use crate::config::Config;
 use crate::intelligence::memory::{self, Memory};
 use crate::intelligence::providers::{self, Provider};
 use crate::intelligence::tools;
 use crate::intelligence::tools::registry::ToolRegistry;
 use crate::media::MediaStore;
+use crate::security::auth::AuthBroker;
 use crate::security::policy::EntityRateLimiter;
 use crate::security::{PermissionStore, SecurityPolicy};
 use anyhow::Result;
@@ -24,7 +24,7 @@ fn build_channel_system_prompt(
     config: &Config,
     workspace: &std::path::Path,
     model: &str,
-    skills: &[crate::skills::Skill],
+    skills: &[crate::plugins::skills::Skill],
 ) -> String {
     let tool_descs = crate::intelligence::tools::tool_descriptions(
         config.browser.enabled,
@@ -168,7 +168,7 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
     }
 
     let workspace = config.workspace_dir.clone();
-    let skills = crate::skills::load_skills(&workspace);
+    let skills = crate::plugins::skills::load_skills(&workspace);
     let system_prompt = build_channel_system_prompt(config, &workspace, &model, &skills);
 
     if !skills.is_empty() {

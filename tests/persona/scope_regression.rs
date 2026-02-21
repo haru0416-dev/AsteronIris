@@ -1,5 +1,5 @@
 use asteroniris::channels::build_system_prompt;
-use asteroniris::gateway::{
+use asteroniris::transport::gateway::{
     MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS, WebhookBody, verify_whatsapp_signature,
 };
 use tempfile::TempDir;

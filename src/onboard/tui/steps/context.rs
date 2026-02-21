@@ -5,8 +5,7 @@ use ratatui::widgets::Widget;
 
 use super::super::state::WizardState;
 use super::super::theme;
-use super::super::widgets::select_list::SelectListWidget;
-use super::super::widgets::text_input::TextInputWidget;
+use super::super::widgets::{SelectListWidget, TextInputWidget};
 
 pub struct ContextStep<'a> {
     pub state: &'a WizardState,

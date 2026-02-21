@@ -5,13 +5,11 @@ use ratatui::widgets::Widget;
 
 use super::super::state::{ChannelSubStep, WizardState};
 use super::super::theme;
-use super::super::widgets::select_list::SelectListWidget;
-use super::super::widgets::spinner::SpinnerWidget;
-use super::super::widgets::text_input::TextInputWidget;
+use super::super::widgets::{SelectListWidget, Spinner, SpinnerWidget, TextInputWidget};
 
 pub struct ChannelsStep<'a> {
     pub state: &'a WizardState,
-    pub spinner: &'a super::super::widgets::spinner::Spinner,
+    pub spinner: &'a Spinner,
 }
 
 impl Widget for ChannelsStep<'_> {

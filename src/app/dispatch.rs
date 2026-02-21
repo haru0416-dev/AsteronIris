@@ -95,7 +95,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             } else {
                 info!("🚀 Starting AsteronIris Gateway on {host}:{port}");
             }
-            asteroniris::gateway::run_gateway(&host, port, Arc::clone(&config)).await
+            asteroniris::transport::gateway::run_gateway(&host, port, Arc::clone(&config)).await
         }
 
         Commands::Daemon { port, host } => {
@@ -134,12 +134,14 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
 
         Commands::Integrations {
             integration_command,
-        } => asteroniris::integrations::handle_command(integration_command, &config),
+        } => asteroniris::plugins::integrations::handle_command(integration_command, &config),
 
-        Commands::Auth { auth_command } => asteroniris::auth::handle_command(auth_command, &config),
+        Commands::Auth { auth_command } => {
+            asteroniris::security::auth::handle_command(auth_command, &config)
+        }
 
         Commands::Skills { skill_command } => {
-            asteroniris::skills::handle_command(skill_command, &config.workspace_dir)
+            asteroniris::plugins::skills::handle_command(skill_command, &config.workspace_dir)
         }
     }
 }

@@ -1,9 +1,9 @@
 use super::memory_harness;
 
 use super::memory_harness::{append_test_event, memory_count};
-use asteroniris::memory::ForgetMode;
-use asteroniris::memory::traits::MemoryLayer;
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::ForgetMode;
+use asteroniris::intelligence::memory::traits::MemoryLayer;
+use asteroniris::intelligence::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
 
@@ -96,7 +96,7 @@ async fn markdown_tagged_memory_roundtrip() {
     assert_eq!(resolved.value, "Prefer semantic, layer-aware memory");
 
     let recalled = mem
-        .recall_scoped(asteroniris::memory::RecallQuery::new(
+        .recall_scoped(asteroniris::intelligence::memory::RecallQuery::new(
             "entity-10",
             "semantic",
             5,
@@ -115,7 +115,7 @@ async fn markdown_hard_delete_reports_degraded() {
         "entity-10",
         "sensitive_slot",
         "API key: sk-abc-123",
-        asteroniris::memory::MemoryCategory::Core,
+        asteroniris::intelligence::memory::MemoryCategory::Core,
     )
     .await;
 

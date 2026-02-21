@@ -1,10 +1,10 @@
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
-use asteroniris::security::SecurityPolicy;
-use asteroniris::tools::{
+use asteroniris::intelligence::tools::{
     ExecutionContext, MemoryForgetTool, MemoryRecallTool, MemoryStoreTool, Tool,
 };
+use asteroniris::security::SecurityPolicy;
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;

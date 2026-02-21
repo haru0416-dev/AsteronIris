@@ -4,6 +4,7 @@ pub mod approval_cli;
 #[cfg(feature = "discord")]
 pub mod approval_discord;
 pub mod approval_telegram;
+pub mod auth;
 pub mod external_content;
 pub mod pairing;
 pub mod permissions;

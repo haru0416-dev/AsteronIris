@@ -1,5 +1,5 @@
 use asteroniris::config::Config;
-use asteroniris::cron::{CronJob, CronJobKind, CronJobOrigin};
+use asteroniris::platform::cron::{CronJob, CronJobKind, CronJobOrigin};
 use asteroniris::security::SecurityPolicy;
 use chrono::Utc;
 use tempfile::TempDir;
@@ -38,7 +38,7 @@ async fn scheduler_routes_user_vs_agent() {
         CronJobOrigin::User,
     );
     let (user_success, user_output) =
-        asteroniris::cron::scheduler::execute_job_once_for_integration(
+        asteroniris::platform::cron::scheduler::execute_job_once_for_integration(
             &config, &security, &user_job,
         )
         .await;
@@ -55,7 +55,7 @@ async fn scheduler_routes_user_vs_agent() {
         CronJobOrigin::Agent,
     );
     let (agent_success, agent_output) =
-        asteroniris::cron::scheduler::execute_job_once_for_integration(
+        asteroniris::platform::cron::scheduler::execute_job_once_for_integration(
             &config, &security, &agent_job,
         )
         .await;
@@ -83,7 +83,7 @@ async fn autonomy_policy_applies_all_routes() {
 
     let user_first = build_job("echo first", CronJobKind::User, CronJobOrigin::User);
     let (user_first_success, user_first_output) =
-        asteroniris::cron::scheduler::execute_job_once_for_integration(
+        asteroniris::platform::cron::scheduler::execute_job_once_for_integration(
             &config,
             &security,
             &user_first,
@@ -94,7 +94,7 @@ async fn autonomy_policy_applies_all_routes() {
 
     let agent_second = build_job("echo second", CronJobKind::Agent, CronJobOrigin::Agent);
     let (agent_second_success, agent_second_output) =
-        asteroniris::cron::scheduler::execute_job_once_for_integration(
+        asteroniris::platform::cron::scheduler::execute_job_once_for_integration(
             &config,
             &security,
             &agent_second,
@@ -124,7 +124,7 @@ async fn autonomy_policy_blocks_bypass() {
         CronJobOrigin::Agent,
     );
     let (agent_disallowed_success, agent_disallowed_output) =
-        asteroniris::cron::scheduler::execute_job_once_for_integration(
+        asteroniris::platform::cron::scheduler::execute_job_once_for_integration(
             &config,
             &security,
             &agent_disallowed,
@@ -138,7 +138,7 @@ async fn autonomy_policy_blocks_bypass() {
 
     let user_forbidden_path = build_job("cat /etc/passwd", CronJobKind::User, CronJobOrigin::User);
     let (user_forbidden_path_success, user_forbidden_path_output) =
-        asteroniris::cron::scheduler::execute_job_once_for_integration(
+        asteroniris::platform::cron::scheduler::execute_job_once_for_integration(
             &config,
             &security,
             &user_forbidden_path,
@@ -152,7 +152,7 @@ async fn autonomy_policy_blocks_bypass() {
     let agent_forbidden_path =
         build_job("cat /etc/passwd", CronJobKind::Agent, CronJobOrigin::Agent);
     let (agent_forbidden_path_success, agent_forbidden_path_output) =
-        asteroniris::cron::scheduler::execute_job_once_for_integration(
+        asteroniris::platform::cron::scheduler::execute_job_once_for_integration(
             &config,
             &security,
             &agent_forbidden_path,

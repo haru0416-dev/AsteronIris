@@ -1,7 +1,7 @@
 use crate::intelligence::tools::middleware::ExecutionContext;
 use crate::intelligence::tools::{Tool, ToolResult};
-use crate::mcp::client::connection::McpConnection;
-use crate::mcp::content::{ToolContent, render_content_to_text};
+use crate::plugins::mcp::client_connection::McpConnection;
+use crate::plugins::mcp::content::{ToolContent, render_content_to_text};
 use async_trait::async_trait;
 use std::sync::Arc;
 

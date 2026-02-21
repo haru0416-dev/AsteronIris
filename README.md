@@ -195,16 +195,17 @@ and [`AGENTS.md`](AGENTS.md) for architecture and code-style reference.
 
 ```
 src/
-├── agent/        # Conversation loop, tool execution, reflection
-├── channels/     # Channel integrations (CLI, Telegram, Discord, …)
+├── core/         # AI core entrypoints (agent/memory/providers/tools/planner/sessions)
+├── transport/    # External I/O and HTTP ingress (channels + gateway)
+├── runtime/      # Runtime orchestration, tunnel, diagnostics, observability, usage
+├── security/     # Policy, auth, pairing, encrypted vault, writeback guard
+├── plugins/      # Skills, skillforge, MCP, integrations
 ├── config/       # TOML schema + env-var overrides
-├── daemon/       # Supervisor: gateway + channels + heartbeat + cron
-├── gateway/      # Axum HTTP server (pairing, webhooks, autosave)
-├── memory/       # Memory backends (SQLite, LanceDB, Markdown)
-├── providers/    # LLM provider factory + secret scrubbing
-├── security/     # Policy, pairing auth, encrypted vault, writeback guard
-├── skillforge/   # Skill discovery, evaluation, integration
-└── tools/        # Tool registry (shell, file, memory, browser, composio)
+├── onboard/      # Onboarding wizard and setup flow
+├── commands/     # CLI command surface
+├── media/        # Media detection/processing/storage
+├── ui/           # Shared terminal UI styles
+└── utils/        # Shared utilities (links/text helpers)
 ```
 
 ---

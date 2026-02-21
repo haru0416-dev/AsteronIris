@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use asteroniris::agent::loop_::run_main_session_turn_for_integration_with_policy;
 use asteroniris::channels::build_system_prompt;
 use asteroniris::config::Config;
-use asteroniris::memory::{Memory, SqliteMemory};
-use asteroniris::providers::Provider;
+use asteroniris::intelligence::agent::loop_::run_main_session_turn_for_integration_with_policy;
+use asteroniris::intelligence::memory::{Memory, SqliteMemory};
+use asteroniris::intelligence::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
 use async_trait::async_trait;

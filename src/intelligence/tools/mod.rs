@@ -39,6 +39,7 @@ pub use traits::{
 };
 
 #[cfg(any(feature = "mcp", test))]
+#[allow(unused_imports)]
 pub(crate) use factory::append_dynamic_tool_descriptions;
 
 #[cfg(test)]

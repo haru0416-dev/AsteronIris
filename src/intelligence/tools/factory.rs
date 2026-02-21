@@ -95,7 +95,7 @@ pub(crate) fn append_mcp_tool_descriptions(
     mcp_config: Option<&McpConfig>,
 ) {
     if let Some(config) = mcp_config {
-        let mcp_tools = crate::mcp::client::create_mcp_tools(config);
+        let mcp_tools = crate::plugins::mcp::client::create_mcp_tools(config);
         append_dynamic_tool_descriptions(descriptions, &mcp_tools);
     }
 }
@@ -173,7 +173,7 @@ pub fn all_tools(
 #[cfg(feature = "mcp")]
 pub(crate) fn append_mcp_tools(tools: &mut Vec<Box<dyn Tool>>, mcp_config: Option<&McpConfig>) {
     if let Some(config) = mcp_config {
-        tools.extend(crate::mcp::client::create_mcp_tools(config));
+        tools.extend(crate::plugins::mcp::client::create_mcp_tools(config));
     }
 }
 

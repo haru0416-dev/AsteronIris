@@ -26,7 +26,6 @@ use session::execute_main_session_turn_with_accounting;
 use types::PERSONA_PER_TURN_CALL_BUDGET;
 
 // ── Crate imports for run() ──────────────────────────────────────
-use crate::auth::AuthBroker;
 use crate::config::Config;
 use crate::intelligence::memory::{self, Memory};
 use crate::intelligence::providers::{self, Provider};
@@ -34,6 +33,7 @@ use crate::intelligence::tools;
 use crate::intelligence::tools::ToolRegistry;
 use crate::observability::{self, Observer, ObserverEvent};
 use crate::runtime;
+use crate::security::auth::AuthBroker;
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -178,7 +178,7 @@ fn resolve_providers(
 }
 
 fn build_agent_system_prompt(config: &Config, model_name: &str) -> String {
-    let skills = crate::skills::load_skills(&config.workspace_dir);
+    let skills = crate::plugins::skills::load_skills(&config.workspace_dir);
     let tool_descs = crate::intelligence::tools::tool_descriptions(
         config.browser.enabled,
         config.composio.enabled,

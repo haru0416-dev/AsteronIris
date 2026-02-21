@@ -5,8 +5,7 @@ use ratatui::widgets::Widget;
 
 use super::super::state::WizardState;
 use super::super::theme;
-use super::super::widgets::text_input::TextInputWidget;
-use super::super::widgets::toggle::ToggleWidget;
+use super::super::widgets::{TextInputWidget, ToggleWidget};
 
 pub struct WorkspaceStep<'a> {
     pub state: &'a WizardState,

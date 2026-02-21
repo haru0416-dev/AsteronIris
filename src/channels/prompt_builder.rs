@@ -18,7 +18,7 @@ pub fn build_system_prompt(
     workspace_dir: &std::path::Path,
     model_name: &str,
     tools: &[(&str, &str)],
-    skills: &[crate::skills::Skill],
+    skills: &[crate::plugins::skills::Skill],
 ) -> String {
     build_system_prompt_with_options(
         workspace_dir,
@@ -38,7 +38,7 @@ pub fn build_system_prompt_with_options(
     workspace_dir: &std::path::Path,
     model_name: &str,
     tools: &[(&str, &str)],
-    skills: &[crate::skills::Skill],
+    skills: &[crate::plugins::skills::Skill],
     options: &SystemPromptOptions,
 ) -> String {
     use std::fmt::Write;
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn prompt_skills_compact_list() {
         let ws = make_workspace();
-        let skills = vec![crate::skills::Skill {
+        let skills = vec![crate::plugins::skills::Skill {
             name: "code-review".into(),
             description: "Review code for bugs".into(),
             version: "1.0.0".into(),

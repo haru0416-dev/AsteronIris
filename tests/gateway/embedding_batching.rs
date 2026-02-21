@@ -2,7 +2,7 @@ use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use asteroniris::memory::embeddings::{EmbeddingProvider, OpenAiEmbedding};
+use asteroniris::intelligence::memory::embeddings::{EmbeddingProvider, OpenAiEmbedding};
 
 #[tokio::test]
 async fn openai_embedder_batches_into_single_http_request() {

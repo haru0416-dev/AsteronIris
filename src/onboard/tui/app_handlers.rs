@@ -2,7 +2,7 @@ use crossterm::event::KeyCode;
 
 use crate::onboard::tui::state::{ChannelSubStep, ProviderSubStep, WizardState, WizardStep};
 
-use super::data::{
+use super::app_data::{
     model_id_for_selection, model_list_for_provider, provider_id_for_selection,
     provider_list_for_tier,
 };
@@ -414,8 +414,7 @@ fn advance_channel_sub_step(state: &mut WizardState) {
                 return;
             }
             state.channel_sub_step = ChannelSubStep::IrcPort;
-            state.channel_text_input =
-                crate::onboard::tui::widgets::text_input::TextInput::new("6697");
+            state.channel_text_input = crate::onboard::tui::widgets::TextInput::new("6697");
         }
         ChannelSubStep::IrcPort => {
             state.channel_sub_step = ChannelSubStep::IrcNick;

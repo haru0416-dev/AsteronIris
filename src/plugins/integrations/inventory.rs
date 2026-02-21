@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::config::Config;
-use crate::integrations::IntegrationEntry;
+use crate::plugins::integrations::IntegrationEntry;
 
 const REGISTRY_SOURCE: &str = include_str!("registry.rs");
 const SKILLFORGE_SOURCE: &str = include_str!("../skillforge/mod.rs");
@@ -110,7 +110,7 @@ pub fn validate_integration_status_against_matrix(
         let matrix_implemented = by_name.get(entry.name).copied().unwrap_or(false);
 
         match (status, matrix_implemented) {
-            (crate::integrations::IntegrationStatus::ComingSoon, true) => {
+            (crate::plugins::integrations::IntegrationStatus::ComingSoon, true) => {
                 drifts.push(IntegrationCapabilityDrift {
                     name: entry.name.to_string(),
                     kind: "unbacked_status".to_string(),
@@ -119,8 +119,8 @@ pub fn validate_integration_status_against_matrix(
                 });
             }
             (
-                crate::integrations::IntegrationStatus::Active
-                | crate::integrations::IntegrationStatus::Available,
+                crate::plugins::integrations::IntegrationStatus::Active
+                | crate::plugins::integrations::IntegrationStatus::Available,
                 false,
             ) => {
                 drifts.push(IntegrationCapabilityDrift {
@@ -458,7 +458,7 @@ mod tests {
     use super::*;
 
     use crate::config::{ChannelsConfig, Config};
-    use crate::integrations::registry;
+    use crate::plugins::integrations::registry;
 
     #[test]
     fn parse_registry_coming_soon_count_matches_baseline() {

@@ -1,12 +1,12 @@
-use super::auth::validate_api_key;
-use super::streaming::build_sse_response;
-use super::types::{
-    ChatCompletion, ChatCompletionRequest, Choice, ChoiceMessage, CompletionUsage, RequestMessage,
-};
-use crate::gateway::AppState;
 use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
 use crate::intelligence::tools::middleware::ExecutionContext;
 use crate::security::policy::TenantPolicyContext;
+use crate::transport::gateway::AppState;
+use crate::transport::gateway::openai_compat_auth::validate_api_key;
+use crate::transport::gateway::openai_compat_streaming::build_sse_response;
+use crate::transport::gateway::openai_compat_types::{
+    ChatCompletion, ChatCompletionRequest, Choice, ChoiceMessage, CompletionUsage, RequestMessage,
+};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};
@@ -143,7 +143,7 @@ fn extract_messages(messages: &[RequestMessage]) -> (Option<String>, String) {
 #[cfg(test)]
 mod tests {
     use super::extract_messages;
-    use crate::gateway::openai_compat::types::RequestMessage;
+    use crate::transport::gateway::openai_compat_types::RequestMessage;
 
     #[test]
     fn extract_messages_with_system_and_user() {

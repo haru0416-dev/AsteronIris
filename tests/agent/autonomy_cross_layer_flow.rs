@@ -2,24 +2,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use asteroniris::agent::loop_::{
+use asteroniris::config::{Config, PersonaConfig};
+use asteroniris::intelligence::agent::loop_::{
     run_main_session_turn_for_integration, run_main_session_turn_for_integration_with_policy,
 };
-use asteroniris::config::{Config, PersonaConfig};
-use asteroniris::cron::{self, CronJobKind, CronJobOrigin};
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
+use asteroniris::intelligence::providers::Provider;
+use asteroniris::intelligence::tools::{ActionIntent, ActionOperator, NoopOperator};
 use asteroniris::observability::traits::{
     AutonomyLifecycleSignal, Observer, ObserverEvent, ObserverMetric,
 };
 use asteroniris::persona::state_header::StateHeaderV1;
 use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
-use asteroniris::providers::Provider;
+use asteroniris::platform::cron::{self, CronJobKind, CronJobOrigin};
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::external_content::{ExternalAction, prepare_external_content};
 use asteroniris::security::policy::TenantPolicyContext;
-use asteroniris::tools::{ActionIntent, ActionOperator, NoopOperator};
 use async_trait::async_trait;
 use tempfile::TempDir;
 
@@ -180,10 +180,11 @@ async fn autonomy_cycle_reflect_queue_verify_and_intent_seam_stays_bounded() {
         config.autonomy.verify_repair_max_attempts
     );
 
-    let (executed, output) = asteroniris::cron::scheduler::execute_job_once_for_integration(
-        &config, &security, &queued[0],
-    )
-    .await;
+    let (executed, output) =
+        asteroniris::platform::cron::scheduler::execute_job_once_for_integration(
+            &config, &security, &queued[0],
+        )
+        .await;
     assert!(!executed);
     assert_eq!(
         output,

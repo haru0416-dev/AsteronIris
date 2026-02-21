@@ -1,9 +1,9 @@
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
     SqliteMemory,
 };
+use asteroniris::intelligence::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
-use asteroniris::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 
 use rusqlite::Connection;
 use serde_json::json;

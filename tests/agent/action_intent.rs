@@ -1,5 +1,5 @@
+use asteroniris::intelligence::tools::{ActionIntent, ActionOperator, NoopOperator};
 use asteroniris::security::SecurityPolicy;
-use asteroniris::tools::{ActionIntent, ActionOperator, NoopOperator};
 use std::sync::Arc;
 use tempfile::TempDir;
 

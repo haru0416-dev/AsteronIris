@@ -182,14 +182,14 @@ fn create_provider_with_runtime_recovery(
     let recover = {
         let config = Arc::clone(&config);
         Arc::new(move |provider: &str| {
-            crate::auth::recover_oauth_profile_for_provider(&config, provider)
+            crate::security::auth::recover_oauth_profile_for_provider(&config, provider)
         })
     };
 
     let rebuild = {
         let config = Arc::clone(&config);
         Arc::new(move |provider: &str| {
-            let broker = crate::auth::AuthBroker::load_or_init(&config)?;
+            let broker = crate::security::auth::AuthBroker::load_or_init(&config)?;
             let refreshed_key = broker.resolve_provider_api_key(provider);
             Ok(
                 Arc::from(create_provider(provider, refreshed_key.as_deref())?)

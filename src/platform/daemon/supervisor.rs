@@ -61,7 +61,7 @@ pub(super) fn spawn_supervised_components(
         move || {
             let cfg = Arc::clone(&gateway_cfg);
             let host = host.clone();
-            async move { crate::gateway::run_gateway(&host, port, cfg).await }
+            async move { crate::transport::gateway::run_gateway(&host, port, cfg).await }
         },
     ));
 

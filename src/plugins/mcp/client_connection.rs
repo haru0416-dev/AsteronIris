@@ -1,5 +1,5 @@
-use crate::mcp::bridge::from_rmcp_contents;
-use crate::mcp::content::ToolContent;
+use crate::plugins::mcp::bridge::from_rmcp_contents;
+use crate::plugins::mcp::content::ToolContent;
 use anyhow::{Context, Result, anyhow};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};

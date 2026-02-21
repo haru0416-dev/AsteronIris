@@ -1,7 +1,7 @@
 use std::fs;
 
-use asteroniris::memory::traits::MemoryLayer;
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::traits::MemoryLayer;
+use asteroniris::intelligence::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
     SqliteMemory,
 };

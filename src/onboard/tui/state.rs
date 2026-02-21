@@ -1,8 +1,6 @@
 use crate::config::{ChannelsConfig, ComposioConfig, MemoryConfig, SecretsConfig, TunnelConfig};
 
-use super::widgets::select_list::SelectList;
-use super::widgets::text_input::TextInput;
-use super::widgets::toggle::Toggle;
+use super::widgets::{SelectList, TextInput, Toggle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WizardStep {

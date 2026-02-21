@@ -200,7 +200,7 @@ impl Evaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skillforge::scout::{ScoutResult, ScoutSource};
+    use crate::plugins::skillforge::scout::{ScoutResult, ScoutSource};
 
     fn make_candidate(stars: u64, lang: Option<&str>, has_license: bool) -> ScoutResult {
         ScoutResult {

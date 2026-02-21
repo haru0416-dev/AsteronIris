@@ -13,7 +13,7 @@ use super::memory_harness::{
     markdown_memory_from_path, memory_count, recall_scoped_values, resolve_slot_value,
     sqlite_fixture, sqlite_memory_from_path,
 };
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::{
     CapabilitySupport, ForgetMode, MarkdownMemory, Memory, MemoryCategory, MemoryRecallItem,
     MemorySource, PrivacyLevel, SqliteMemory, capability_matrix_for_memory,
     ensure_forget_mode_supported,

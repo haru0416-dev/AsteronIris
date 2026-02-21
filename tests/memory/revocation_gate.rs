@@ -1,7 +1,7 @@
 use super::memory_harness;
 
-use asteroniris::agent::loop_::build_context_for_integration;
-use asteroniris::memory::{
+use asteroniris::intelligence::agent::loop_::build_context_for_integration;
+use asteroniris::intelligence::memory::{
     BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEvent, MemoryEventInput,
     MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
 };

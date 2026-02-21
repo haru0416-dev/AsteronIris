@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::{
     CapabilitySupport, ForgetMode, ForgetStatus, Memory, MemoryCategory,
     capability_matrix_for_memory, ensure_forget_mode_supported,
 };
@@ -89,7 +89,7 @@ fn ensure_explicit_contract(
     mode: ForgetMode,
     support: CapabilitySupport,
     supported_preflight: bool,
-    outcome: &asteroniris::memory::ForgetOutcome,
+    outcome: &asteroniris::intelligence::memory::ForgetOutcome,
 ) -> Result<&'static str> {
     let mode_name = mode_label(mode);
     match support {
@@ -369,7 +369,7 @@ async fn memory_backend_parity_matrix() {
 
 #[test]
 fn memory_backend_parity_detects_drift() {
-    let simulated = asteroniris::memory::ForgetOutcome {
+    let simulated = asteroniris::intelligence::memory::ForgetOutcome {
         entity_id: "drift".to_string(),
         slot_key: "drift.slot".to_string(),
         mode: ForgetMode::Soft,

@@ -5,13 +5,13 @@ use super::openai_compat;
 use super::websocket::ws_handler;
 use super::{AppState, MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS};
 
-use crate::auth::AuthBroker;
 use crate::channels::WhatsAppChannel;
 use crate::config::Config;
 use crate::intelligence::memory::{self, Memory};
 use crate::intelligence::providers::{self, Provider};
 use crate::intelligence::tools;
 use crate::intelligence::tools::ToolRegistry;
+use crate::security::auth::AuthBroker;
 use crate::security::pairing::{PairingGuard, is_public_bind};
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
 use anyhow::{Context, Result};
@@ -201,8 +201,8 @@ fn resolve_whatsapp_app_secret(config: &Config) -> Option<Arc<str>> {
 }
 
 async fn start_tunnel(config: &Config, host: &str, port: u16) -> Result<Option<String>> {
-    let tunnel =
-        crate::tunnel::create_tunnel(&config.tunnel).context("create tunnel for gateway")?;
+    let tunnel = crate::runtime::tunnel::create_tunnel(&config.tunnel)
+        .context("create tunnel for gateway")?;
 
     let Some(ref tun) = tunnel else {
         return Ok(None);

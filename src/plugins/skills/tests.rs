@@ -1,7 +1,7 @@
 #[cfg(test)]
 #[allow(clippy::similar_names)]
 mod tests {
-    use crate::skills::{
+    use crate::plugins::skills::{
         Skill, SkillTool, init_skills_dir, load_skills, skills_dir, skills_to_prompt,
     };
     use std::collections::HashMap;

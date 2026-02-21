@@ -1,4 +1,4 @@
-use asteroniris::memory::{
+use asteroniris::intelligence::memory::{
     ForgetArtifact, ForgetArtifactRequirement, ForgetMode, ForgetStatus, Memory,
 };
 use rusqlite::Connection;
@@ -6,9 +6,9 @@ use rusqlite::Connection;
 use super::memory_harness;
 
 fn check_for_artifact(
-    outcome: &asteroniris::memory::ForgetOutcome,
+    outcome: &asteroniris::intelligence::memory::ForgetOutcome,
     artifact: ForgetArtifact,
-) -> &asteroniris::memory::ForgetArtifactCheck {
+) -> &asteroniris::intelligence::memory::ForgetArtifactCheck {
     outcome
         .artifact_checks
         .iter()
@@ -25,7 +25,7 @@ async fn memory_delete_contract_artifact_matrix() {
         "entity-delete",
         "slot.matrix",
         "highly sensitive value",
-        asteroniris::memory::MemoryCategory::Core,
+        asteroniris::intelligence::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -58,7 +58,7 @@ async fn memory_delete_contract_artifact_matrix() {
         "entity-delete",
         "slot.matrix",
         "highly sensitive value",
-        asteroniris::memory::MemoryCategory::Core,
+        asteroniris::intelligence::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -85,7 +85,7 @@ async fn memory_delete_contract_artifact_matrix() {
         "entity-delete",
         "slot.matrix",
         "highly sensitive value",
-        asteroniris::memory::MemoryCategory::Core,
+        asteroniris::intelligence::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -114,7 +114,7 @@ async fn memory_delete_contract_degraded_backend() {
         "entity-degraded",
         "slot.degraded",
         "value",
-        asteroniris::memory::MemoryCategory::Core,
+        asteroniris::intelligence::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -138,7 +138,7 @@ async fn memory_delete_contract_degraded_backend() {
         "entity-degraded",
         "slot.degraded",
         "value",
-        asteroniris::memory::MemoryCategory::Core,
+        asteroniris::intelligence::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -165,7 +165,7 @@ async fn memory_delete_contract_sqlite_hard_delete_dsar_authoritative() {
         "entity-dsar",
         "pii.email",
         "person@example.test",
-        asteroniris::memory::MemoryCategory::Core,
+        asteroniris::intelligence::memory::MemoryCategory::Core,
     )
     .await;
 

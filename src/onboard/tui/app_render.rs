@@ -6,10 +6,9 @@ use ratatui::widgets::Widget;
 use crate::onboard::tui::state::{WizardState, WizardStep};
 use crate::onboard::tui::steps;
 use crate::onboard::tui::theme;
-use crate::onboard::tui::widgets::progress::ProgressWidget;
-use crate::onboard::tui::widgets::spinner::Spinner;
+use crate::onboard::tui::widgets::{ProgressWidget, Spinner};
 
-use super::handlers::is_text_input_active;
+use super::app_handlers::is_text_input_active;
 
 pub(super) fn draw_ui(area: Rect, buf: &mut Buffer, state: &WizardState, spinner: &Spinner) {
     // Top bar: step title
@@ -69,28 +68,28 @@ pub(super) fn draw_ui(area: Rect, buf: &mut Buffer, state: &WizardState, spinner
 fn render_step(area: Rect, buf: &mut Buffer, state: &WizardState, spinner: &Spinner) {
     match state.current_step {
         WizardStep::Workspace => {
-            steps::workspace::WorkspaceStep { state }.render(area, buf);
+            steps::WorkspaceStep { state }.render(area, buf);
         }
         WizardStep::Provider => {
-            steps::provider::ProviderStep { state }.render(area, buf);
+            steps::ProviderStep { state }.render(area, buf);
         }
         WizardStep::Channels => {
-            steps::channels::ChannelsStep { state, spinner }.render(area, buf);
+            steps::ChannelsStep { state, spinner }.render(area, buf);
         }
         WizardStep::Tunnel => {
-            steps::tunnel::TunnelStep { state }.render(area, buf);
+            steps::TunnelStep { state }.render(area, buf);
         }
         WizardStep::ToolMode => {
-            steps::tool_mode::ToolModeStep { state }.render(area, buf);
+            steps::ToolModeStep { state }.render(area, buf);
         }
         WizardStep::Memory => {
-            steps::memory::MemoryStep { state }.render(area, buf);
+            steps::MemoryStep { state }.render(area, buf);
         }
         WizardStep::Context => {
-            steps::context::ContextStep { state }.render(area, buf);
+            steps::ContextStep { state }.render(area, buf);
         }
         WizardStep::Summary => {
-            steps::summary::SummaryStep { state }.render(area, buf);
+            steps::SummaryStep { state }.render(area, buf);
         }
     }
 }

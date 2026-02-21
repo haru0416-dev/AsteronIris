@@ -5,10 +5,13 @@
 
 pub mod bridge;
 pub mod client;
+pub(crate) mod client_connection;
+pub(crate) mod client_manager;
+pub(crate) mod client_proxy_tool;
 pub mod content;
 pub mod server;
 
 #[allow(unused_imports)]
-pub use client::manager::McpManager;
+pub use client::McpManager;
 #[allow(unused_imports)]
-pub use client::proxy_tool::McpToolProxy;
+pub use client::McpToolProxy;

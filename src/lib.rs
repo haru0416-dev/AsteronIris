@@ -15,30 +15,34 @@ extern crate rust_i18n;
 
 i18n!("locales", fallback = "en");
 
-pub mod auth;
 pub mod channels;
 pub mod commands;
 pub mod config;
+pub mod core;
+#[doc(hidden)]
 pub mod diagnostics;
+#[doc(hidden)]
 pub mod eval;
-pub mod gateway;
-pub mod integrations;
+#[doc(hidden)]
 pub mod intelligence;
-pub mod links;
-#[cfg(feature = "mcp")]
-pub mod mcp;
 pub mod media;
+#[doc(hidden)]
 pub mod observability;
 pub mod onboard;
+#[doc(hidden)]
 pub mod persona;
+#[doc(hidden)]
 pub mod platform;
+pub mod plugins;
 pub mod runtime;
 pub mod security;
-pub mod skills;
-pub mod tunnel;
+pub mod transport;
 pub mod ui;
+#[doc(hidden)]
 pub mod usage;
+#[doc(hidden)]
 pub mod util;
+pub mod utils;
 
 pub use commands::{
     AuthCommands, ChannelCommands, CronCommands, IntegrationCommands, ServiceCommands,

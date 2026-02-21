@@ -1,7 +1,3 @@
-mod data;
-mod handlers;
-mod render;
-
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -11,7 +7,10 @@ use std::io;
 use std::time::Duration;
 
 use super::state::WizardState;
-use super::widgets::spinner::Spinner;
+use super::widgets::Spinner;
+
+use super::app_handlers;
+use super::app_render;
 
 /// Run the full-screen TUI wizard. Returns the completed `WizardState` on success.
 pub fn run_app() -> Result<WizardState> {
@@ -42,7 +41,7 @@ fn main_loop(
     loop {
         terminal.draw(|frame| {
             let area = frame.area();
-            render::draw_ui(area, frame.buffer_mut(), state, spinner);
+            app_render::draw_ui(area, frame.buffer_mut(), state, spinner);
         })?;
 
         if state.should_quit {
@@ -63,12 +62,12 @@ fn main_loop(
                     state.should_quit = true;
                     continue;
                 }
-                if key.code == KeyCode::Char('q') && !handlers::is_text_input_active(state) {
+                if key.code == KeyCode::Char('q') && !app_handlers::is_text_input_active(state) {
                     state.should_quit = true;
                     continue;
                 }
 
-                handlers::handle_key(state, key.code);
+                app_handlers::handle_key(state, key.code);
             }
         } else {
             spinner.advance();

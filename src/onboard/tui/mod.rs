@@ -1,4 +1,7 @@
 mod app;
+mod app_data;
+mod app_handlers;
+mod app_render;
 pub mod state;
 pub mod steps;
 pub mod theme;

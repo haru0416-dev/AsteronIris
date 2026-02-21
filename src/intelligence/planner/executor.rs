@@ -428,7 +428,7 @@ mod tests {
 
     use crate::intelligence::tools::ToolRegistry;
     use crate::intelligence::tools::middleware::ExecutionContext;
-    use crate::intelligence::tools::traits::{Tool, ToolResult, ToolSpec};
+    use crate::intelligence::tools::traits::{Tool, ToolResult};
     use crate::security::SecurityPolicy;
 
     struct EchoTool;
