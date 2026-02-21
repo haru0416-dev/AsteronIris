@@ -1,9 +1,9 @@
 use crate::channels::Channel;
 use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
-use crate::providers;
+use crate::intelligence::providers;
+use crate::intelligence::tools::middleware::ExecutionContext;
 use crate::security::pairing::constant_time_eq;
 use crate::security::policy::TenantPolicyContext;
-use crate::tools::middleware::ExecutionContext;
 use crate::util::truncate_with_ellipsis;
 use axum::{
     body::Bytes,

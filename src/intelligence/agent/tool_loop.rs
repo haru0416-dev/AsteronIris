@@ -1,11 +1,11 @@
-use crate::providers::response::{
+use crate::intelligence::providers::response::{
     ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason,
 };
-use crate::providers::streaming::{ProviderChatRequest, StreamCollector, StreamSink};
-use crate::providers::traits::Provider;
-use crate::tools::middleware::ExecutionContext;
-use crate::tools::registry::ToolRegistry;
-use crate::tools::traits::{OutputAttachment, ToolResult, ToolSpec};
+use crate::intelligence::providers::streaming::{ProviderChatRequest, StreamCollector, StreamSink};
+use crate::intelligence::providers::traits::Provider;
+use crate::intelligence::tools::middleware::ExecutionContext;
+use crate::intelligence::tools::registry::ToolRegistry;
+use crate::intelligence::tools::traits::{OutputAttachment, ToolResult, ToolSpec};
 use futures_util::StreamExt;
 use std::sync::Arc;
 
@@ -260,11 +260,11 @@ impl ToolLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::response::{ProviderResponse, StopReason};
-    use crate::providers::streaming::{ProviderChatRequest, StreamEvent, StreamSink};
+    use crate::intelligence::providers::response::{ProviderResponse, StopReason};
+    use crate::intelligence::providers::streaming::{ProviderChatRequest, StreamEvent, StreamSink};
+    use crate::intelligence::tools::middleware::{MiddlewareDecision, ToolMiddleware};
+    use crate::intelligence::tools::traits::{OutputAttachment, Tool};
     use crate::security::SecurityPolicy;
-    use crate::tools::middleware::{MiddlewareDecision, ToolMiddleware};
-    use crate::tools::traits::{OutputAttachment, Tool};
     use async_trait::async_trait;
     use futures_util::stream;
     use serde_json::{Value, json};
@@ -462,7 +462,7 @@ mod tests {
         async fn chat_with_tools_stream(
             &self,
             _req: ProviderChatRequest,
-        ) -> anyhow::Result<crate::providers::streaming::ProviderStream> {
+        ) -> anyhow::Result<crate::intelligence::providers::streaming::ProviderStream> {
             let items = self
                 .events
                 .iter()

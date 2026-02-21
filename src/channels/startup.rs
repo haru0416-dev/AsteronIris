@@ -1,12 +1,12 @@
 use crate::auth::AuthBroker;
 use crate::config::Config;
+use crate::intelligence::memory::{self, Memory};
+use crate::intelligence::providers::{self, Provider};
+use crate::intelligence::tools;
+use crate::intelligence::tools::registry::ToolRegistry;
 use crate::media::MediaStore;
-use crate::memory::{self, Memory};
-use crate::providers::{self, Provider};
 use crate::security::policy::EntityRateLimiter;
 use crate::security::{PermissionStore, SecurityPolicy};
-use crate::tools;
-use crate::tools::registry::ToolRegistry;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ fn build_channel_system_prompt(
     model: &str,
     skills: &[crate::skills::Skill],
 ) -> String {
-    let tool_descs = crate::tools::tool_descriptions(
+    let tool_descs = crate::intelligence::tools::tool_descriptions(
         config.browser.enabled,
         config.composio.enabled,
         Some(&config.mcp),
@@ -277,9 +277,9 @@ mod tests {
         output_attachment_to_media_attachment, prepare_channel_input_and_images,
     };
     use crate::channels::traits::{MediaAttachment, MediaData};
+    use crate::intelligence::providers::response::ContentBlock;
+    use crate::intelligence::tools::OutputAttachment;
     use crate::media::MediaProcessor;
-    use crate::providers::response::ContentBlock;
-    use crate::tools::OutputAttachment;
     use std::fs;
 
     use tempfile::TempDir;

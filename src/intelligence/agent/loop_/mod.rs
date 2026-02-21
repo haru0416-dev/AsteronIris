@@ -28,20 +28,20 @@ use types::PERSONA_PER_TURN_CALL_BUDGET;
 // ── Crate imports for run() ──────────────────────────────────────
 use crate::auth::AuthBroker;
 use crate::config::Config;
-use crate::memory::{self, Memory};
+use crate::intelligence::memory::{self, Memory};
+use crate::intelligence::providers::{self, Provider};
+use crate::intelligence::tools;
+use crate::intelligence::tools::ToolRegistry;
 use crate::observability::{self, Observer, ObserverEvent};
-use crate::providers::{self, Provider};
 use crate::runtime;
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
-use crate::tools;
-use crate::tools::ToolRegistry;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Instant;
 
 // ── Test-only crate imports (visible to tests via super::*) ──────
 #[cfg(test)]
-use crate::memory::MemorySource;
+use crate::intelligence::memory::MemorySource;
 #[cfg(test)]
 use crate::observability::NoopObserver;
 
@@ -179,7 +179,7 @@ fn resolve_providers(
 
 fn build_agent_system_prompt(config: &Config, model_name: &str) -> String {
     let skills = crate::skills::load_skills(&config.workspace_dir);
-    let tool_descs = crate::tools::tool_descriptions(
+    let tool_descs = crate::intelligence::tools::tool_descriptions(
         config.browser.enabled,
         config.composio.enabled,
         Some(&config.mcp),

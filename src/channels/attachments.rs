@@ -1,13 +1,13 @@
+use crate::intelligence::providers::response::ContentBlock;
+use crate::intelligence::tools::OutputAttachment;
 use crate::media::{MediaProcessor, MediaStore};
-use crate::providers::response::ContentBlock;
-use crate::tools::OutputAttachment;
 use anyhow::Result;
 use std::sync::Arc;
 
 use super::traits::{MediaAttachment, MediaData};
 
 pub(crate) fn convert_attachments_to_images(attachments: &[MediaAttachment]) -> Vec<ContentBlock> {
-    use crate::providers::response::ImageSource;
+    use crate::intelligence::providers::response::ImageSource;
 
     attachments
         .iter()
@@ -47,7 +47,7 @@ pub(crate) fn encode_base64(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn attachment_to_image_block(attachment: &MediaAttachment) -> Option<ContentBlock> {
-    use crate::providers::response::ImageSource;
+    use crate::intelligence::providers::response::ImageSource;
 
     if !attachment.mime_type.starts_with("image/") {
         return None;

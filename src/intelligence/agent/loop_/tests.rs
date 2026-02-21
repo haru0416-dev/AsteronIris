@@ -1,9 +1,9 @@
 use super::*;
 use crate::config::PersonaConfig;
-use crate::memory::SqliteMemory;
+use crate::intelligence::memory::SqliteMemory;
+use crate::intelligence::providers::reliable::ReliableProvider;
 use crate::persona::state_header::StateHeaderV1;
 use crate::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
-use crate::providers::reliable::ReliableProvider;
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -103,7 +103,7 @@ fn main_turn_params<'a>(
         system_prompt,
         model_name,
         temperature,
-        registry: Arc::new(crate::tools::ToolRegistry::new(vec![])),
+        registry: Arc::new(crate::intelligence::tools::ToolRegistry::new(vec![])),
         max_tool_iterations: config.autonomy.max_tool_loop_iterations,
         rate_limiter: Arc::new(crate::security::EntityRateLimiter::new(
             config.autonomy.max_actions_per_hour,

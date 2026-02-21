@@ -2,8 +2,8 @@ use super::types::{MediaFile, MediaType};
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::providers::Provider;
-use crate::providers::response::{ContentBlock, ImageSource, ProviderMessage};
+use crate::intelligence::providers::Provider;
+use crate::intelligence::providers::response::{ContentBlock, ImageSource, ProviderMessage};
 
 const IMAGE_DESCRIPTION_PROMPT: &str = "Describe this image concisely in 1-2 sentences.";
 
@@ -132,7 +132,7 @@ impl MediaProcessor {
 }
 
 fn extract_response_text(
-    response: &crate::providers::response::ProviderResponse,
+    response: &crate::intelligence::providers::response::ProviderResponse,
 ) -> Option<String> {
     let text = response.text.trim();
     if !text.is_empty() {
@@ -202,8 +202,8 @@ mod tests {
     use anyhow::anyhow;
     use async_trait::async_trait;
 
-    use crate::providers::response::{ImageSource, MessageRole, ProviderResponse};
-    use crate::tools::traits::ToolSpec;
+    use crate::intelligence::providers::response::{ImageSource, MessageRole, ProviderResponse};
+    use crate::intelligence::tools::traits::ToolSpec;
 
     #[derive(Debug, Clone, Copy)]
     enum VisionMode {

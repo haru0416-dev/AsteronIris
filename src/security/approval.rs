@@ -1,4 +1,4 @@
-use crate::providers::scrub_secret_patterns;
+use crate::intelligence::providers::scrub_secret_patterns;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 

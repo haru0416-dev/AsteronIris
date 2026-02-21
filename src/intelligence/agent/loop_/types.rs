@@ -1,7 +1,7 @@
-use crate::providers::Provider;
+use crate::intelligence::providers::Provider;
+use crate::intelligence::tools::ToolRegistry;
 use crate::security::PermissionStore;
 use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
-use crate::tools::ToolRegistry;
 use anyhow::Result;
 use std::sync::Arc;
 

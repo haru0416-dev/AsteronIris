@@ -144,7 +144,7 @@ impl Default for MemoryConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::traits::MemoryLayer;
+    use crate::intelligence::memory::traits::MemoryLayer;
 
     #[test]
     fn default_memory_config_values() {

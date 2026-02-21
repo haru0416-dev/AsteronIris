@@ -1,6 +1,6 @@
 use super::RuntimeMemoryWriteContext;
-use crate::memory::traits::MemoryLayer;
-use crate::memory::{Memory, MemoryInferenceEvent, MemoryProvenance, MemorySource};
+use crate::intelligence::memory::traits::MemoryLayer;
+use crate::intelligence::memory::{Memory, MemoryInferenceEvent, MemoryProvenance, MemorySource};
 use crate::observability::Observer;
 use crate::observability::traits::AutonomyLifecycleSignal;
 use anyhow::{Context, Result};

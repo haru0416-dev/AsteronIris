@@ -1,6 +1,6 @@
 use crate::intelligence::agent::tool_types::{LoopStopReason, ToolCallRecord, ToolLoopResult};
-use crate::providers::response::{ContentBlock, MessageRole, ProviderMessage};
-use crate::tools::traits::{OutputAttachment, ToolResult};
+use crate::intelligence::providers::response::{ContentBlock, MessageRole, ProviderMessage};
+use crate::intelligence::tools::traits::{OutputAttachment, ToolResult};
 
 const TOOL_RESULT_TRUST_POLICY: &str = "## Tool Result Trust Policy
 

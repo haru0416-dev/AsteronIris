@@ -1,5 +1,7 @@
 use crate::config::PersonaConfig;
-use crate::memory::{Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
+use crate::intelligence::memory::{
+    Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel,
+};
 use crate::persona::state_header::{STATE_HEADER_SCHEMA_VERSION, StateHeaderV1};
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -175,7 +177,7 @@ fn write_atomic(path: &Path, content: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{Memory, SqliteMemory};
+    use crate::intelligence::memory::{Memory, SqliteMemory};
     use chrono::Utc;
     use tempfile::TempDir;
 

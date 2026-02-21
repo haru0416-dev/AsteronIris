@@ -1,5 +1,5 @@
-use crate::memory::traits::MemoryLayer;
-use crate::memory::{
+use crate::intelligence::memory::traits::MemoryLayer;
+use crate::intelligence::memory::{
     MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
 use crate::security::external_content::{ExternalAction, prepare_external_content};

@@ -197,7 +197,7 @@ fn memory_rollout_status(
         "off"
     };
 
-    let capability = asteroniris::memory::capability_matrix_for_backend(backend);
+    let capability = asteroniris::intelligence::memory::capability_matrix_for_backend(backend);
     let revocation = capability.map_or("unknown", |matrix| {
         capability_support_label(matrix.forget_tombstone)
     });
@@ -208,11 +208,13 @@ fn memory_rollout_status(
     (consolidation, conflict, revocation, governance)
 }
 
-fn capability_support_label(support: asteroniris::memory::CapabilitySupport) -> &'static str {
+fn capability_support_label(
+    support: asteroniris::intelligence::memory::CapabilitySupport,
+) -> &'static str {
     match support {
-        asteroniris::memory::CapabilitySupport::Supported => "supported",
-        asteroniris::memory::CapabilitySupport::Degraded => "degraded",
-        asteroniris::memory::CapabilitySupport::Unsupported => "unsupported",
+        asteroniris::intelligence::memory::CapabilitySupport::Supported => "supported",
+        asteroniris::intelligence::memory::CapabilitySupport::Degraded => "degraded",
+        asteroniris::intelligence::memory::CapabilitySupport::Unsupported => "unsupported",
     }
 }
 

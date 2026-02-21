@@ -1,6 +1,6 @@
 use crate::intelligence::planner::{Plan, PlanStep, StepAction, StepStatus};
-use crate::tools::ToolRegistry;
-use crate::tools::middleware::ExecutionContext;
+use crate::intelligence::tools::ToolRegistry;
+use crate::intelligence::tools::middleware::ExecutionContext;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -426,10 +426,10 @@ mod tests {
         assert_eq!(plan.steps[1].status, StepStatus::Pending);
     }
 
+    use crate::intelligence::tools::ToolRegistry;
+    use crate::intelligence::tools::middleware::ExecutionContext;
+    use crate::intelligence::tools::traits::{Tool, ToolResult, ToolSpec};
     use crate::security::SecurityPolicy;
-    use crate::tools::ToolRegistry;
-    use crate::tools::middleware::ExecutionContext;
-    use crate::tools::traits::{Tool, ToolResult, ToolSpec};
 
     struct EchoTool;
 

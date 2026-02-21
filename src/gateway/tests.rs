@@ -1,11 +1,11 @@
 use super::*;
 use crate::channels::WhatsAppChannel;
 use crate::config::GatewayDefenseMode;
-use crate::memory::Memory;
-use crate::providers::Provider;
+use crate::intelligence::memory::Memory;
+use crate::intelligence::providers::Provider;
+use crate::intelligence::tools::ToolRegistry;
 use crate::security::SecurityPolicy;
 use crate::security::pairing::PairingGuard;
-use crate::tools::ToolRegistry;
 use async_trait::async_trait;
 use axum::{
     body::Bytes,
@@ -290,7 +290,8 @@ async fn webhook_policy_blocks_when_action_limit_is_exhausted() {
     let provider: Arc<dyn Provider> = Arc::new(CountingProvider {
         calls: calls.clone(),
     });
-    let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
+    let mem: Arc<dyn Memory> =
+        Arc::new(crate::intelligence::memory::MarkdownMemory::new(tmp.path()));
 
     let state = AppState {
         provider,
@@ -377,7 +378,8 @@ fn policy_accounting_response_returns_429() {
 #[test]
 fn effective_defense_mode_kill_switch_forces_audit() {
     let tmp = TempDir::new().unwrap();
-    let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
+    let mem: Arc<dyn Memory> =
+        Arc::new(crate::intelligence::memory::MarkdownMemory::new(tmp.path()));
     let calls = Arc::new(AtomicUsize::new(0));
     let state = AppState {
         provider: Arc::new(CountingProvider {
@@ -426,7 +428,7 @@ fn gateway_runtime_policy_context_is_disabled() {
 
 #[test]
 fn webhook_autosave_event_fields() {
-    use crate::memory::traits::MemoryLayer;
+    use crate::intelligence::memory::traits::MemoryLayer;
 
     let event = autosave::gateway_webhook_autosave_event("test summary".to_string());
     assert_eq!(event.entity_id, "default");
@@ -462,7 +464,7 @@ fn make_test_state(pairing: PairingGuard) -> AppState {
         model: "test-model".to_string(),
         temperature: 0.0,
         openai_compat_api_keys: None,
-        mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
+        mem: Arc::new(crate::intelligence::memory::MarkdownMemory::new(tmp.path())),
         auto_save: false,
         webhook_secret: None,
         pairing: Arc::new(pairing),
@@ -516,7 +518,7 @@ fn make_whatsapp_state() -> AppState {
         model: "test-model".to_string(),
         temperature: 0.0,
         openai_compat_api_keys: None,
-        mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
+        mem: Arc::new(crate::intelligence::memory::MarkdownMemory::new(tmp.path())),
         auto_save: false,
         webhook_secret: None,
         pairing: Arc::new(PairingGuard::new(false, &[])),

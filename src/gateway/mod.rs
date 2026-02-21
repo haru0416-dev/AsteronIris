@@ -25,11 +25,11 @@ pub use signature::verify_whatsapp_signature;
 
 use crate::channels::WhatsAppChannel;
 use crate::config::GatewayDefenseMode;
-use crate::memory::Memory;
-use crate::providers::Provider;
+use crate::intelligence::memory::Memory;
+use crate::intelligence::providers::Provider;
+use crate::intelligence::tools::ToolRegistry;
 use crate::security::pairing::PairingGuard;
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
-use crate::tools::ToolRegistry;
 use std::sync::Arc;
 
 #[cfg(test)]

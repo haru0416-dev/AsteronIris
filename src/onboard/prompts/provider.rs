@@ -127,7 +127,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
         || provider_name == "google"
         || provider_name == "google-gemini"
     {
-        if crate::providers::gemini::GeminiProvider::has_cli_credentials() {
+        if crate::intelligence::providers::gemini::GeminiProvider::has_cli_credentials() {
             print_bullet(&format!(
                 "{} {}",
                 ui::success("✓"),

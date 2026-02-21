@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::memory::CapabilitySupport;
+use crate::intelligence::memory::CapabilitySupport;
 use crate::security::ExternalActionExecution;
 use chrono::{DateTime, Utc};
 
@@ -65,7 +65,7 @@ fn backend_supports_autonomy_lifecycle_metrics(backend: &str) -> bool {
 pub(crate) fn memory_rollout_lines(config: &Config, snapshot: &serde_json::Value) -> Vec<String> {
     let mut lines = Vec::with_capacity(5);
     let backend = config.memory.backend.as_str();
-    let capability = crate::memory::capability_matrix_for_backend(backend);
+    let capability = crate::intelligence::memory::capability_matrix_for_backend(backend);
 
     let consolidation = if backend != "none" && config.memory.auto_save {
         "on"

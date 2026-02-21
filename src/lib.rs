@@ -28,16 +28,13 @@ pub mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod media;
-pub mod memory;
 pub mod observability;
 pub mod onboard;
 pub mod persona;
 pub mod platform;
-pub mod providers;
 pub mod runtime;
 pub mod security;
 pub mod skills;
-pub mod tools;
 pub mod tunnel;
 pub mod ui;
 pub mod usage;

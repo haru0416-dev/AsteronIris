@@ -5,8 +5,8 @@ use super::types::{
 };
 use crate::gateway::AppState;
 use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::intelligence::tools::middleware::ExecutionContext;
 use crate::security::policy::TenantPolicyContext;
-use crate::tools::middleware::ExecutionContext;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};

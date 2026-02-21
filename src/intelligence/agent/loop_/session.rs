@@ -11,17 +11,17 @@ use super::verify_repair::{
 
 use crate::config::Config;
 use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
-use crate::memory::traits::MemoryLayer;
-use crate::memory::{
+use crate::intelligence::memory::traits::MemoryLayer;
+use crate::intelligence::memory::{
     self, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
+use crate::intelligence::providers::{CliStreamSink, Provider, StreamSink};
+use crate::intelligence::tools;
+use crate::intelligence::tools::middleware::ExecutionContext;
 use crate::observability::traits::AutonomyLifecycleSignal;
 use crate::observability::{NoopObserver, Observer};
-use crate::providers::{CliStreamSink, Provider, StreamSink};
 use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
 use crate::security::{PermissionStore, SecurityPolicy};
-use crate::tools;
-use crate::tools::middleware::ExecutionContext;
 use crate::util::truncate_with_ellipsis;
 use anyhow::{Context, Result};
 use std::sync::Arc;

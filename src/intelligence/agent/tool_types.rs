@@ -1,7 +1,7 @@
-use crate::providers::response::ProviderMessage;
-use crate::providers::streaming::StreamSink;
-use crate::tools::registry::ToolRegistry;
-use crate::tools::traits::{OutputAttachment, ToolResult, ToolSpec};
+use crate::intelligence::providers::response::ProviderMessage;
+use crate::intelligence::providers::streaming::StreamSink;
+use crate::intelligence::tools::registry::ToolRegistry;
+use crate::intelligence::tools::traits::{OutputAttachment, ToolResult, ToolSpec};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

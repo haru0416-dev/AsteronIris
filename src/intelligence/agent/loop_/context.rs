@@ -1,4 +1,4 @@
-use crate::memory::{Memory, MemoryRecallItem, RecallQuery};
+use crate::intelligence::memory::{Memory, MemoryRecallItem, RecallQuery};
 use crate::security::external_content::{
     ExternalAction, decide_external_action, detect_injection_signals, sanitize_marker_collision,
     wrap_external_content,
@@ -109,7 +109,7 @@ pub async fn build_context_for_integration(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{
+    use crate::intelligence::memory::{
         MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
     };
     use std::sync::Arc;

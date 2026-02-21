@@ -1,8 +1,10 @@
 use crate::config::Config;
-use crate::memory::{Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
+use crate::intelligence::memory::{
+    Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel,
+};
+use crate::intelligence::providers::Provider;
 use crate::persona::state_header::StateHeaderV1;
 use crate::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
-use crate::providers::Provider;
 use crate::security::writeback_guard::{
     ImmutableStateHeader, SelfTaskWriteback, WritebackGuardVerdict, validate_writeback_payload,
 };

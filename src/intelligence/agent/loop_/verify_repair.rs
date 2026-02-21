@@ -1,5 +1,7 @@
 use crate::config::Config;
-use crate::memory::{Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
+use crate::intelligence::memory::{
+    Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel,
+};
 use anyhow::Result;
 use serde_json::{Value, json};
 

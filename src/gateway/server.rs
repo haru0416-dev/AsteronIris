@@ -8,12 +8,12 @@ use super::{AppState, MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS};
 use crate::auth::AuthBroker;
 use crate::channels::WhatsAppChannel;
 use crate::config::Config;
-use crate::memory::{self, Memory};
-use crate::providers::{self, Provider};
+use crate::intelligence::memory::{self, Memory};
+use crate::intelligence::providers::{self, Provider};
+use crate::intelligence::tools;
+use crate::intelligence::tools::ToolRegistry;
 use crate::security::pairing::{PairingGuard, is_public_bind};
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
-use crate::tools;
-use crate::tools::ToolRegistry;
 use anyhow::{Context, Result};
 use axum::{
     Router,

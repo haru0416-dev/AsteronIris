@@ -1,9 +1,9 @@
 use crate::config::Config;
 use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::intelligence::providers::streaming::{ChannelStreamSink, StreamSink};
+use crate::intelligence::tools::middleware::ExecutionContext;
 use crate::media::MediaProcessor;
-use crate::providers::streaming::{ChannelStreamSink, StreamSink};
 use crate::security::{ChannelApprovalContext, broker_for_channel};
-use crate::tools::middleware::ExecutionContext;
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use std::sync::Arc;
