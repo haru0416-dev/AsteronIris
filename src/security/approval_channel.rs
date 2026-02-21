@@ -1,9 +1,26 @@
-use crate::security::approval::{
-    ApprovalBroker, ApprovalDecision, ApprovalRequest, AutoDenyBroker,
-};
+use crate::security::approval::{ApprovalBroker, ApprovalDecision, ApprovalRequest};
+use crate::security::approval_discord::DiscordApprovalBroker;
+use crate::security::approval_telegram::TelegramApprovalBroker;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[derive(Debug, Clone)]
+pub struct ChannelApprovalContext {
+    pub bot_token: Option<String>,
+    pub channel_id: Option<String>,
+    pub timeout: Duration,
+}
+
+impl Default for ChannelApprovalContext {
+    fn default() -> Self {
+        Self {
+            bot_token: None,
+            channel_id: None,
+            timeout: Duration::from_secs(60),
+        }
+    }
+}
 
 pub struct TextReplyApprovalBroker {
     pub channel_name: String,
@@ -43,23 +60,59 @@ impl ApprovalBroker for TextReplyApprovalBroker {
 }
 
 #[must_use]
-pub fn broker_for_channel(channel_name: &str) -> Arc<dyn ApprovalBroker> {
+pub fn broker_for_channel(
+    channel_name: &str,
+    channel_config: &ChannelApprovalContext,
+) -> Arc<dyn ApprovalBroker> {
     match channel_name {
-        "email" | "irc" | "webhook" => Arc::new(AutoDenyBroker {
-            reason: format!(
-                "Tool execution blocked: '{channel_name}' does not support interactive approval. Set autonomy_level to 'full' or 'read_only' in config."
+        "discord" => channel_config
+            .bot_token
+            .as_deref()
+            .zip(channel_config.channel_id.as_deref())
+            .map_or_else(
+                || {
+                    Arc::new(TextReplyApprovalBroker::new(
+                        channel_name,
+                        channel_config.timeout,
+                    )) as Arc<dyn ApprovalBroker>
+                },
+                |(bot_token, channel_id)| {
+                    Arc::new(DiscordApprovalBroker::new(
+                        bot_token,
+                        channel_id,
+                        channel_config.timeout,
+                    )) as Arc<dyn ApprovalBroker>
+                },
             ),
-        }),
+        "telegram" => channel_config
+            .bot_token
+            .as_deref()
+            .zip(channel_config.channel_id.as_deref())
+            .map_or_else(
+                || {
+                    Arc::new(TextReplyApprovalBroker::new(
+                        channel_name,
+                        channel_config.timeout,
+                    )) as Arc<dyn ApprovalBroker>
+                },
+                |(bot_token, chat_id)| {
+                    Arc::new(TelegramApprovalBroker::new(
+                        bot_token,
+                        chat_id,
+                        channel_config.timeout,
+                    )) as Arc<dyn ApprovalBroker>
+                },
+            ),
         _ => Arc::new(TextReplyApprovalBroker::new(
             channel_name,
-            Duration::from_secs(60),
+            channel_config.timeout,
         )),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TextReplyApprovalBroker, broker_for_channel};
+    use super::{ChannelApprovalContext, TextReplyApprovalBroker, broker_for_channel};
     use crate::security::approval::{ApprovalBroker, ApprovalDecision, ApprovalRequest, RiskLevel};
     use std::time::Duration;
 
@@ -74,10 +127,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn channel_approval_context_default_values() {
+        let context = ChannelApprovalContext::default();
+        assert!(context.bot_token.is_none());
+        assert!(context.channel_id.is_none());
+        assert_eq!(context.timeout, Duration::from_secs(60));
+    }
+
     #[tokio::test]
-    async fn broker_for_email_auto_denies_with_config_guidance() {
+    async fn broker_for_email_uses_text_reply_auto_deny() {
         let request = request_for_channel("email");
-        let decision = broker_for_channel("email")
+        let decision = broker_for_channel("email", &ChannelApprovalContext::default())
             .request_approval(&request)
             .await
             .expect("email broker should not fail");
@@ -86,14 +147,14 @@ mod tests {
             panic!("email broker should deny");
         };
 
-        assert!(reason.contains("does not support interactive approval"));
+        assert!(reason.contains("approval not yet implemented"));
         assert!(reason.contains("autonomy_level"));
     }
 
     #[tokio::test]
-    async fn broker_for_irc_auto_denies_with_config_guidance() {
+    async fn broker_for_irc_uses_text_reply_auto_deny() {
         let request = request_for_channel("irc");
-        let decision = broker_for_channel("irc")
+        let decision = broker_for_channel("irc", &ChannelApprovalContext::default())
             .request_approval(&request)
             .await
             .expect("irc broker should not fail");
@@ -102,14 +163,14 @@ mod tests {
             panic!("irc broker should deny");
         };
 
-        assert!(reason.contains("does not support interactive approval"));
+        assert!(reason.contains("approval not yet implemented"));
         assert!(reason.contains("autonomy_level"));
     }
 
     #[tokio::test]
-    async fn broker_for_webhook_auto_denies_with_config_guidance() {
+    async fn broker_for_webhook_uses_text_reply_auto_deny() {
         let request = request_for_channel("webhook");
-        let decision = broker_for_channel("webhook")
+        let decision = broker_for_channel("webhook", &ChannelApprovalContext::default())
             .request_approval(&request)
             .await
             .expect("webhook broker should not fail");
@@ -118,14 +179,14 @@ mod tests {
             panic!("webhook broker should deny");
         };
 
-        assert!(reason.contains("does not support interactive approval"));
+        assert!(reason.contains("approval not yet implemented"));
         assert!(reason.contains("autonomy_level"));
     }
 
     #[tokio::test]
-    async fn broker_for_telegram_uses_text_reply_stub() {
+    async fn broker_for_telegram_without_context_falls_back_to_text_reply() {
         let request = request_for_channel("telegram");
-        let decision = broker_for_channel("telegram")
+        let decision = broker_for_channel("telegram", &ChannelApprovalContext::default())
             .request_approval(&request)
             .await
             .expect("telegram broker should not fail");
@@ -139,9 +200,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_for_discord_uses_text_reply_stub() {
+    async fn broker_for_discord_without_context_falls_back_to_text_reply() {
         let request = request_for_channel("discord");
-        let decision = broker_for_channel("discord")
+        let decision = broker_for_channel("discord", &ChannelApprovalContext::default())
             .request_approval(&request)
             .await
             .expect("discord broker should not fail");
@@ -152,6 +213,48 @@ mod tests {
 
         assert!(reason.contains("approval not yet implemented"));
         assert!(reason.contains("discord"));
+    }
+
+    #[tokio::test]
+    async fn broker_for_discord_with_context_uses_interactive_timeout_path() {
+        let request = request_for_channel("discord");
+        let context = ChannelApprovalContext {
+            bot_token: Some("discord-token".to_string()),
+            channel_id: Some("123".to_string()),
+            timeout: Duration::ZERO,
+        };
+        let decision = broker_for_channel("discord", &context)
+            .request_approval(&request)
+            .await
+            .expect("discord interactive broker should not fail on immediate timeout");
+
+        assert_eq!(
+            decision,
+            ApprovalDecision::Denied {
+                reason: "approval timed out".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_for_telegram_with_context_uses_interactive_timeout_path() {
+        let request = request_for_channel("telegram");
+        let context = ChannelApprovalContext {
+            bot_token: Some("telegram-token".to_string()),
+            channel_id: Some("456".to_string()),
+            timeout: Duration::ZERO,
+        };
+        let decision = broker_for_channel("telegram", &context)
+            .request_approval(&request)
+            .await
+            .expect("telegram interactive broker should not fail on immediate timeout");
+
+        assert_eq!(
+            decision,
+            ApprovalDecision::Denied {
+                reason: "approval timed out".to_string()
+            }
+        );
     }
 
     #[tokio::test]

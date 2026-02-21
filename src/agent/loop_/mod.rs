@@ -143,6 +143,7 @@ fn init_tools(
         composio_key,
         &config.browser,
         &config.tools,
+        Some(&config.mcp),
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = ToolRegistry::new(middleware);
@@ -178,8 +179,15 @@ fn resolve_providers(
 
 fn build_agent_system_prompt(config: &Config, model_name: &str) -> String {
     let skills = crate::skills::load_skills(&config.workspace_dir);
-    let tool_descs =
-        crate::tools::tool_descriptions(config.browser.enabled, config.composio.enabled);
+    let tool_descs = crate::tools::tool_descriptions(
+        config.browser.enabled,
+        config.composio.enabled,
+        Some(&config.mcp),
+    );
+    let prompt_tool_descs: Vec<(&str, &str)> = tool_descs
+        .iter()
+        .map(|(name, description)| (name.as_str(), description.as_str()))
+        .collect();
     let prompt_options = crate::channels::SystemPromptOptions {
         persona_state_mirror_filename: if config.persona.enabled_main_session {
             Some(config.persona.state_mirror_filename.clone())
@@ -190,7 +198,7 @@ fn build_agent_system_prompt(config: &Config, model_name: &str) -> String {
     crate::channels::build_system_prompt_with_options(
         &config.workspace_dir,
         model_name,
-        &tool_descs,
+        &prompt_tool_descs,
         &skills,
         &prompt_options,
     )

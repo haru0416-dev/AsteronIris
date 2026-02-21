@@ -17,7 +17,7 @@ use crate::memory::{
 };
 use crate::observability::traits::AutonomyLifecycleSignal;
 use crate::observability::{NoopObserver, Observer};
-use crate::providers::Provider;
+use crate::providers::{CliStreamSink, Provider, StreamSink};
 use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
 use crate::security::{PermissionStore, SecurityPolicy};
 use crate::tools;
@@ -194,6 +194,7 @@ pub async fn run_main_session_turn_for_integration_with_policy(
         composio_key,
         &config.browser,
         &config.tools,
+        Some(&config.mcp),
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = tools::ToolRegistry::new(middleware);
@@ -305,6 +306,7 @@ pub(super) async fn execute_main_session_turn_with_accounting(
             params.model_name,
             clamped_temperature,
             &ctx,
+            Some(Arc::new(CliStreamSink::new()) as Arc<dyn StreamSink>),
         )
         .await
         .context("run agent tool loop")?;

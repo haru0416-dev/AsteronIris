@@ -163,7 +163,16 @@ async fn tool_loop_single_call() {
     ]);
 
     let result = ToolLoop::new(registry, 8)
-        .run(&provider, "system", "read it", &[], "test-model", 0.0, &ctx)
+        .run(
+            &provider,
+            "system",
+            "read it",
+            &[],
+            "test-model",
+            0.0,
+            &ctx,
+            None,
+        )
         .await
         .expect("tool loop should run");
 
@@ -204,6 +213,7 @@ async fn tool_loop_chain() {
             "test-model",
             0.0,
             &ctx,
+            None,
         )
         .await
         .expect("tool loop should run");
@@ -237,6 +247,7 @@ async fn tool_loop_max_iterations() {
             "test-model",
             0.0,
             &ctx,
+            None,
         )
         .await
         .expect("tool loop should run");
@@ -270,6 +281,7 @@ async fn tool_loop_hard_cap() {
             "test-model",
             0.0,
             &ctx,
+            None,
         )
         .await
         .expect("tool loop should run");
@@ -290,7 +302,16 @@ async fn tool_loop_error_recovery() {
     ]);
 
     let result = ToolLoop::new(registry, 8)
-        .run(&provider, "system", "recover", &[], "test-model", 0.0, &ctx)
+        .run(
+            &provider,
+            "system",
+            "recover",
+            &[],
+            "test-model",
+            0.0,
+            &ctx,
+            None,
+        )
         .await
         .expect("tool loop should run");
 
@@ -329,6 +350,7 @@ async fn tool_loop_no_tools() {
             "test-model",
             0.0,
             &ctx,
+            None,
         )
         .await
         .expect("tool loop should run");

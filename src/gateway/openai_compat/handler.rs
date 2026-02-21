@@ -55,6 +55,7 @@ pub async fn handle_chat_completions(
             &model,
             temperature,
             &ctx,
+            None,
         )
         .await
     {

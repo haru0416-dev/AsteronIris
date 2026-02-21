@@ -81,6 +81,7 @@ async fn run_gateway_tool_loop(
             model,
             temperature,
             &ctx,
+            None,
         )
         .await?;
     if let LoopStopReason::Error(error) = &result.stop_reason {

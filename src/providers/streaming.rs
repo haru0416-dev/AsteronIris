@@ -2,9 +2,12 @@ use crate::providers::response::{ContentBlock, ProviderMessage, ProviderResponse
 use crate::providers::scrub::scrub_secret_patterns;
 use crate::tools::traits::ToolSpec;
 use anyhow::Result;
+use async_trait::async_trait;
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc};
 
 pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send + 'static>>;
 
@@ -32,6 +35,112 @@ pub enum StreamEvent {
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
     },
+}
+
+#[async_trait]
+pub trait StreamSink: Send + Sync {
+    async fn on_event(&self, event: &StreamEvent);
+}
+
+#[derive(Debug, Default)]
+pub struct NullStreamSink;
+
+#[async_trait]
+impl StreamSink for NullStreamSink {
+    async fn on_event(&self, _event: &StreamEvent) {}
+}
+
+pub struct ChannelStreamSink {
+    sender: mpsc::Sender<String>,
+    buffer: Mutex<String>,
+    flush_threshold: usize,
+}
+
+impl ChannelStreamSink {
+    pub fn new(sender: mpsc::Sender<String>, flush_threshold: usize) -> Self {
+        Self {
+            sender,
+            buffer: Mutex::new(String::new()),
+            flush_threshold: flush_threshold.max(1),
+        }
+    }
+
+    fn at_flush_boundary(text: &str) -> bool {
+        text.ends_with(char::is_whitespace)
+            || text.ends_with('.')
+            || text.ends_with('!')
+            || text.ends_with('?')
+    }
+
+    async fn flush_buffer(&self) {
+        let mut guard = self.buffer.lock().await;
+        if guard.is_empty() {
+            return;
+        }
+
+        let payload = std::mem::take(&mut *guard);
+        let _ = self.sender.send(payload).await;
+    }
+}
+
+#[async_trait]
+impl StreamSink for ChannelStreamSink {
+    async fn on_event(&self, event: &StreamEvent) {
+        match event {
+            StreamEvent::TextDelta { text } => {
+                let mut guard = self.buffer.lock().await;
+                guard.push_str(text);
+                let flush_now = guard.len() >= self.flush_threshold
+                    && (Self::at_flush_boundary(&guard) || guard.len() >= self.flush_threshold * 2);
+                if !flush_now {
+                    return;
+                }
+                let payload = std::mem::take(&mut *guard);
+                drop(guard);
+                let _ = self.sender.send(payload).await;
+            }
+            StreamEvent::Done { .. } => {
+                self.flush_buffer().await;
+            }
+            StreamEvent::ResponseStart { .. }
+            | StreamEvent::ToolCallDelta { .. }
+            | StreamEvent::ToolCallComplete { .. } => {}
+        }
+    }
+}
+
+pub struct CliStreamSink {
+    writer: Arc<dyn Fn(&str) + Send + Sync>,
+}
+
+impl CliStreamSink {
+    pub fn new() -> Self {
+        Self {
+            writer: Arc::new(|text| {
+                eprint!("{text}");
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_writer(writer: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
+        Self { writer }
+    }
+}
+
+impl Default for CliStreamSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl StreamSink for CliStreamSink {
+    async fn on_event(&self, event: &StreamEvent) {
+        if let StreamEvent::TextDelta { text } = event {
+            (self.writer)(text);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,9 +357,14 @@ impl StreamingSecretScrubber {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderChatRequest, StreamCollector, StreamEvent, StreamingSecretScrubber};
+    use super::{
+        ChannelStreamSink, CliStreamSink, NullStreamSink, ProviderChatRequest, StreamCollector,
+        StreamEvent, StreamSink, StreamingSecretScrubber,
+    };
     use crate::providers::response::{ContentBlock, ProviderMessage, ProviderResponse, StopReason};
     use crate::providers::streaming::resp_to_events;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc;
 
     #[test]
     fn stream_event_text_delta_debug() {
@@ -260,6 +374,229 @@ mod tests {
         let debug = format!("{event:?}");
         assert!(debug.contains("TextDelta"));
         assert!(debug.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn null_stream_sink_is_noop() {
+        let sink = NullStreamSink;
+        sink.on_event(&StreamEvent::ResponseStart { model: None })
+            .await;
+        sink.on_event(&StreamEvent::TextDelta { text: "x".into() })
+            .await;
+        sink.on_event(&StreamEvent::Done {
+            stop_reason: None,
+            input_tokens: None,
+            output_tokens: None,
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn cli_stream_sink_writes_text_delta() {
+        let captured = Arc::new(Mutex::new(String::new()));
+        let captured_clone = Arc::clone(&captured);
+        let sink = CliStreamSink::with_writer(Arc::new(move |text| {
+            let mut guard = captured_clone
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.push_str(text);
+        }));
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "hello".to_string(),
+        })
+        .await;
+
+        let output = captured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(output, "hello");
+    }
+
+    #[tokio::test]
+    async fn cli_stream_sink_ignores_non_text_events() {
+        let captured = Arc::new(Mutex::new(String::new()));
+        let captured_clone = Arc::clone(&captured);
+        let sink = CliStreamSink::with_writer(Arc::new(move |text| {
+            let mut guard = captured_clone
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.push_str(text);
+        }));
+
+        sink.on_event(&StreamEvent::ResponseStart { model: None })
+            .await;
+        sink.on_event(&StreamEvent::Done {
+            stop_reason: None,
+            input_tokens: None,
+            output_tokens: None,
+        })
+        .await;
+
+        let output = captured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert!(output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_flushes_at_threshold_with_boundary() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 5);
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "hello ".to_string(),
+        })
+        .await;
+
+        assert_eq!(rx.recv().await, Some("hello ".to_string()));
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_keeps_buffer_without_boundary() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 5);
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "hello".to_string(),
+        })
+        .await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_flushes_on_done() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 80);
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "partial".to_string(),
+        })
+        .await;
+        sink.on_event(&StreamEvent::Done {
+            stop_reason: None,
+            input_tokens: None,
+            output_tokens: None,
+        })
+        .await;
+
+        assert_eq!(rx.recv().await, Some("partial".to_string()));
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_does_not_flush_empty_on_done() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 10);
+
+        sink.on_event(&StreamEvent::Done {
+            stop_reason: None,
+            input_tokens: None,
+            output_tokens: None,
+        })
+        .await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_non_text_event_does_not_flush() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 4);
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "abc".to_string(),
+        })
+        .await;
+        sink.on_event(&StreamEvent::ToolCallDelta {
+            index: 0,
+            id: None,
+            name: None,
+            input_json_delta: "{".to_string(),
+        })
+        .await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_flushes_long_chunk_without_boundary() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 5);
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "abcdefghij".to_string(),
+        })
+        .await;
+
+        assert_eq!(rx.recv().await, Some("abcdefghij".to_string()));
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_flushes_when_sentence_ends() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 6);
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "hello.".to_string(),
+        })
+        .await;
+
+        assert_eq!(rx.recv().await, Some("hello.".to_string()));
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_accumulates_multiple_deltas_before_flush() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 8);
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "hel".to_string(),
+        })
+        .await;
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "lo ".to_string(),
+        })
+        .await;
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "world ".to_string(),
+        })
+        .await;
+
+        assert_eq!(rx.recv().await, Some("hello world ".to_string()));
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_emits_multiple_chunks_in_order() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 5);
+
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "alpha ".to_string(),
+        })
+        .await;
+        sink.on_event(&StreamEvent::TextDelta {
+            text: "beta ".to_string(),
+        })
+        .await;
+
+        assert_eq!(rx.recv().await, Some("alpha ".to_string()));
+        assert_eq!(rx.recv().await, Some("beta ".to_string()));
+    }
+
+    #[tokio::test]
+    async fn channel_stream_sink_ignores_response_start() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let sink = ChannelStreamSink::new(tx, 4);
+
+        sink.on_event(&StreamEvent::ResponseStart {
+            model: Some("model".to_string()),
+        })
+        .await;
+
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

@@ -26,7 +26,8 @@ pub use response::{
 pub use scrub::{api_error, sanitize_api_error, scrub_secret_patterns};
 #[allow(unused_imports)]
 pub use streaming::{
-    ProviderChatRequest, ProviderStream, StreamCollector, StreamEvent, StreamingSecretScrubber,
+    ChannelStreamSink, CliStreamSink, NullStreamSink, ProviderChatRequest, ProviderStream,
+    StreamCollector, StreamEvent, StreamSink, StreamingSecretScrubber,
 };
 pub use traits::Provider;
 

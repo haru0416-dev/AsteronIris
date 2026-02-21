@@ -4,9 +4,12 @@ use crate::config::Config;
 use crate::media::{MediaProcessor, MediaStore};
 use crate::memory::{self, Memory};
 use crate::providers::response::ContentBlock;
+use crate::providers::streaming::{ChannelStreamSink, StreamSink};
 use crate::providers::{self, Provider};
 use crate::security::policy::EntityRateLimiter;
-use crate::security::{PermissionStore, SecurityPolicy, broker_for_channel};
+use crate::security::{
+    ChannelApprovalContext, PermissionStore, SecurityPolicy, broker_for_channel,
+};
 use crate::tools;
 use crate::tools::middleware::ExecutionContext;
 use crate::tools::registry::ToolRegistry;
@@ -184,6 +187,24 @@ async fn prepare_channel_input_and_images(
     }
 }
 
+fn build_channel_system_prompt(
+    config: &Config,
+    workspace: &std::path::Path,
+    model: &str,
+    skills: &[crate::skills::Skill],
+) -> String {
+    let tool_descs = crate::tools::tool_descriptions(
+        config.browser.enabled,
+        config.composio.enabled,
+        Some(&config.mcp),
+    );
+    let prompt_tool_descs: Vec<(&str, &str)> = tool_descs
+        .iter()
+        .map(|(name, description)| (name.as_str(), description.as_str()))
+        .collect();
+    build_system_prompt(workspace, model, &prompt_tool_descs, skills)
+}
+
 struct ChannelRuntime {
     config: Arc<Config>,
     security: Arc<SecurityPolicy>,
@@ -305,6 +326,7 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
         composio_key,
         &config.browser,
         &config.tools,
+        Some(&config.mcp),
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = ToolRegistry::new(middleware);
@@ -314,9 +336,7 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
 
     let workspace = config.workspace_dir.clone();
     let skills = crate::skills::load_skills(&workspace);
-    let tool_descs =
-        crate::tools::tool_descriptions(config.browser.enabled, config.composio.enabled);
-    let system_prompt = build_system_prompt(&workspace, &model, &tool_descs, &skills);
+    let system_prompt = build_channel_system_prompt(config, &workspace, &model, &skills);
 
     if !skills.is_empty() {
         println!(
@@ -367,6 +387,35 @@ async fn reply_to_origin(
         }
     }
     Ok(())
+}
+
+fn approval_context_for_message(config: &Config, msg: &ChannelMessage) -> ChannelApprovalContext {
+    let mut context = ChannelApprovalContext {
+        timeout: Duration::from_secs(60),
+        ..ChannelApprovalContext::default()
+    };
+
+    match msg.channel.as_str() {
+        "discord" => {
+            context.bot_token = config
+                .channels_config
+                .discord
+                .as_ref()
+                .map(|discord| discord.bot_token.clone());
+            context.channel_id = Some(msg.sender.clone());
+        }
+        "telegram" => {
+            context.bot_token = config
+                .channels_config
+                .telegram
+                .as_ref()
+                .map(|telegram| telegram.bot_token.clone());
+            context.channel_id = Some(msg.sender.clone());
+        }
+        _ => {}
+    }
+
+    context
 }
 
 #[allow(clippy::too_many_lines)]
@@ -456,7 +505,10 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
         permission_store: Some(Arc::clone(&rt.permission_store)),
         rate_limiter: Arc::clone(&rt.rate_limiter),
         tenant_context,
-        approval_broker: Some(broker_for_channel(&msg.channel)),
+        approval_broker: Some(broker_for_channel(
+            &msg.channel,
+            &approval_context_for_message(&rt.config, msg),
+        )),
     };
     let tool_loop = ToolLoop::new(
         Arc::clone(&rt.registry),
@@ -468,6 +520,34 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
         rt.media_store.as_ref(),
     )
     .await;
+    let mut stream_forward_handle = None;
+    let stream_sink: Option<Arc<dyn StreamSink>> = rt
+        .channels
+        .iter()
+        .find(|channel| channel.name() == msg.channel)
+        .map(|channel| {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
+            let channel = Arc::clone(channel);
+            let recipient = msg.sender.clone();
+            let channel_name = msg.channel.clone();
+            stream_forward_handle = Some(tokio::spawn(async move {
+                while let Some(chunk) = rx.recv().await {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    if let Err(error) = channel.send(&chunk, &recipient).await {
+                        tracing::warn!(
+                            channel = %channel_name,
+                            recipient = %recipient,
+                            error = %error,
+                            "failed to stream channel chunk"
+                        );
+                        break;
+                    }
+                }
+            }));
+            Arc::new(ChannelStreamSink::new(tx, 80)) as Arc<dyn StreamSink>
+        });
 
     match tool_loop
         .run(
@@ -478,10 +558,14 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
             &rt.model,
             rt.temperature,
             &ctx,
+            stream_sink,
         )
         .await
     {
         Ok(result) => {
+            if let Some(handle) = stream_forward_handle {
+                let _ = handle.await;
+            }
             if let LoopStopReason::Error(error) = &result.stop_reason {
                 eprintln!("  ✗ {}", t!("channels.llm_error", error = error));
                 let _ = reply_to_origin(
@@ -518,6 +602,9 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
             }
         }
         Err(e) => {
+            if let Some(handle) = stream_forward_handle {
+                let _ = handle.await;
+            }
             eprintln!("  ✗ {}", t!("channels.llm_error", error = e));
             let _ = reply_to_origin(
                 &rt.channels,

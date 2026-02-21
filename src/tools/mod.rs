@@ -32,7 +32,7 @@ pub use traits::Tool;
 #[allow(unused_imports)]
 pub use traits::{ActionIntent, ActionOperator, ActionResult, NoopOperator, ToolResult, ToolSpec};
 
-use crate::config::schema::ToolsConfig;
+use crate::config::schema::{McpConfig, ToolsConfig};
 use crate::memory::Memory;
 use crate::security::SecurityPolicy;
 use std::sync::Arc;
@@ -58,49 +58,82 @@ pub fn default_action_operator(security: Arc<SecurityPolicy>) -> Arc<dyn ActionO
 pub fn tool_descriptions(
     browser_enabled: bool,
     composio_enabled: bool,
-) -> Vec<(&'static str, &'static str)> {
-    let mut descs: Vec<(&str, &str)> = vec![
+    mcp_config: Option<&McpConfig>,
+) -> Vec<(String, String)> {
+    let mut descs: Vec<(String, String)> = vec![
         (
-            "shell",
-            "Execute terminal commands. Use when: running local checks, build/test commands, diagnostics. Don't use when: a safer dedicated tool exists, or command is destructive without approval.",
+            "shell".to_string(),
+            "Execute terminal commands. Use when: running local checks, build/test commands, diagnostics. Don't use when: a safer dedicated tool exists, or command is destructive without approval.".to_string(),
         ),
         (
-            "file_read",
-            "Read file contents. Use when: inspecting project files, configs, logs. Don't use when: a targeted search is enough.",
+            "file_read".to_string(),
+            "Read file contents. Use when: inspecting project files, configs, logs. Don't use when: a targeted search is enough.".to_string(),
         ),
         (
-            "file_write",
-            "Write file contents. Use when: applying focused edits, scaffolding files, updating docs/code. Don't use when: side effects are unclear or file ownership is uncertain.",
+            "file_write".to_string(),
+            "Write file contents. Use when: applying focused edits, scaffolding files, updating docs/code. Don't use when: side effects are unclear or file ownership is uncertain.".to_string(),
         ),
         (
-            "memory_store",
-            "Save to memory. Use when: preserving durable preferences, decisions, key context. Don't use when: information is transient/noisy/sensitive without need.",
+            "memory_store".to_string(),
+            "Save to memory. Use when: preserving durable preferences, decisions, key context. Don't use when: information is transient/noisy/sensitive without need.".to_string(),
         ),
         (
-            "memory_recall",
-            "Search memory. Use when: retrieving prior decisions, user preferences, historical context. Don't use when: answer is already in current context.",
+            "memory_recall".to_string(),
+            "Search memory. Use when: retrieving prior decisions, user preferences, historical context. Don't use when: answer is already in current context.".to_string(),
         ),
         (
-            "memory_forget",
-            "Delete a memory entry. Use when: memory is incorrect/stale or explicitly requested for removal. Don't use when: impact is uncertain.",
+            "memory_forget".to_string(),
+            "Delete a memory entry. Use when: memory is incorrect/stale or explicitly requested for removal. Don't use when: impact is uncertain.".to_string(),
         ),
     ];
 
     if browser_enabled {
         descs.push((
-            "browser_open",
-            "Open approved HTTPS URLs in Brave Browser (allowlist-only, no scraping)",
+            "browser_open".to_string(),
+            "Open approved HTTPS URLs in Brave Browser (allowlist-only, no scraping)".to_string(),
         ));
     }
 
     if composio_enabled {
         descs.push((
-            "composio",
-            "Execute actions on 1000+ apps via Composio (Gmail, Notion, GitHub, Slack, etc.). Use action='list' to discover, 'execute' to run, 'connect' to OAuth.",
+            "composio".to_string(),
+            "Execute actions on 1000+ apps via Composio (Gmail, Notion, GitHub, Slack, etc.). Use action='list' to discover, 'execute' to run, 'connect' to OAuth.".to_string(),
         ));
     }
 
+    append_mcp_tool_descriptions(&mut descs, mcp_config);
+
     descs
+}
+
+#[cfg(any(feature = "mcp", test))]
+fn append_dynamic_tool_descriptions(
+    descriptions: &mut Vec<(String, String)>,
+    tools: &[Box<dyn Tool>],
+) {
+    descriptions.extend(
+        tools
+            .iter()
+            .map(|tool| (tool.name().to_string(), tool.description().to_string())),
+    );
+}
+
+#[cfg(feature = "mcp")]
+fn append_mcp_tool_descriptions(
+    descriptions: &mut Vec<(String, String)>,
+    mcp_config: Option<&McpConfig>,
+) {
+    if let Some(config) = mcp_config {
+        let mcp_tools = crate::mcp::client::create_mcp_tools(config);
+        append_dynamic_tool_descriptions(descriptions, &mcp_tools);
+    }
+}
+
+#[cfg(not(feature = "mcp"))]
+fn append_mcp_tool_descriptions(
+    _descriptions: &mut Vec<(String, String)>,
+    _mcp_config: Option<&McpConfig>,
+) {
 }
 
 /// Create full tool registry including memory tools and optional Composio
@@ -110,6 +143,7 @@ pub fn all_tools(
     composio_key: Option<&str>,
     browser_config: &crate::config::BrowserConfig,
     tools_config: &ToolsConfig,
+    mcp_config: Option<&McpConfig>,
 ) -> Vec<Box<dyn Tool>> {
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
@@ -160,15 +194,95 @@ pub fn all_tools(
         tools.push(Box::new(ComposioTool::new(key)));
     }
 
+    append_mcp_tools(&mut tools, mcp_config);
+
     tools
 }
+
+#[cfg(feature = "mcp")]
+fn append_mcp_tools(tools: &mut Vec<Box<dyn Tool>>, mcp_config: Option<&McpConfig>) {
+    if let Some(config) = mcp_config {
+        tools.extend(crate::mcp::client::create_mcp_tools(config));
+    }
+}
+
+#[cfg(not(feature = "mcp"))]
+fn append_mcp_tools(_tools: &mut Vec<Box<dyn Tool>>, _mcp_config: Option<&McpConfig>) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::schema::ToolEntry;
+    use crate::config::schema::{McpConfig, McpServerConfig, McpTransport, ToolEntry};
     use crate::config::{BrowserConfig, MemoryConfig};
+    use async_trait::async_trait;
+    use std::collections::HashMap;
     use tempfile::TempDir;
+
+    fn markdown_memory(tmp: &TempDir) -> Arc<dyn Memory> {
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap())
+    }
+
+    fn enabled_mcp_config_without_servers() -> McpConfig {
+        McpConfig {
+            enabled: true,
+            import_json: None,
+            servers: Vec::new(),
+        }
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    fn enabled_mcp_config_with_empty_server() -> McpConfig {
+        McpConfig {
+            enabled: true,
+            import_json: None,
+            servers: vec![McpServerConfig {
+                name: "empty".to_string(),
+                transport: McpTransport::Stdio {
+                    command: String::new(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                },
+                enabled: true,
+                max_call_seconds: 30,
+            }],
+        }
+    }
+
+    struct MockTool {
+        name: String,
+        description: String,
+    }
+
+    #[async_trait]
+    impl Tool for MockTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            &self.description
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+            _ctx: &ExecutionContext,
+        ) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult {
+                success: true,
+                output: String::new(),
+                error: None,
+            })
+        }
+    }
 
     #[test]
     fn default_tools_has_three() {
@@ -195,7 +309,7 @@ mod tests {
         };
 
         let tools_cfg = ToolsConfig::default();
-        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"browser_open"));
     }
@@ -218,7 +332,7 @@ mod tests {
         };
 
         let tools_cfg = ToolsConfig::default();
-        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"browser_open"));
     }
@@ -332,7 +446,7 @@ mod tests {
         let mut tools_cfg = ToolsConfig::default();
         tools_cfg.shell.enabled = false;
 
-        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"shell"));
     }
@@ -352,7 +466,7 @@ mod tests {
         let mut tools_cfg = ToolsConfig::default();
         tools_cfg.file_read.enabled = false;
 
-        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"file_read"));
     }
@@ -371,7 +485,7 @@ mod tests {
         let browser = BrowserConfig::default();
         let tools_cfg = ToolsConfig::default();
 
-        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"memory_forget"));
     }
@@ -391,7 +505,7 @@ mod tests {
         let mut tools_cfg = ToolsConfig::default();
         tools_cfg.memory_forget.enabled = true;
 
-        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"memory_forget"));
     }
@@ -418,7 +532,7 @@ mod tests {
             memory_governance: ToolEntry { enabled: false },
         };
 
-        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
         assert_eq!(tools.len(), 0);
     }
 
@@ -436,7 +550,7 @@ mod tests {
         let browser = BrowserConfig::default();
         let tools_cfg = ToolsConfig::default();
 
-        let tools = all_tools(&security, mem, None, &browser, &tools_cfg);
+        let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
 
         assert!(names.contains(&"shell"));
@@ -446,5 +560,211 @@ mod tests {
         assert!(names.contains(&"memory_recall"));
         assert!(!names.contains(&"memory_forget"));
         assert!(!names.contains(&"memory_governance"));
+    }
+
+    #[test]
+    fn tool_descriptions_contains_core_tools() {
+        let descriptions = tool_descriptions(false, false, None);
+        let names: Vec<&str> = descriptions
+            .iter()
+            .map(|(name, _description)| name.as_str())
+            .collect();
+        assert!(names.contains(&"shell"));
+        assert!(names.contains(&"file_read"));
+        assert!(names.contains(&"file_write"));
+        assert!(names.contains(&"memory_store"));
+        assert!(names.contains(&"memory_recall"));
+        assert!(names.contains(&"memory_forget"));
+    }
+
+    #[test]
+    fn tool_descriptions_respects_browser_flag() {
+        let disabled = tool_descriptions(false, false, None);
+        let enabled = tool_descriptions(true, false, None);
+        let disabled_names: Vec<&str> = disabled
+            .iter()
+            .map(|(name, _description)| name.as_str())
+            .collect();
+        let enabled_names: Vec<&str> = enabled
+            .iter()
+            .map(|(name, _description)| name.as_str())
+            .collect();
+        assert!(!disabled_names.contains(&"browser_open"));
+        assert!(enabled_names.contains(&"browser_open"));
+    }
+
+    #[test]
+    fn tool_descriptions_respects_composio_flag() {
+        let disabled = tool_descriptions(false, false, None);
+        let enabled = tool_descriptions(false, true, None);
+        let disabled_names: Vec<&str> = disabled
+            .iter()
+            .map(|(name, _description)| name.as_str())
+            .collect();
+        let enabled_names: Vec<&str> = enabled
+            .iter()
+            .map(|(name, _description)| name.as_str())
+            .collect();
+        assert!(!disabled_names.contains(&"composio"));
+        assert!(enabled_names.contains(&"composio"));
+    }
+
+    #[test]
+    fn all_tools_none_mcp_matches_empty_mcp_config() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let browser = BrowserConfig::default();
+        let tools_cfg = ToolsConfig::default();
+        let baseline = all_tools(
+            &security,
+            markdown_memory(&tmp),
+            None,
+            &browser,
+            &tools_cfg,
+            None,
+        );
+        let with_empty_config = all_tools(
+            &security,
+            markdown_memory(&tmp),
+            None,
+            &browser,
+            &tools_cfg,
+            Some(&enabled_mcp_config_without_servers()),
+        );
+
+        let baseline_names: Vec<&str> = baseline.iter().map(|tool| tool.name()).collect();
+        let empty_names: Vec<&str> = with_empty_config.iter().map(|tool| tool.name()).collect();
+        assert_eq!(baseline_names, empty_names);
+    }
+
+    #[test]
+    fn tool_descriptions_none_mcp_matches_empty_mcp_config() {
+        let baseline = tool_descriptions(false, false, None);
+        let with_empty_config =
+            tool_descriptions(false, false, Some(&enabled_mcp_config_without_servers()));
+        assert_eq!(baseline, with_empty_config);
+    }
+
+    #[test]
+    fn append_dynamic_tool_descriptions_keeps_namespaced_mcp_names() {
+        let mut descriptions = vec![("shell".to_string(), "run commands".to_string())];
+        let dynamic_tools: Vec<Box<dyn Tool>> = vec![
+            Box::new(MockTool {
+                name: "mcp_filesystem_search".to_string(),
+                description: "Search files".to_string(),
+            }),
+            Box::new(MockTool {
+                name: "mcp_github_get_issue".to_string(),
+                description: "Fetch issue".to_string(),
+            }),
+        ];
+
+        append_dynamic_tool_descriptions(&mut descriptions, &dynamic_tools);
+        let dynamic_names: Vec<&str> = descriptions
+            .iter()
+            .skip(1)
+            .map(|(name, _description)| name.as_str())
+            .collect();
+        assert!(dynamic_names.iter().all(|name| name.starts_with("mcp_")));
+    }
+
+    #[test]
+    fn append_dynamic_tool_descriptions_appends_tool_descriptions() {
+        let mut descriptions = vec![("shell".to_string(), "run commands".to_string())];
+        let dynamic_tools: Vec<Box<dyn Tool>> = vec![Box::new(MockTool {
+            name: "mcp_docs_lookup".to_string(),
+            description: "Lookup docs".to_string(),
+        })];
+
+        append_dynamic_tool_descriptions(&mut descriptions, &dynamic_tools);
+
+        assert_eq!(descriptions.len(), 2);
+        assert_eq!(descriptions[1].0, "mcp_docs_lookup");
+        assert_eq!(descriptions[1].1, "Lookup docs");
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    #[test]
+    fn all_tools_accepts_mcp_config_but_ignores_it_without_feature() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let browser = BrowserConfig::default();
+        let tools_cfg = ToolsConfig::default();
+        let with_none = all_tools(
+            &security,
+            markdown_memory(&tmp),
+            None,
+            &browser,
+            &tools_cfg,
+            None,
+        );
+        let with_enabled_mcp = all_tools(
+            &security,
+            markdown_memory(&tmp),
+            None,
+            &browser,
+            &tools_cfg,
+            Some(&enabled_mcp_config_with_empty_server()),
+        );
+
+        let none_names: Vec<&str> = with_none.iter().map(|tool| tool.name()).collect();
+        let enabled_names: Vec<&str> = with_enabled_mcp.iter().map(|tool| tool.name()).collect();
+        assert_eq!(none_names, enabled_names);
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    #[test]
+    fn tool_descriptions_accepts_mcp_config_but_ignores_it_without_feature() {
+        let with_none = tool_descriptions(false, false, None);
+        let with_enabled_mcp =
+            tool_descriptions(false, false, Some(&enabled_mcp_config_with_empty_server()));
+        assert_eq!(with_none, with_enabled_mcp);
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn all_tools_with_empty_mcp_servers_matches_none() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let browser = BrowserConfig::default();
+        let tools_cfg = ToolsConfig::default();
+        let with_none = all_tools(
+            &security,
+            markdown_memory(&tmp),
+            None,
+            &browser,
+            &tools_cfg,
+            None,
+        );
+        let with_empty_servers = all_tools(
+            &security,
+            markdown_memory(&tmp),
+            None,
+            &browser,
+            &tools_cfg,
+            Some(&enabled_mcp_config_without_servers()),
+        );
+
+        let none_names: Vec<&str> = with_none.iter().map(|tool| tool.name()).collect();
+        let empty_names: Vec<&str> = with_empty_servers.iter().map(|tool| tool.name()).collect();
+        assert_eq!(none_names, empty_names);
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn tool_descriptions_with_empty_mcp_servers_matches_none() {
+        let with_none = tool_descriptions(false, false, None);
+        let with_empty_servers =
+            tool_descriptions(false, false, Some(&enabled_mcp_config_without_servers()));
+        assert_eq!(with_none, with_empty_servers);
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn tool_descriptions_with_disabled_mcp_config_matches_none() {
+        let with_none = tool_descriptions(false, false, None);
+        let disabled_mcp = McpConfig::default();
+        let with_disabled = tool_descriptions(false, false, Some(&disabled_mcp));
+        assert_eq!(with_none, with_disabled);
     }
 }

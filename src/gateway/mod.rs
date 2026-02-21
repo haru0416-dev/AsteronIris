@@ -170,6 +170,7 @@ pub async fn run_gateway_with_listener(
         composio_key,
         &config.browser,
         &config.tools,
+        Some(&config.mcp),
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = ToolRegistry::new(middleware);

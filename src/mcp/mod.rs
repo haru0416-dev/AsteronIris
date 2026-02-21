@@ -8,5 +8,7 @@ pub mod client;
 pub mod content;
 pub mod server;
 
+#[allow(unused_imports)]
 pub use client::manager::McpManager;
+#[allow(unused_imports)]
 pub use client::proxy_tool::McpToolProxy;

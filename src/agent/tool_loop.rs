@@ -1,7 +1,7 @@
 use crate::providers::response::{
     ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason,
 };
-use crate::providers::streaming::{ProviderChatRequest, StreamCollector};
+use crate::providers::streaming::{ProviderChatRequest, StreamCollector, StreamSink};
 use crate::providers::traits::Provider;
 use crate::tools::middleware::ExecutionContext;
 use crate::tools::registry::ToolRegistry;
@@ -52,6 +52,15 @@ pub struct ToolLoopResult {
     pub stop_reason: LoopStopReason,
 }
 
+struct ChatOnceInput<'a> {
+    system_prompt: Option<&'a str>,
+    messages: &'a [ProviderMessage],
+    tool_specs: &'a [ToolSpec],
+    model: &'a str,
+    temperature: f64,
+    stream_sink: Option<&'a dyn StreamSink>,
+}
+
 impl ToolLoop {
     pub fn new(registry: Arc<ToolRegistry>, max_iterations: u32) -> Self {
         Self {
@@ -70,6 +79,7 @@ impl ToolLoop {
         model: &str,
         temperature: f64,
         ctx: &ExecutionContext,
+        stream_sink: Option<Arc<dyn StreamSink>>,
     ) -> anyhow::Result<ToolLoopResult> {
         let tool_specs: Vec<ToolSpec> = self.registry.specs_for_context(ctx);
         let prompt = augment_prompt_with_trust_boundary(system_prompt, !tool_specs.is_empty());
@@ -110,11 +120,14 @@ impl ToolLoop {
             let response = match self
                 .chat_once(
                     provider,
-                    Some(prompt.as_str()),
-                    &messages,
-                    &tool_specs,
-                    model,
-                    temperature,
+                    ChatOnceInput {
+                        system_prompt: Some(prompt.as_str()),
+                        messages: &messages,
+                        tool_specs: &tool_specs,
+                        model,
+                        temperature,
+                        stream_sink: stream_sink.as_deref(),
+                    },
                 )
                 .await
             {
@@ -173,30 +186,35 @@ impl ToolLoop {
     async fn chat_once(
         &self,
         provider: &dyn Provider,
-        system_prompt: Option<&str>,
-        messages: &[ProviderMessage],
-        tool_specs: &[ToolSpec],
-        model: &str,
-        temperature: f64,
+        input: ChatOnceInput<'_>,
     ) -> anyhow::Result<ProviderResponse> {
         if provider.supports_streaming() {
             let req = ProviderChatRequest {
-                system_prompt: system_prompt.map(String::from),
-                messages: messages.to_vec(),
-                tools: tool_specs.to_vec(),
-                model: model.to_string(),
-                temperature,
+                system_prompt: input.system_prompt.map(String::from),
+                messages: input.messages.to_vec(),
+                tools: input.tool_specs.to_vec(),
+                model: input.model.to_string(),
+                temperature: input.temperature,
             };
             let mut stream = provider.chat_with_tools_stream(req).await?;
             let mut collector = StreamCollector::new();
             while let Some(event_result) = stream.next().await {
                 let event = event_result?;
+                if let Some(sink) = input.stream_sink {
+                    sink.on_event(&event).await;
+                }
                 collector.feed(&event);
             }
             Ok(collector.finish())
         } else {
             provider
-                .chat_with_tools(system_prompt, messages, tool_specs, model, temperature)
+                .chat_with_tools(
+                    input.system_prompt,
+                    input.messages,
+                    input.tool_specs,
+                    input.model,
+                    input.temperature,
+                )
                 .await
         }
     }
@@ -353,10 +371,12 @@ fn extract_last_text(messages: &[ProviderMessage]) -> String {
 mod tests {
     use super::*;
     use crate::providers::response::{ProviderResponse, StopReason};
+    use crate::providers::streaming::{ProviderChatRequest, StreamEvent, StreamSink};
     use crate::security::SecurityPolicy;
     use crate::tools::middleware::{MiddlewareDecision, ToolMiddleware};
     use crate::tools::traits::Tool;
     use async_trait::async_trait;
+    use futures_util::stream;
     use serde_json::{Value, json};
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -480,6 +500,80 @@ mod tests {
         }
     }
 
+    struct MockStreamingProvider {
+        events: Vec<StreamEvent>,
+    }
+
+    #[async_trait]
+    impl Provider for MockStreamingProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+
+        async fn chat_with_tools(
+            &self,
+            _system_prompt: Option<&str>,
+            _messages: &[ProviderMessage],
+            _tools: &[ToolSpec],
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<ProviderResponse> {
+            Ok(ProviderResponse::text_only("fallback".to_string()))
+        }
+
+        fn supports_streaming(&self) -> bool {
+            true
+        }
+
+        async fn chat_with_tools_stream(
+            &self,
+            _req: ProviderChatRequest,
+        ) -> anyhow::Result<crate::providers::streaming::ProviderStream> {
+            let items = self
+                .events
+                .iter()
+                .cloned()
+                .map(Ok::<_, anyhow::Error>)
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(items)))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        labels: Mutex<Vec<String>>,
+        deltas: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl StreamSink for RecordingSink {
+        async fn on_event(&self, event: &StreamEvent) {
+            let label = match event {
+                StreamEvent::ResponseStart { .. } => "response_start",
+                StreamEvent::TextDelta { .. } => "text_delta",
+                StreamEvent::ToolCallDelta { .. } => "tool_call_delta",
+                StreamEvent::ToolCallComplete { .. } => "tool_call_complete",
+                StreamEvent::Done { .. } => "done",
+            };
+            self.labels
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(label.to_string());
+            if let StreamEvent::TextDelta { text } = event {
+                self.deltas
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(text.clone());
+            }
+        }
+    }
+
     fn test_ctx() -> ExecutionContext {
         let security = Arc::new(SecurityPolicy::default());
         ExecutionContext::test_default(security)
@@ -526,6 +620,7 @@ mod tests {
                 "test-model",
                 0.2,
                 &test_ctx(),
+                None,
             )
             .await
             .unwrap();
@@ -592,6 +687,7 @@ mod tests {
                 "test-model",
                 0.2,
                 &test_ctx(),
+                None,
             )
             .await
             .unwrap();
@@ -651,6 +747,7 @@ mod tests {
                 "test-model",
                 0.2,
                 &test_ctx(),
+                None,
             )
             .await
             .unwrap();
@@ -687,6 +784,7 @@ mod tests {
                 "test-model",
                 0.2,
                 &test_ctx(),
+                None,
             )
             .await
             .unwrap();
@@ -718,6 +816,7 @@ mod tests {
                 "test-model",
                 0.2,
                 &test_ctx(),
+                None,
             )
             .await
             .unwrap();
@@ -726,6 +825,184 @@ mod tests {
         assert_eq!(result.iterations, 1);
         assert_eq!(result.final_text, "plain response");
         assert!(result.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn streaming_with_none_sink_preserves_behavior() {
+        let loop_ = ToolLoop::new(Arc::new(ToolRegistry::new(vec![])), 5);
+        let provider = MockStreamingProvider {
+            events: vec![
+                StreamEvent::ResponseStart { model: None },
+                StreamEvent::TextDelta {
+                    text: "hello".to_string(),
+                },
+                StreamEvent::TextDelta {
+                    text: " world".to_string(),
+                },
+                StreamEvent::Done {
+                    stop_reason: Some(StopReason::EndTurn),
+                    input_tokens: Some(3),
+                    output_tokens: Some(2),
+                },
+            ],
+        };
+
+        let result = loop_
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.stop_reason, LoopStopReason::Completed);
+        assert_eq!(result.final_text, "hello world");
+        assert_eq!(result.tokens_used, Some(5));
+    }
+
+    #[tokio::test]
+    async fn streaming_with_sink_receives_all_events_in_order() {
+        let loop_ = ToolLoop::new(Arc::new(ToolRegistry::new(vec![])), 5);
+        let provider = MockStreamingProvider {
+            events: vec![
+                StreamEvent::ResponseStart { model: None },
+                StreamEvent::TextDelta {
+                    text: "a".to_string(),
+                },
+                StreamEvent::TextDelta {
+                    text: "b".to_string(),
+                },
+                StreamEvent::Done {
+                    stop_reason: Some(StopReason::EndTurn),
+                    input_tokens: None,
+                    output_tokens: None,
+                },
+            ],
+        };
+        let sink = Arc::new(RecordingSink::default());
+
+        let result = loop_
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+                Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+            )
+            .await
+            .unwrap();
+
+        let labels = sink
+            .labels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let deltas = sink
+            .deltas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+
+        assert_eq!(result.final_text, "ab");
+        assert_eq!(
+            labels,
+            vec!["response_start", "text_delta", "text_delta", "done"]
+        );
+        assert_eq!(deltas, vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn streaming_sink_receives_non_text_events_without_breaking_collection() {
+        let loop_ = ToolLoop::new(Arc::new(ToolRegistry::new(vec![])), 5);
+        let provider = MockStreamingProvider {
+            events: vec![
+                StreamEvent::ResponseStart { model: None },
+                StreamEvent::ToolCallDelta {
+                    index: 0,
+                    id: None,
+                    name: None,
+                    input_json_delta: "{\"command\":\"ls\"}".to_string(),
+                },
+                StreamEvent::Done {
+                    stop_reason: Some(StopReason::ToolUse),
+                    input_tokens: None,
+                    output_tokens: None,
+                },
+            ],
+        };
+        let sink = Arc::new(RecordingSink::default());
+
+        let result = loop_
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+                Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+            )
+            .await
+            .unwrap();
+
+        let labels = sink
+            .labels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+
+        assert_eq!(labels, vec!["response_start", "tool_call_delta", "done"]);
+        assert!(result.final_text.is_empty());
+        assert_eq!(result.stop_reason, LoopStopReason::Completed);
+        assert!(result.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn non_streaming_provider_does_not_emit_sink_events() {
+        let loop_ = ToolLoop::new(Arc::new(ToolRegistry::new(vec![])), 5);
+        let provider = MockProvider {
+            responses: Mutex::new(VecDeque::from(vec![ProviderResponse {
+                text: "plain response".to_string(),
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                content_blocks: vec![],
+                stop_reason: Some(StopReason::EndTurn),
+            }])),
+        };
+        let sink = Arc::new(RecordingSink::default());
+
+        let result = loop_
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+                Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+            )
+            .await
+            .unwrap();
+
+        let labels = sink
+            .labels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert!(labels.is_empty());
+        assert_eq!(result.final_text, "plain response");
     }
 
     #[test]

@@ -93,6 +93,7 @@ async fn handle_client_message(
                     &state.model,
                     state.temperature,
                     &ctx,
+                    None,
                 )
                 .await
             {

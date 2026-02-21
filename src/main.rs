@@ -32,6 +32,8 @@ mod gateway;
 mod health;
 mod heartbeat;
 mod integrations;
+#[cfg(feature = "mcp")]
+mod mcp;
 #[cfg(feature = "media")]
 #[allow(unused_imports)]
 mod media;
