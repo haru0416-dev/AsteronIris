@@ -275,12 +275,15 @@ impl BrowserTool {
                 success: true,
                 output,
                 error: None,
+                attachments: Vec::new(),
             })
         } else {
             Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: resp.error,
+
+                attachments: Vec::new(),
             })
         }
     }
@@ -390,6 +393,8 @@ impl Tool for BrowserTool {
                 success: false,
                 output: String::new(),
                 error: Some("Action blocked: autonomy is read-only".into()),
+
+                attachments: Vec::new(),
             });
         }
 
@@ -398,6 +403,8 @@ impl Tool for BrowserTool {
                 success: false,
                 output: String::new(),
                 error: Some("Action blocked: rate limit exceeded".into()),
+
+                attachments: Vec::new(),
             });
         }
 
@@ -410,6 +417,8 @@ impl Tool for BrowserTool {
                     "agent-browser CLI not found. Install with: npm install -g agent-browser"
                         .into(),
                 ),
+
+                attachments: Vec::new(),
             });
         }
 
@@ -571,6 +580,8 @@ impl Tool for BrowserTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Unknown action: {action_str}")),
+
+                    attachments: Vec::new(),
                 });
             }
         };

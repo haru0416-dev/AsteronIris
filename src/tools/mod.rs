@@ -30,7 +30,10 @@ pub use registry::ToolRegistry;
 pub use shell::ShellTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
-pub use traits::{ActionIntent, ActionOperator, ActionResult, NoopOperator, ToolResult, ToolSpec};
+pub use traits::{
+    ActionIntent, ActionOperator, ActionResult, NoopOperator, OutputAttachment, ToolResult,
+    ToolSpec,
+};
 
 use crate::config::schema::{McpConfig, ToolsConfig};
 use crate::memory::Memory;
@@ -280,6 +283,8 @@ mod tests {
                 success: true,
                 output: String::new(),
                 error: None,
+
+                attachments: Vec::new(),
             })
         }
     }
@@ -397,12 +402,14 @@ mod tests {
             success: true,
             output: "hello".into(),
             error: None,
+            attachments: Vec::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ToolResult = serde_json::from_str(&json).unwrap();
         assert!(parsed.success);
         assert_eq!(parsed.output, "hello");
         assert!(parsed.error.is_none());
+        assert!(parsed.attachments.is_empty());
     }
 
     #[test]
@@ -411,11 +418,42 @@ mod tests {
             success: false,
             output: String::new(),
             error: Some("boom".into()),
+            attachments: Vec::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ToolResult = serde_json::from_str(&json).unwrap();
         assert!(!parsed.success);
         assert_eq!(parsed.error.as_deref(), Some("boom"));
+        assert!(parsed.attachments.is_empty());
+    }
+
+    #[test]
+    fn tool_result_deserialize_without_attachments_still_works() {
+        let json = r#"{"success":true,"output":"ok","error":null}"#;
+        let parsed: ToolResult = serde_json::from_str(json).unwrap();
+        assert!(parsed.success);
+        assert!(parsed.attachments.is_empty());
+    }
+
+    #[test]
+    fn tool_result_with_attachments_serde() {
+        let result = ToolResult {
+            success: true,
+            output: "image generated".into(),
+            error: None,
+            attachments: vec![OutputAttachment::from_path(
+                "image/png",
+                "/tmp/generated.png",
+                Some("generated.png".to_string()),
+            )],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: ToolResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(
+            parsed.attachments[0].path.as_deref(),
+            Some("/tmp/generated.png")
+        );
     }
 
     #[test]

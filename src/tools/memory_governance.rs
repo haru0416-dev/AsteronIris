@@ -411,6 +411,8 @@ impl Tool for MemoryGovernanceTool {
                 })
                 .to_string(),
                 error: Some(error.to_string()),
+
+                attachments: Vec::new(),
             });
         }
 
@@ -457,6 +459,8 @@ impl Tool for MemoryGovernanceTool {
             success: true,
             output: output.to_string(),
             error: None,
+
+            attachments: Vec::new(),
         })
     }
 }

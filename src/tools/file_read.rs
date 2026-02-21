@@ -58,6 +58,8 @@ impl Tool for FileReadTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Failed to resolve file path: {e}")),
+
+                    attachments: Vec::new(),
                 });
             }
         };
@@ -69,6 +71,8 @@ impl Tool for FileReadTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Failed to read file: {e}")),
+
+                    attachments: Vec::new(),
                 });
             }
         };
@@ -81,6 +85,8 @@ impl Tool for FileReadTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Failed to read file metadata: {e}")),
+
+                    attachments: Vec::new(),
                 });
             }
         };
@@ -92,6 +98,8 @@ impl Tool for FileReadTool {
                     "File too large: {} bytes (limit: {MAX_FILE_SIZE} bytes)",
                     metadata.len()
                 )),
+
+                attachments: Vec::new(),
             });
         }
 
@@ -102,6 +110,8 @@ impl Tool for FileReadTool {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Failed to read file: {e}")),
+
+                attachments: Vec::new(),
             });
         }
 
@@ -110,11 +120,15 @@ impl Tool for FileReadTool {
                 success: true,
                 output: contents,
                 error: None,
+
+                attachments: Vec::new(),
             }),
             Err(_) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some("Failed to read file: file is not valid UTF-8".to_string()),
+
+                attachments: Vec::new(),
             }),
         }
     }

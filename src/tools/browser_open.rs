@@ -90,6 +90,8 @@ impl Tool for BrowserOpenTool {
                     success: false,
                     output: String::new(),
                     error: Some(e.to_string()),
+
+                    attachments: Vec::new(),
                 });
             }
         };
@@ -99,11 +101,15 @@ impl Tool for BrowserOpenTool {
                 success: true,
                 output: format!("Opened in Brave: {url}"),
                 error: None,
+
+                attachments: Vec::new(),
             }),
             Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Failed to open Brave Browser: {e}")),
+
+                attachments: Vec::new(),
             }),
         }
     }

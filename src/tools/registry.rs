@@ -66,6 +66,8 @@ impl ToolRegistry {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Tool not found: {name}")),
+
+                attachments: Vec::new(),
             });
         };
 
@@ -77,6 +79,8 @@ impl ToolRegistry {
                         success: false,
                         output: String::new(),
                         error: Some(reason),
+
+                        attachments: Vec::new(),
                     });
                 }
                 MiddlewareDecision::RequireApproval(intent) => {
@@ -110,6 +114,8 @@ impl ToolRegistry {
                                 error: Some(format!(
                                     "tool execution denied by approval broker: {reason}"
                                 )),
+
+                                attachments: Vec::new(),
                             });
                         }
                     }
@@ -188,6 +194,8 @@ mod tests {
                 success: true,
                 output: "ok".to_string(),
                 error: None,
+
+                attachments: Vec::new(),
             })
         }
     }

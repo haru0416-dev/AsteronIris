@@ -13,6 +13,44 @@ pub struct ToolResult {
     pub success: bool,
     pub output: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<OutputAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutputAttachment {
+    pub mime_type: String,
+    pub filename: Option<String>,
+    pub path: Option<String>,
+    pub url: Option<String>,
+}
+
+impl OutputAttachment {
+    pub fn from_path(
+        mime_type: impl Into<String>,
+        path: impl Into<String>,
+        filename: Option<String>,
+    ) -> Self {
+        Self {
+            mime_type: mime_type.into(),
+            filename,
+            path: Some(path.into()),
+            url: None,
+        }
+    }
+
+    pub fn from_url(
+        mime_type: impl Into<String>,
+        url: impl Into<String>,
+        filename: Option<String>,
+    ) -> Self {
+        Self {
+            mime_type: mime_type.into(),
+            filename,
+            path: None,
+            url: Some(url.into()),
+        }
+    }
 }
 
 /// Description of a tool for the LLM
@@ -182,5 +220,112 @@ impl ActionOperator for NoopOperator {
             message: message.to_string(),
             audit_record_path,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OutputAttachment, ToolResult};
+    use serde_json::json;
+
+    #[test]
+    fn tool_result_serde_defaults_attachments_when_missing() {
+        let raw = json!({
+            "success": true,
+            "output": "ok",
+            "error": null
+        });
+
+        let parsed: ToolResult = serde_json::from_value(raw).unwrap();
+        assert!(parsed.attachments.is_empty());
+    }
+
+    #[test]
+    fn tool_result_serde_roundtrip_with_empty_attachments() {
+        let result = ToolResult {
+            success: true,
+            output: "ok".to_string(),
+            error: None,
+            attachments: Vec::new(),
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        let parsed: ToolResult = serde_json::from_value(json).unwrap();
+        assert!(parsed.success);
+        assert!(parsed.attachments.is_empty());
+    }
+
+    #[test]
+    fn tool_result_serde_roundtrip_with_attachments() {
+        let result = ToolResult {
+            success: true,
+            output: "done".to_string(),
+            error: None,
+            attachments: vec![OutputAttachment::from_path(
+                "image/png",
+                "/tmp/chart.png",
+                Some("chart.png".to_string()),
+            )],
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        let parsed: ToolResult = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(
+            parsed.attachments[0].path.as_deref(),
+            Some("/tmp/chart.png")
+        );
+    }
+
+    #[test]
+    fn output_attachment_from_path_sets_path_only() {
+        let attachment = OutputAttachment::from_path(
+            "image/png",
+            "/tmp/image.png",
+            Some("image.png".to_string()),
+        );
+
+        assert_eq!(attachment.mime_type, "image/png");
+        assert_eq!(attachment.path.as_deref(), Some("/tmp/image.png"));
+        assert!(attachment.url.is_none());
+    }
+
+    #[test]
+    fn output_attachment_from_url_sets_url_only() {
+        let attachment = OutputAttachment::from_url(
+            "image/png",
+            "https://example.com/image.png",
+            Some("image.png".to_string()),
+        );
+
+        assert_eq!(attachment.mime_type, "image/png");
+        assert!(attachment.path.is_none());
+        assert_eq!(
+            attachment.url.as_deref(),
+            Some("https://example.com/image.png")
+        );
+    }
+
+    #[test]
+    fn output_attachment_serde_roundtrip_path_variant() {
+        let attachment =
+            OutputAttachment::from_path("text/plain", "/tmp/out.txt", Some("out.txt".to_string()));
+
+        let json = serde_json::to_value(&attachment).unwrap();
+        let parsed: OutputAttachment = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.path.as_deref(), Some("/tmp/out.txt"));
+    }
+
+    #[test]
+    fn output_attachment_serde_roundtrip_url_variant() {
+        let attachment =
+            OutputAttachment::from_url("application/pdf", "https://example.com/report.pdf", None);
+
+        let json = serde_json::to_value(&attachment).unwrap();
+        let parsed: OutputAttachment = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            parsed.url.as_deref(),
+            Some("https://example.com/report.pdf")
+        );
     }
 }

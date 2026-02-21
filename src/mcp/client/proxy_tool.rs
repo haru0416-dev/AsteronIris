@@ -41,6 +41,7 @@ impl McpToolProxy {
             success: true,
             output: render_content_to_text(content),
             error: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -49,6 +50,7 @@ impl McpToolProxy {
             success: false,
             output: String::new(),
             error: Some(error.to_string()),
+            attachments: Vec::new(),
         }
     }
 

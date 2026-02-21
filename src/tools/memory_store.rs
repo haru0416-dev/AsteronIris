@@ -255,11 +255,15 @@ impl Tool for MemoryStoreTool {
                 success: true,
                 output: format!("Stored memory event: {}", event.event_id),
                 error: None,
+
+                attachments: Vec::new(),
             }),
             Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Failed to store memory: {e}")),
+
+                attachments: Vec::new(),
             }),
         }
     }

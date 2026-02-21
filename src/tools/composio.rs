@@ -128,6 +128,7 @@ impl ComposioTool {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[async_trait]
 impl Tool for ComposioTool {
     fn name(&self) -> &str {
@@ -215,12 +216,15 @@ impl Tool for ComposioTool {
                             success: true,
                             output,
                             error: None,
+                            attachments: Vec::new(),
                         })
                     }
                     Err(e) => Ok(ToolResult {
                         success: false,
                         output: String::new(),
                         error: Some(format!("Failed to list actions: {e}")),
+
+                        attachments: Vec::new(),
                     }),
                 }
             }
@@ -244,12 +248,15 @@ impl Tool for ComposioTool {
                             success: true,
                             output,
                             error: None,
+                            attachments: Vec::new(),
                         })
                     }
                     Err(e) => Ok(ToolResult {
                         success: false,
                         output: String::new(),
                         error: Some(format!("Action execution failed: {e}")),
+
+                        attachments: Vec::new(),
                     }),
                 }
             }
@@ -265,11 +272,15 @@ impl Tool for ComposioTool {
                         success: true,
                         output: format!("Open this URL to connect {app}:\n{url}"),
                         error: None,
+
+                        attachments: Vec::new(),
                     }),
                     Err(e) => Ok(ToolResult {
                         success: false,
                         output: String::new(),
                         error: Some(format!("Failed to get connection URL: {e}")),
+
+                        attachments: Vec::new(),
                     }),
                 }
             }
@@ -280,6 +291,8 @@ impl Tool for ComposioTool {
                 error: Some(format!(
                     "Unknown action '{action}'. Use 'list', 'execute', or 'connect'."
                 )),
+
+                attachments: Vec::new(),
             }),
         }
     }

@@ -97,12 +97,16 @@ impl Tool for ShellTool {
                     } else {
                         Some(stderr)
                     },
+
+                    attachments: Vec::new(),
                 })
             }
             Ok(Err(e)) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Failed to execute command: {e}")),
+
+                attachments: Vec::new(),
             }),
             Err(_) => Ok(ToolResult {
                 success: false,
@@ -110,6 +114,8 @@ impl Tool for ShellTool {
                 error: Some(format!(
                     "Command timed out after {SHELL_TIMEOUT_SECS}s and was killed"
                 )),
+
+                attachments: Vec::new(),
             }),
         }
     }

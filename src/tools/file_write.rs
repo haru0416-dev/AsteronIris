@@ -61,6 +61,8 @@ impl Tool for FileWriteTool {
                 success: false,
                 output: String::new(),
                 error: Some("Invalid path: missing parent directory".into()),
+
+                attachments: Vec::new(),
             });
         };
 
@@ -74,6 +76,8 @@ impl Tool for FileWriteTool {
                             "Invalid path: parent is not a directory: {}",
                             parent.display()
                         )),
+
+                        attachments: Vec::new(),
                     });
                 }
             }
@@ -85,6 +89,8 @@ impl Tool for FileWriteTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Failed to inspect parent directory: {e}")),
+
+                    attachments: Vec::new(),
                 });
             }
         }
@@ -97,6 +103,8 @@ impl Tool for FileWriteTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Failed to resolve file path: {e}")),
+
+                    attachments: Vec::new(),
                 });
             }
         };
@@ -106,6 +114,8 @@ impl Tool for FileWriteTool {
                 success: false,
                 output: String::new(),
                 error: Some("Invalid path: missing file name".into()),
+
+                attachments: Vec::new(),
             });
         };
 
@@ -122,6 +132,8 @@ impl Tool for FileWriteTool {
                     "Refusing to write through symlink: {}",
                     resolved_target.display()
                 )),
+
+                attachments: Vec::new(),
             });
         }
 
@@ -130,11 +142,15 @@ impl Tool for FileWriteTool {
                 success: true,
                 output: format!("Written {} bytes to {path}", content.len()),
                 error: None,
+
+                attachments: Vec::new(),
             }),
             Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Failed to write file: {e}")),
+
+                attachments: Vec::new(),
             }),
         }
     }

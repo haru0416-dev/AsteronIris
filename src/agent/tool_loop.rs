@@ -5,7 +5,7 @@ use crate::providers::streaming::{ProviderChatRequest, StreamCollector, StreamSi
 use crate::providers::traits::Provider;
 use crate::tools::middleware::ExecutionContext;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::traits::{ToolResult, ToolSpec};
+use crate::tools::traits::{OutputAttachment, ToolResult, ToolSpec};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -47,6 +47,7 @@ pub enum LoopStopReason {
 pub struct ToolLoopResult {
     pub final_text: String,
     pub tool_calls: Vec<ToolCallRecord>,
+    pub attachments: Vec<OutputAttachment>,
     pub iterations: u32,
     pub tokens_used: Option<u64>,
     pub stop_reason: LoopStopReason,
@@ -69,7 +70,7 @@ impl ToolLoop {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub async fn run(
         &self,
         provider: &dyn Provider,
@@ -97,6 +98,7 @@ impl ToolLoop {
         };
         let mut messages = vec![initial_message];
         let mut tool_calls = Vec::new();
+        let mut attachments = Vec::new();
         let mut iterations = 0_u32;
         let mut token_sum = 0_u64;
         let mut saw_tokens = false;
@@ -107,6 +109,7 @@ impl ToolLoop {
                 return Ok(build_result(
                     &messages,
                     tool_calls,
+                    attachments,
                     iterations.saturating_sub(1),
                     token_sum,
                     saw_tokens,
@@ -136,6 +139,7 @@ impl ToolLoop {
                     return Ok(build_result(
                         &messages,
                         tool_calls,
+                        attachments,
                         iterations,
                         token_sum,
                         saw_tokens,
@@ -160,11 +164,18 @@ impl ToolLoop {
                         iterations,
                         &mut messages,
                         &mut tool_calls,
+                        &mut attachments,
                     )
                     .await;
                 if let Some(reason) = outcome.stop_reason {
                     return Ok(build_result(
-                        &messages, tool_calls, iterations, token_sum, saw_tokens, reason,
+                        &messages,
+                        tool_calls,
+                        attachments,
+                        iterations,
+                        token_sum,
+                        saw_tokens,
+                        reason,
                     ));
                 }
                 if outcome.had_tool_use {
@@ -175,6 +186,7 @@ impl ToolLoop {
             return Ok(build_result(
                 &messages,
                 tool_calls,
+                attachments,
                 iterations,
                 token_sum,
                 saw_tokens,
@@ -226,6 +238,7 @@ impl ToolLoop {
         iteration: u32,
         messages: &mut Vec<ProviderMessage>,
         tool_calls: &mut Vec<ToolCallRecord>,
+        attachments: &mut Vec<OutputAttachment>,
     ) -> ToolUseExecutionOutcome {
         let mut had_tool_use = false;
 
@@ -245,6 +258,7 @@ impl ToolLoop {
                             success: false,
                             output: String::new(),
                             error: Some(error.to_string()),
+                            attachments: Vec::new(),
                         }
                     }
                 };
@@ -261,6 +275,7 @@ impl ToolLoop {
                 }
 
                 let tool_result_content = format_tool_result_content(&tool_result);
+                attachments.extend(tool_result.attachments.iter().cloned());
                 tool_calls.push(ToolCallRecord {
                     tool_name: name.clone(),
                     args: input.clone(),
@@ -295,6 +310,7 @@ struct ToolUseExecutionOutcome {
 fn build_result(
     messages: &[ProviderMessage],
     tool_calls: Vec<ToolCallRecord>,
+    attachments: Vec<OutputAttachment>,
     iterations: u32,
     token_sum: u64,
     saw_tokens: bool,
@@ -303,6 +319,7 @@ fn build_result(
     ToolLoopResult {
         final_text: extract_last_text(messages),
         tool_calls,
+        attachments,
         iterations,
         tokens_used: saw_tokens.then_some(token_sum),
         stop_reason,
@@ -374,7 +391,7 @@ mod tests {
     use crate::providers::streaming::{ProviderChatRequest, StreamEvent, StreamSink};
     use crate::security::SecurityPolicy;
     use crate::tools::middleware::{MiddlewareDecision, ToolMiddleware};
-    use crate::tools::traits::Tool;
+    use crate::tools::traits::{OutputAttachment, Tool};
     use async_trait::async_trait;
     use futures_util::stream;
     use serde_json::{Value, json};
@@ -383,6 +400,9 @@ mod tests {
 
     #[derive(Debug)]
     struct EchoTool;
+
+    #[derive(Debug)]
+    struct AttachmentTool;
 
     #[async_trait]
     impl Tool for EchoTool {
@@ -407,6 +427,41 @@ mod tests {
                 success: true,
                 output: args.to_string(),
                 error: None,
+
+                attachments: Vec::new(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl Tool for AttachmentTool {
+        fn name(&self) -> &str {
+            "attachment_tool"
+        }
+
+        fn description(&self) -> &str {
+            "Attachment tool"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            args: Value,
+            _ctx: &ExecutionContext,
+        ) -> anyhow::Result<ToolResult> {
+            let index = args.get("index").and_then(Value::as_u64).unwrap_or(0);
+            Ok(ToolResult {
+                success: true,
+                output: format!("attachment {index}"),
+                error: None,
+                attachments: vec![OutputAttachment::from_path(
+                    "image/png",
+                    format!("/tmp/generated-{index}.png"),
+                    Some(format!("generated-{index}.png")),
+                )],
             })
         }
     }
@@ -864,6 +919,105 @@ mod tests {
         assert_eq!(result.stop_reason, LoopStopReason::Completed);
         assert_eq!(result.final_text, "hello world");
         assert_eq!(result.tokens_used, Some(5));
+        assert!(result.attachments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn loop_result_aggregates_attachments_across_tool_calls() {
+        let mut registry = ToolRegistry::new(vec![]);
+        registry.register(Box::new(AttachmentTool));
+        let loop_ = ToolLoop::new(Arc::new(registry), 10);
+        let provider = MockProvider {
+            responses: Mutex::new(VecDeque::from(vec![
+                ProviderResponse {
+                    text: String::new(),
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    content_blocks: vec![ContentBlock::ToolUse {
+                        id: "toolu_1".to_string(),
+                        name: "attachment_tool".to_string(),
+                        input: json!({"index": 1}),
+                    }],
+                    stop_reason: Some(StopReason::ToolUse),
+                },
+                ProviderResponse {
+                    text: String::new(),
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    content_blocks: vec![ContentBlock::ToolUse {
+                        id: "toolu_2".to_string(),
+                        name: "attachment_tool".to_string(),
+                        input: json!({"index": 2}),
+                    }],
+                    stop_reason: Some(StopReason::ToolUse),
+                },
+                ProviderResponse {
+                    text: "done".to_string(),
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    content_blocks: vec![],
+                    stop_reason: Some(StopReason::EndTurn),
+                },
+            ])),
+        };
+
+        let result = loop_
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.attachments.len(), 2);
+        assert_eq!(
+            result.attachments[0].path.as_deref(),
+            Some("/tmp/generated-1.png")
+        );
+        assert_eq!(
+            result.attachments[1].path.as_deref(),
+            Some("/tmp/generated-2.png")
+        );
+    }
+
+    #[tokio::test]
+    async fn loop_result_attachments_empty_without_tool_uses() {
+        let loop_ = ToolLoop::new(Arc::new(ToolRegistry::new(vec![])), 5);
+        let provider = MockProvider {
+            responses: Mutex::new(VecDeque::from(vec![ProviderResponse {
+                text: "plain response".to_string(),
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                content_blocks: vec![],
+                stop_reason: Some(StopReason::EndTurn),
+            }])),
+        };
+
+        let result = loop_
+            .run(
+                &provider,
+                "system",
+                "hello",
+                &[],
+                "test-model",
+                0.2,
+                &test_ctx(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.attachments.is_empty());
     }
 
     #[tokio::test]
