@@ -3,6 +3,11 @@
 Guidance for AI coding agents operating in the AsteronIris repository.
 Rust 2024 edition, stable toolchain, clippy pedantic, anyhow/thiserror errors.
 
+## Prerequisites
+
+- Rust stable toolchain (see `rust-toolchain.toml`)
+- [protoc](https://grpc.io/docs/protoc-installation/) v29+ (required by build/CI)
+
 ## Commands
 
 ```bash
@@ -22,12 +27,17 @@ cargo test --test memory -- comparison    # single test by name substring
 cargo test --test memory -- comparison --exact  # exact test name match
 BACKEND=sqlite cargo test --release --test memory -- throughput --nocapture
 
+# Other aliases (defined in .cargo/config.toml)
+cargo build-fast                          # trimmed feature set build
+cargo build-minimal                       # bundled-sqlite only
+cargo check-all                           # check with all features
+cargo coverage                            # llvm-cov HTML report
+
 # Security audits
 cargo audit
 cargo deny check advisories licenses sources
 ```
 
-Aliases (`test-dev`, etc.) are defined in `.cargo/config.toml`.
 Pre-push hook (`.githooks/pre-push`) enforces fmt + clippy + test.
 Install: `git config core.hooksPath .githooks`
 
@@ -118,8 +128,8 @@ Use braced imports to merge from the same crate: `use serde::{Deserialize, Seria
 ### Feature Gates
 
 - `#[cfg(feature = "...")]` for optional modules/code.
-- Default features: `email`, `vector-search`, `tui`, `bundled-sqlite`.
-- Feature-gated modules: `lancedb` (vector-search), `ratatui`/`crossterm` (tui), `lettre`/`mail-parser` (email), `infer`/`mime` (media).
+- Default features: `email`, `vector-search`, `tui`, `bundled-sqlite`, `media`, `link-extraction`.
+- Feature-gated modules: `lancedb` (vector-search), `ratatui`/`crossterm` (tui), `lettre`/`mail-parser` (email), `infer`/`mime` (media), `scraper` (link-extraction), `rmcp` (mcp).
 
 ## Test Structure
 
