@@ -80,3 +80,98 @@ impl SqliteMemory {
         Ok(scored)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        SqliteMemory::init_schema(&conn).unwrap();
+        conn
+    }
+
+    fn insert_test_memory(
+        conn: &Connection,
+        id: &str,
+        key: &str,
+        content: &str,
+        embedding: Option<&[f32]>,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let emb_blob = embedding.map(crate::core::memory::vector::vec_to_bytes);
+        conn.execute(
+            "INSERT INTO memories (id, key, content, created_at, updated_at, embedding) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, key, content, now, now, emb_blob],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fts5_search_matching_query_returns_positive_scores() {
+        let conn = fresh_db();
+        insert_test_memory(
+            &conn,
+            "m1",
+            "astronomy_note",
+            "The galaxy has many bright stars",
+            None,
+        );
+        insert_test_memory(
+            &conn,
+            "m2",
+            "science_note",
+            "A galaxy can contain black holes",
+            None,
+        );
+
+        let results = SqliteMemory::fts5_search(&conn, "galaxy", 10).unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|(_, score)| *score > 0.0));
+    }
+
+    #[test]
+    fn fts5_search_empty_query_returns_empty_results() {
+        let conn = fresh_db();
+        insert_test_memory(&conn, "m1", "key", "content", None);
+
+        let results = SqliteMemory::fts5_search(&conn, "", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn fts5_search_no_matches_returns_empty_results() {
+        let conn = fresh_db();
+        insert_test_memory(&conn, "m1", "alpha", "rust language", None);
+
+        let results = SqliteMemory::fts5_search(&conn, "nonexistent_term", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn vector_search_matching_embeddings_are_sorted_by_similarity() {
+        let conn = fresh_db();
+        insert_test_memory(&conn, "closest", "k1", "high similarity", Some(&[1.0, 0.0]));
+        insert_test_memory(&conn, "near", "k2", "medium similarity", Some(&[0.8, 0.2]));
+        insert_test_memory(
+            &conn,
+            "orthogonal",
+            "k3",
+            "zero similarity",
+            Some(&[0.0, 1.0]),
+        );
+
+        let results = SqliteMemory::vector_search(&conn, &[1.0, 0.0], 10).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "closest");
+        assert_eq!(results[1].0, "near");
+        assert!(results[0].1 > results[1].1);
+    }
+
+    #[test]
+    fn vector_search_empty_table_returns_empty_results() {
+        let conn = fresh_db();
+        let results = SqliteMemory::vector_search(&conn, &[1.0, 0.0], 10).unwrap();
+        assert!(results.is_empty());
+    }
+}

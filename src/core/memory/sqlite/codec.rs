@@ -92,3 +92,160 @@ impl SqliteMemory {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn all_layers() -> [MemoryLayer; 5] {
+        [
+            MemoryLayer::Working,
+            MemoryLayer::Episodic,
+            MemoryLayer::Semantic,
+            MemoryLayer::Procedural,
+            MemoryLayer::Identity,
+        ]
+    }
+
+    #[test]
+    fn category_round_trip() {
+        let categories = [
+            MemoryCategory::Core,
+            MemoryCategory::Daily,
+            MemoryCategory::Conversation,
+            MemoryCategory::Custom("foo".to_string()),
+        ];
+
+        for category in categories {
+            let encoded = SqliteMemory::category_to_str(&category);
+            let decoded = SqliteMemory::str_to_category(&encoded);
+            assert_eq!(decoded, category);
+        }
+    }
+
+    #[test]
+    fn source_round_trip_for_all_variants() {
+        let sources = [
+            MemorySource::ExplicitUser,
+            MemorySource::ToolVerified,
+            MemorySource::System,
+            MemorySource::Inferred,
+        ];
+
+        for source in sources {
+            let encoded = SqliteMemory::source_to_str(source);
+            let decoded = SqliteMemory::str_to_source(encoded);
+            assert_eq!(decoded, source);
+        }
+    }
+
+    #[test]
+    fn layer_to_str_maps_all_variants() {
+        assert_eq!(SqliteMemory::layer_to_str(MemoryLayer::Working), "working");
+        assert_eq!(
+            SqliteMemory::layer_to_str(MemoryLayer::Episodic),
+            "episodic"
+        );
+        assert_eq!(
+            SqliteMemory::layer_to_str(MemoryLayer::Semantic),
+            "semantic"
+        );
+        assert_eq!(
+            SqliteMemory::layer_to_str(MemoryLayer::Procedural),
+            "procedural"
+        );
+        assert_eq!(
+            SqliteMemory::layer_to_str(MemoryLayer::Identity),
+            "identity"
+        );
+    }
+
+    #[test]
+    fn retention_tier_for_layer_maps_all_variants() {
+        assert_eq!(
+            SqliteMemory::retention_tier_for_layer(MemoryLayer::Working),
+            "working"
+        );
+        assert_eq!(
+            SqliteMemory::retention_tier_for_layer(MemoryLayer::Episodic),
+            "episodic"
+        );
+        assert_eq!(
+            SqliteMemory::retention_tier_for_layer(MemoryLayer::Semantic),
+            "semantic"
+        );
+        assert_eq!(
+            SqliteMemory::retention_tier_for_layer(MemoryLayer::Procedural),
+            "procedural"
+        );
+        assert_eq!(
+            SqliteMemory::retention_tier_for_layer(MemoryLayer::Identity),
+            "identity"
+        );
+    }
+
+    #[test]
+    fn retention_expiry_for_layer_maps_expected_windows() {
+        let occurred_at = "2026-01-01T00:00:00+00:00";
+        let occurred = chrono::DateTime::parse_from_rfc3339(occurred_at).unwrap();
+
+        let working_expiry =
+            SqliteMemory::retention_expiry_for_layer(MemoryLayer::Working, occurred_at)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok());
+        assert_eq!(working_expiry, Some(occurred + chrono::Duration::days(2)));
+
+        let episodic_expiry =
+            SqliteMemory::retention_expiry_for_layer(MemoryLayer::Episodic, occurred_at)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok());
+        assert_eq!(episodic_expiry, Some(occurred + chrono::Duration::days(30)));
+
+        for layer in [
+            MemoryLayer::Semantic,
+            MemoryLayer::Procedural,
+            MemoryLayer::Identity,
+        ] {
+            assert!(SqliteMemory::retention_expiry_for_layer(layer, occurred_at).is_none());
+        }
+    }
+
+    #[test]
+    fn privacy_round_trip() {
+        let levels = [
+            PrivacyLevel::Public,
+            PrivacyLevel::Private,
+            PrivacyLevel::Secret,
+        ];
+
+        for level in levels {
+            let encoded = SqliteMemory::privacy_to_str(&level);
+            let decoded = SqliteMemory::str_to_privacy(encoded);
+            assert_eq!(decoded, level);
+        }
+    }
+
+    #[test]
+    fn str_to_source_unknown_defaults_to_system() {
+        assert_eq!(
+            SqliteMemory::str_to_source("unknown-source"),
+            MemorySource::System
+        );
+    }
+
+    #[test]
+    fn str_to_privacy_unknown_defaults_to_private() {
+        assert_eq!(
+            SqliteMemory::str_to_privacy("unknown-privacy"),
+            PrivacyLevel::Private
+        );
+    }
+
+    #[test]
+    fn retention_and_layer_strings_stay_in_sync() {
+        for layer in all_layers() {
+            assert_eq!(
+                SqliteMemory::retention_tier_for_layer(layer),
+                SqliteMemory::layer_to_str(layer)
+            );
+        }
+    }
+}

@@ -719,3 +719,90 @@ impl SqliteMemory {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        SqliteMemory::init_schema(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn init_schema_creates_expected_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        SqliteMemory::init_schema(&conn).unwrap();
+
+        let expected_tables = [
+            "memories",
+            "memories_fts",
+            "memory_events",
+            "belief_slots",
+            "retrieval_docs",
+            "deletion_ledger",
+            "embedding_cache",
+            "memory_schema_version",
+        ];
+
+        for table in expected_tables {
+            assert!(SqliteMemory::table_exists(&conn, table).unwrap());
+        }
+    }
+
+    #[test]
+    fn init_schema_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        SqliteMemory::init_schema(&conn).unwrap();
+        SqliteMemory::init_schema(&conn).unwrap();
+    }
+
+    #[test]
+    fn table_exists_reports_true_and_false() {
+        let conn = fresh_db();
+        assert!(SqliteMemory::table_exists(&conn, "memories").unwrap());
+        assert!(!SqliteMemory::table_exists(&conn, "not_a_real_table").unwrap());
+    }
+
+    #[test]
+    fn table_columns_returns_expected_columns() {
+        let conn = fresh_db();
+        let columns = SqliteMemory::table_columns(&conn, "memory_schema_version").unwrap();
+        assert_eq!(columns, vec!["id", "version", "updated_at"]);
+    }
+
+    #[test]
+    fn has_all_and_has_any_columns_handle_true_and_false_cases() {
+        let columns = vec!["alpha".to_string(), "beta".to_string()];
+        assert!(SqliteMemory::has_all_columns(&columns, &["alpha"]));
+        assert!(SqliteMemory::has_all_columns(&columns, &["alpha", "beta"]));
+        assert!(!SqliteMemory::has_all_columns(
+            &columns,
+            &["alpha", "gamma"]
+        ));
+
+        assert!(SqliteMemory::has_any_columns(&columns, &["beta", "gamma"]));
+        assert!(!SqliteMemory::has_any_columns(
+            &columns,
+            &["gamma", "delta"]
+        ));
+    }
+
+    #[test]
+    fn missing_columns_identifies_absent_values() {
+        let columns = vec!["alpha".to_string(), "gamma".to_string()];
+        let missing = SqliteMemory::missing_columns(&columns, &["alpha", "beta", "gamma"]);
+        assert_eq!(missing, vec!["beta"]);
+    }
+
+    #[test]
+    fn missing_v2_columns_identifies_required_event_columns() {
+        let columns = vec!["layer".to_string(), "provenance_source_class".to_string()];
+        let missing = SqliteMemory::missing_v2_columns(&columns);
+        assert_eq!(
+            missing,
+            vec!["provenance_reference", "provenance_evidence_uri"]
+        );
+    }
+}

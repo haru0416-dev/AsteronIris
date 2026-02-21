@@ -36,9 +36,10 @@ jobs:
   coverage:
     name: Coverage (baseline)
     runs-on: ubuntu-latest
-    continue-on-error: true
     env:
-      COVERAGE_BASELINE_THRESHOLD: "0"
+      # Gradual enforcement: raise this as coverage improves.
+      # Current baseline is conservative — increase after each test push.
+      COVERAGE_BASELINE_THRESHOLD: 40
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -53,7 +54,25 @@ jobs:
         run: cargo install cargo-llvm-cov
       - name: Generate lcov report
         run: cargo llvm-cov --lcov --output-path lcov.info -- --skip inventory_scope_lock::inventory_scope_lock
+      - name: Check coverage threshold
+        run: |
+          set -euo pipefail
+          TOTAL_LINES=$(grep -c '^DA:' lcov.info || echo 0)
+          HIT_LINES=$(grep '^DA:' lcov.info | grep -cv ',0$' || echo 0)
+          if [ "$TOTAL_LINES" -eq 0 ]; then
+            echo "::warning::No coverage data found"
+            exit 0
+          fi
+          COVERAGE=$((HIT_LINES * 100 / TOTAL_LINES))
+          echo "Line coverage: ${COVERAGE}% (${HIT_LINES}/${TOTAL_LINES} lines hit)"
+          echo "Threshold: ${COVERAGE_BASELINE_THRESHOLD}%"
+          if [ "$COVERAGE" -lt "$COVERAGE_BASELINE_THRESHOLD" ]; then
+            echo "::error::Coverage ${COVERAGE}% is below threshold ${COVERAGE_BASELINE_THRESHOLD}%"
+            exit 1
+          fi
+          echo "::notice::Coverage ${COVERAGE}% meets threshold ${COVERAGE_BASELINE_THRESHOLD}%"
       - name: Upload coverage report artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov
