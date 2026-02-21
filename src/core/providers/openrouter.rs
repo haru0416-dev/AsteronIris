@@ -441,10 +441,6 @@ impl OpenRouterProvider {
         Ok(response)
     }
 
-    fn parse_sse_data_lines(chunk: &str) -> Vec<&str> {
-        parse_data_lines_without_done(chunk)
-    }
-
     async fn chat_with_tools_stream_impl(
         &self,
         req: ProviderChatRequest,
@@ -490,7 +486,7 @@ impl OpenRouterProvider {
                 sse_buffer.push_chunk(&chunk);
 
                 while let Some(event_block) = sse_buffer.next_event_block() {
-                    for data in Self::parse_sse_data_lines(&event_block) {
+                    for data in parse_data_lines_without_done(&event_block) {
                         let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data) else {
                             continue;
                         };
@@ -754,14 +750,14 @@ mod tests {
     #[test]
     fn parse_sse_data_lines_basic() {
         let chunk = "data: {\"choices\":[]}\n\n";
-        let lines = OpenRouterProvider::parse_sse_data_lines(chunk);
+        let lines = parse_data_lines_without_done(chunk);
         assert_eq!(lines, vec!["{\"choices\":[]}"]);
     }
 
     #[test]
     fn parse_sse_data_lines_done_filtered() {
         let chunk = "data: [DONE]\n\ndata: {\"choices\":[]}\n\n";
-        let lines = OpenRouterProvider::parse_sse_data_lines(chunk);
+        let lines = parse_data_lines_without_done(chunk);
         assert_eq!(lines, vec!["{\"choices\":[]}"]);
     }
 

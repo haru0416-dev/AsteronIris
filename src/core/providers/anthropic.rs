@@ -231,10 +231,6 @@ impl AnthropicProvider {
         Ok(response)
     }
 
-    fn parse_sse_events(chunk: &str) -> Vec<(&str, &str)> {
-        parse_event_data_pairs(chunk)
-    }
-
     fn stream_events_from_sse(
         event_type: &str,
         data: &str,
@@ -360,7 +356,7 @@ impl AnthropicProvider {
                 sse_buffer.push_chunk(&chunk);
 
                 while let Some(event_block) = sse_buffer.next_event_block() {
-                    for (event_type, data) in Self::parse_sse_events(&event_block) {
+                    for (event_type, data) in parse_event_data_pairs(&event_block) {
                         for event in Self::stream_events_from_sse(
                             event_type,
                             data,
@@ -810,7 +806,7 @@ mod tests {
     #[test]
     fn parse_sse_events_basic() {
         let chunk = "event: message_start\ndata: {\"message\":{}}\n\n";
-        let events = AnthropicProvider::parse_sse_events(chunk);
+        let events = parse_event_data_pairs(chunk);
         assert_eq!(events, vec![("message_start", "{\"message\":{}}")]);
     }
 
@@ -822,7 +818,7 @@ mod tests {
             "event: content_block_delta\n",
             "data: {\"delta\":{}}\n\n"
         );
-        let events = AnthropicProvider::parse_sse_events(chunk);
+        let events = parse_event_data_pairs(chunk);
         assert_eq!(
             events,
             vec![
@@ -834,7 +830,7 @@ mod tests {
 
     #[test]
     fn parse_sse_events_empty() {
-        let events = AnthropicProvider::parse_sse_events("");
+        let events = parse_event_data_pairs("");
         assert!(events.is_empty());
     }
 

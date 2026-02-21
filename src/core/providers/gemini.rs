@@ -426,10 +426,6 @@ impl GeminiProvider {
         Ok(response)
     }
 
-    fn parse_sse_data_lines(chunk: &str) -> Vec<&str> {
-        parse_data_lines(chunk)
-    }
-
     async fn chat_with_tools_stream_impl(
         &self,
         req: ProviderChatRequest,
@@ -457,7 +453,7 @@ impl GeminiProvider {
                 sse_buffer.push_chunk(&chunk);
 
                 while let Some(event_block) = sse_buffer.next_event_block() {
-                    for data in Self::parse_sse_data_lines(&event_block) {
+                    for data in parse_data_lines(&event_block) {
                         let Ok(gen_response) = serde_json::from_str::<GenerateContentResponse>(data) else {
                             continue;
                         };
@@ -950,7 +946,7 @@ mod tests {
             "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}]}}]}\n\n",
             "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" world\"}]}}]}\n\n"
         );
-        let lines = GeminiProvider::parse_sse_data_lines(chunk);
+        let lines = parse_data_lines(chunk);
         assert_eq!(lines.len(), 2);
         assert_eq!(
             lines[0],
@@ -964,7 +960,7 @@ mod tests {
 
     #[test]
     fn parse_sse_data_lines_empty() {
-        let lines = GeminiProvider::parse_sse_data_lines("");
+        let lines = parse_data_lines("");
         assert!(lines.is_empty());
     }
 

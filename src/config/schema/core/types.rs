@@ -1,14 +1,12 @@
-use super::{
+use super::super::{
     AutonomyConfig, ChannelsConfig, GatewayConfig, McpConfig, MemoryConfig, ObservabilityConfig,
     ToolsConfig, TunnelConfig,
 };
 use crate::media::types::MediaConfig;
-use crate::security::SecretStore;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use directories::UserDirs;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -80,36 +78,6 @@ pub struct Config {
 
 fn default_locale() -> String {
     "en".into()
-}
-
-/// Detect locale: `ASTERONIRIS_LANG` env → config value → system `LANG` → `"en"`.
-fn detect_locale(config_locale: &str) -> String {
-    if let Ok(lang) = std::env::var("ASTERONIRIS_LANG") {
-        let lang = lang.trim().to_lowercase();
-        if !lang.is_empty() {
-            return normalise_locale(&lang);
-        }
-    }
-
-    if config_locale != "en" && !config_locale.is_empty() {
-        return normalise_locale(config_locale);
-    }
-
-    if let Ok(lang) = std::env::var("LANG").or_else(|_| std::env::var("LC_MESSAGES")) {
-        let lang = lang.trim().to_lowercase();
-        if !lang.is_empty() {
-            return normalise_locale(&lang);
-        }
-    }
-
-    "en".into()
-}
-
-/// Normalise `"ja_JP.UTF-8"` → `"ja"`, `"en_US"` → `"en"`, passthrough `"ja"`.
-fn normalise_locale(raw: &str) -> String {
-    let base = raw.split('.').next().unwrap_or(raw);
-    let lang = base.split('_').next().unwrap_or(base);
-    lang.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,74 +305,6 @@ impl Default for HeartbeatConfig {
     }
 }
 
-fn decrypt_secret_string(
-    value: &mut String,
-    store: &SecretStore,
-    encrypt_enabled: bool,
-) -> Result<bool> {
-    let current = value.trim();
-    if current.is_empty() {
-        return Ok(false);
-    }
-
-    let needs_encrypt_persist = encrypt_enabled && !SecretStore::is_encrypted(current);
-    let (decrypted, migrated) = store.decrypt_and_migrate(current)?;
-    *value = decrypted;
-
-    Ok(needs_encrypt_persist || migrated.is_some())
-}
-
-fn decrypt_secret_option(
-    value: &mut Option<String>,
-    store: &SecretStore,
-    encrypt_enabled: bool,
-) -> Result<bool> {
-    let Some(current) = value.as_deref() else {
-        return Ok(false);
-    };
-
-    let trimmed = current.trim();
-    if trimmed.is_empty() {
-        return Ok(false);
-    }
-
-    let needs_encrypt_persist = encrypt_enabled && !SecretStore::is_encrypted(trimmed);
-    let (decrypted, migrated) = store.decrypt_and_migrate(trimmed)?;
-    *value = Some(decrypted);
-
-    Ok(needs_encrypt_persist || migrated.is_some())
-}
-
-fn encrypt_secret_string(value: &mut String, store: &SecretStore) -> Result<()> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || SecretStore::is_encrypted(trimmed) {
-        if trimmed != value {
-            *value = trimmed.to_string();
-        }
-        return Ok(());
-    }
-
-    *value = store.encrypt(trimmed)?;
-    Ok(())
-}
-
-fn encrypt_secret_option(value: &mut Option<String>, store: &SecretStore) -> Result<()> {
-    let Some(current) = value.as_deref() else {
-        return Ok(());
-    };
-
-    let trimmed = current.trim();
-    if trimmed.is_empty() || SecretStore::is_encrypted(trimmed) {
-        if trimmed != current {
-            *value = Some(trimmed.to_string());
-        }
-        return Ok(());
-    }
-
-    *value = Some(store.encrypt(trimmed)?);
-    Ok(())
-}
-
 impl Default for Config {
     fn default() -> Self {
         let home =
@@ -451,235 +351,6 @@ impl Config {
         Ok(())
     }
 
-    fn secret_store_root(&self) -> &Path {
-        self.config_path.parent().unwrap_or_else(|| Path::new("."))
-    }
-
-    fn secret_store(&self) -> SecretStore {
-        SecretStore::new(self.secret_store_root(), self.secrets.encrypt)
-    }
-
-    fn decrypt_config_secrets_in_place(&mut self) -> Result<bool> {
-        let store = self.secret_store();
-        let mut needs_persist = false;
-
-        needs_persist |= decrypt_secret_option(&mut self.api_key, &store, self.secrets.encrypt)?;
-        needs_persist |=
-            decrypt_secret_option(&mut self.composio.api_key, &store, self.secrets.encrypt)?;
-
-        if let Some(telegram) = self.channels_config.telegram.as_mut() {
-            needs_persist |=
-                decrypt_secret_string(&mut telegram.bot_token, &store, self.secrets.encrypt)?;
-        }
-
-        if let Some(discord) = self.channels_config.discord.as_mut() {
-            needs_persist |=
-                decrypt_secret_string(&mut discord.bot_token, &store, self.secrets.encrypt)?;
-        }
-
-        if let Some(slack) = self.channels_config.slack.as_mut() {
-            needs_persist |=
-                decrypt_secret_string(&mut slack.bot_token, &store, self.secrets.encrypt)?;
-            needs_persist |=
-                decrypt_secret_option(&mut slack.app_token, &store, self.secrets.encrypt)?;
-        }
-
-        if let Some(webhook) = self.channels_config.webhook.as_mut() {
-            needs_persist |=
-                decrypt_secret_option(&mut webhook.secret, &store, self.secrets.encrypt)?;
-        }
-
-        if let Some(matrix) = self.channels_config.matrix.as_mut() {
-            needs_persist |=
-                decrypt_secret_string(&mut matrix.access_token, &store, self.secrets.encrypt)?;
-        }
-
-        if let Some(whatsapp) = self.channels_config.whatsapp.as_mut() {
-            needs_persist |=
-                decrypt_secret_string(&mut whatsapp.access_token, &store, self.secrets.encrypt)?;
-            needs_persist |=
-                decrypt_secret_string(&mut whatsapp.verify_token, &store, self.secrets.encrypt)?;
-            needs_persist |=
-                decrypt_secret_option(&mut whatsapp.app_secret, &store, self.secrets.encrypt)?;
-        }
-
-        if let Some(irc) = self.channels_config.irc.as_mut() {
-            needs_persist |=
-                decrypt_secret_option(&mut irc.server_password, &store, self.secrets.encrypt)?;
-            needs_persist |=
-                decrypt_secret_option(&mut irc.nickserv_password, &store, self.secrets.encrypt)?;
-            needs_persist |=
-                decrypt_secret_option(&mut irc.sasl_password, &store, self.secrets.encrypt)?;
-        }
-
-        if let Some(cloudflare) = self.tunnel.cloudflare.as_mut() {
-            needs_persist |=
-                decrypt_secret_string(&mut cloudflare.token, &store, self.secrets.encrypt)?;
-        }
-
-        if let Some(ngrok) = self.tunnel.ngrok.as_mut() {
-            needs_persist |=
-                decrypt_secret_string(&mut ngrok.auth_token, &store, self.secrets.encrypt)?;
-        }
-
-        Ok(needs_persist)
-    }
-
-    fn encrypt_config_secrets_in_place(&mut self) -> Result<()> {
-        if !self.secrets.encrypt {
-            return Ok(());
-        }
-
-        let store = self.secret_store();
-
-        encrypt_secret_option(&mut self.api_key, &store)?;
-        encrypt_secret_option(&mut self.composio.api_key, &store)?;
-
-        if let Some(telegram) = self.channels_config.telegram.as_mut() {
-            encrypt_secret_string(&mut telegram.bot_token, &store)?;
-        }
-
-        if let Some(discord) = self.channels_config.discord.as_mut() {
-            encrypt_secret_string(&mut discord.bot_token, &store)?;
-        }
-
-        if let Some(slack) = self.channels_config.slack.as_mut() {
-            encrypt_secret_string(&mut slack.bot_token, &store)?;
-            encrypt_secret_option(&mut slack.app_token, &store)?;
-        }
-
-        if let Some(webhook) = self.channels_config.webhook.as_mut() {
-            encrypt_secret_option(&mut webhook.secret, &store)?;
-        }
-
-        if let Some(matrix) = self.channels_config.matrix.as_mut() {
-            encrypt_secret_string(&mut matrix.access_token, &store)?;
-        }
-
-        if let Some(whatsapp) = self.channels_config.whatsapp.as_mut() {
-            encrypt_secret_string(&mut whatsapp.access_token, &store)?;
-            encrypt_secret_string(&mut whatsapp.verify_token, &store)?;
-            encrypt_secret_option(&mut whatsapp.app_secret, &store)?;
-        }
-
-        if let Some(irc) = self.channels_config.irc.as_mut() {
-            encrypt_secret_option(&mut irc.server_password, &store)?;
-            encrypt_secret_option(&mut irc.nickserv_password, &store)?;
-            encrypt_secret_option(&mut irc.sasl_password, &store)?;
-        }
-
-        if let Some(cloudflare) = self.tunnel.cloudflare.as_mut() {
-            encrypt_secret_string(&mut cloudflare.token, &store)?;
-        }
-
-        if let Some(ngrok) = self.tunnel.ngrok.as_mut() {
-            encrypt_secret_string(&mut ngrok.auth_token, &store)?;
-        }
-
-        Ok(())
-    }
-
-    fn config_for_persistence(&self) -> Result<Self> {
-        let mut persisted = self.clone();
-        persisted.encrypt_config_secrets_in_place()?;
-        Ok(persisted)
-    }
-
-    pub fn load_or_init() -> Result<Self> {
-        let home = UserDirs::new()
-            .map(|u| u.home_dir().to_path_buf())
-            .context("Could not find home directory")?;
-        let asteroniris_dir = home.join(".asteroniris");
-        let config_path = asteroniris_dir.join("config.toml");
-
-        if !asteroniris_dir.exists() {
-            fs::create_dir_all(&asteroniris_dir)
-                .context("Failed to create .asteroniris directory")?;
-            fs::create_dir_all(asteroniris_dir.join("workspace"))
-                .context("Failed to create workspace directory")?;
-        }
-
-        if config_path.exists() {
-            let contents =
-                fs::read_to_string(&config_path).context("Failed to read config file")?;
-            let mut config: Config =
-                toml::from_str(&contents).context("Failed to parse config file")?;
-            config.config_path.clone_from(&config_path);
-            config.workspace_dir = asteroniris_dir.join("workspace");
-
-            let secrets_need_persist = config.decrypt_config_secrets_in_place()?;
-            if secrets_need_persist {
-                config.save()?;
-            }
-
-            config.validate_autonomy_controls()?;
-            Ok(config)
-        } else {
-            let config = Self {
-                config_path: config_path.clone(),
-                workspace_dir: asteroniris_dir.join("workspace"),
-                ..Self::default()
-            };
-            config.validate_autonomy_controls()?;
-            config.save()?;
-            Ok(config)
-        }
-    }
-
-    /// Detect locale from env → config → system, then set `rust_i18n::set_locale`.
-    pub fn apply_locale(&self) {
-        let locale = detect_locale(&self.locale);
-        rust_i18n::set_locale(&locale);
-    }
-
-    pub fn apply_env_overrides(&mut self) {
-        if let Ok(key) = std::env::var("ASTERONIRIS_API_KEY").or_else(|_| std::env::var("API_KEY"))
-            && !key.is_empty()
-        {
-            self.api_key = Some(key);
-        }
-
-        if let Ok(provider) =
-            std::env::var("ASTERONIRIS_PROVIDER").or_else(|_| std::env::var("PROVIDER"))
-            && !provider.is_empty()
-        {
-            self.default_provider = Some(provider);
-        }
-
-        if let Ok(model) = std::env::var("ASTERONIRIS_MODEL")
-            && !model.is_empty()
-        {
-            self.default_model = Some(model);
-        }
-
-        if let Ok(workspace) = std::env::var("ASTERONIRIS_WORKSPACE")
-            && !workspace.is_empty()
-        {
-            self.workspace_dir = PathBuf::from(workspace);
-        }
-
-        if let Ok(port_str) =
-            std::env::var("ASTERONIRIS_GATEWAY_PORT").or_else(|_| std::env::var("PORT"))
-            && let Ok(port) = port_str.parse::<u16>()
-        {
-            self.gateway.port = port;
-        }
-
-        if let Ok(host) =
-            std::env::var("ASTERONIRIS_GATEWAY_HOST").or_else(|_| std::env::var("HOST"))
-            && !host.is_empty()
-        {
-            self.gateway.host = host;
-        }
-
-        if let Ok(temp_str) = std::env::var("ASTERONIRIS_TEMPERATURE")
-            && let Ok(temp) = temp_str.parse::<f64>()
-            && (0.0..=2.0).contains(&temp)
-        {
-            self.default_temperature = temp;
-        }
-    }
-
     /// Returns `true` when the config appears to be a fresh default that has
     /// never been through onboarding (no API key, no provider explicitly chosen,
     /// and no env var overrides).
@@ -689,13 +360,6 @@ impl Config {
             return false;
         }
         self.api_key.is_none() && self.default_provider.is_none()
-    }
-
-    pub fn save(&self) -> Result<()> {
-        let persisted = self.config_for_persistence()?;
-        let toml_str = toml::to_string_pretty(&persisted).context("Failed to serialize config")?;
-        fs::write(&self.config_path, toml_str).context("Failed to write config file")?;
-        Ok(())
     }
 }
 
@@ -749,35 +413,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn detect_locale_uses_expected_priority_order() {
-        let _lock = ENV_LOCK.lock().unwrap();
-
-        let _lang = EnvVarGuard::set("LANG", "pt_BR.UTF-8");
-        let _lc_messages = EnvVarGuard::set("LC_MESSAGES", "es_ES.UTF-8");
-
-        let _asteroniris_lang = EnvVarGuard::set("ASTERONIRIS_LANG", "ja_JP.UTF-8");
-        assert_eq!(detect_locale("fr_FR"), "ja");
-        drop(_asteroniris_lang);
-
-        assert_eq!(detect_locale("fr_FR"), "fr");
-        assert_eq!(detect_locale("en"), "pt");
-
-        let _lang_unset = EnvVarGuard::unset("LANG");
-        assert_eq!(detect_locale("en"), "es");
-
-        let _lc_messages_unset = EnvVarGuard::unset("LC_MESSAGES");
-        assert_eq!(detect_locale("en"), "en");
-    }
-
-    #[test]
-    fn normalise_locale_handles_common_formats() {
-        assert_eq!(normalise_locale("ja_JP.UTF-8"), "ja");
-        assert_eq!(normalise_locale("en_US"), "en");
-        assert_eq!(normalise_locale("en"), "en");
-        assert_eq!(normalise_locale(""), "");
     }
 
     #[test]

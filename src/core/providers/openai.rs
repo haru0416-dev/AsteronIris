@@ -1,3 +1,8 @@
+use super::openai_types::{
+    ChatCompletionChunk, ChatRequest, ChatResponse, ContentPart, ImageUrlContent, Message,
+    MessageContent, OpenAiTool, OpenAiToolCall, OpenAiToolCallFunction, OpenAiToolDefinition,
+    StreamOptions,
+};
 use crate::core::providers::{
     ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
     build_provider_client, scrub_secret_patterns,
@@ -10,144 +15,12 @@ use crate::core::tools::traits::ToolSpec;
 use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub struct OpenAiProvider {
     /// Pre-computed `"Bearer <key>"` header value (avoids `format!` per request).
     cached_auth_header: Option<String>,
     client: Client,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<Message>,
-    temperature: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OpenAiTool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream_options: Option<StreamOptions>,
-}
-
-#[derive(Debug, Serialize)]
-struct StreamOptions {
-    include_usage: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct Message {
-    role: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<MessageContent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<OpenAiToolCall>>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum MessageContent {
-    Text(String),
-    Parts(Vec<ContentPart>),
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ContentPart {
-    Text { text: String },
-    ImageUrl { image_url: ImageUrlContent },
-}
-
-#[derive(Debug, Serialize)]
-struct ImageUrlContent {
-    url: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct OpenAiTool {
-    r#type: &'static str,
-    function: OpenAiToolDefinition,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct OpenAiToolDefinition {
-    name: String,
-    description: String,
-    parameters: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenAiToolCall {
-    id: String,
-    r#type: String,
-    function: OpenAiToolCallFunction,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenAiToolCallFunction {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
-    usage: Option<Usage>,
-    model: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Usage {
-    prompt_tokens: u64,
-    completion_tokens: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct Choice {
-    message: ResponseMessage,
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseMessage {
-    content: Option<String>,
-    tool_calls: Option<Vec<OpenAiToolCall>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionChunk {
-    model: Option<String>,
-    choices: Vec<ChunkChoice>,
-    usage: Option<Usage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChunkChoice {
-    delta: ChunkDelta,
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChunkDelta {
-    content: Option<String>,
-    tool_calls: Option<Vec<ChunkToolCall>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChunkToolCall {
-    index: u32,
-    id: Option<String>,
-    function: Option<ChunkToolCallFunction>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChunkToolCallFunction {
-    name: Option<String>,
-    arguments: Option<String>,
 }
 
 impl OpenAiProvider {
@@ -444,10 +317,6 @@ impl OpenAiProvider {
         Ok(response)
     }
 
-    fn parse_sse_data_lines(chunk: &str) -> Vec<&str> {
-        parse_data_lines_without_done(chunk)
-    }
-
     async fn chat_with_tools_stream_impl(
         &self,
         req: ProviderChatRequest,
@@ -493,7 +362,7 @@ impl OpenAiProvider {
                 sse_buffer.push_chunk(&chunk);
 
                 while let Some(event_block) = sse_buffer.next_event_block() {
-                    for data in Self::parse_sse_data_lines(&event_block) {
+                    for data in parse_data_lines_without_done(&event_block) {
                         let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data) else {
                             continue;
                         };
@@ -894,14 +763,14 @@ mod tests {
     #[test]
     fn parse_sse_data_lines_basic() {
         let chunk = "data: {\"choices\":[]}\n\n";
-        let lines = OpenAiProvider::parse_sse_data_lines(chunk);
+        let lines = parse_data_lines_without_done(chunk);
         assert_eq!(lines, vec!["{\"choices\":[]}"]);
     }
 
     #[test]
     fn parse_sse_data_lines_done_filtered() {
         let chunk = "data: [DONE]\n\ndata: {\"choices\":[]}\n\n";
-        let lines = OpenAiProvider::parse_sse_data_lines(chunk);
+        let lines = parse_data_lines_without_done(chunk);
         assert_eq!(lines, vec!["{\"choices\":[]}"]);
     }
 
