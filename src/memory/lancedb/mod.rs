@@ -72,8 +72,7 @@ struct ProjectionEntry {
     id: String,
     key: String,
     content: String,
-    #[allow(dead_code)]
-    // Set during deserialization; read in tests (e.g. lancedb_store_get_upsert_and_recall)
+    #[allow(dead_code)] // Deserialized for test assertions in LanceDB projection flows
     category: MemoryCategory,
     timestamp: String,
     source: MemorySource,

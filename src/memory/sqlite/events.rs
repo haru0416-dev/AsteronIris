@@ -1,4 +1,4 @@
-use super::SqliteMemory;
+use super::{MutexLockAnyhow, SqliteMemory};
 use crate::memory::{
     BeliefSlot, ForgetArtifact, ForgetArtifactCheck, ForgetArtifactObservation, ForgetMode,
     ForgetOutcome,
@@ -15,10 +15,7 @@ impl SqliteMemory {
         entity_id: &str,
         slot_key: &str,
     ) -> anyhow::Result<Option<BeliefSlot>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
 
         let mut stmt = conn
             .prepare(
@@ -52,10 +49,7 @@ impl SqliteMemory {
         mode: ForgetMode,
         reason: &str,
     ) -> anyhow::Result<ForgetOutcome> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
         let now = Local::now().to_rfc3339();
         let phase = match mode {
             ForgetMode::Soft => "soft",
@@ -316,10 +310,7 @@ impl SqliteMemory {
     }
 
     pub(super) async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
 
         let count: i64 = if let Some(entity) = entity_id {
             conn.query_row(

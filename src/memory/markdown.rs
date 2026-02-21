@@ -25,10 +25,10 @@ struct ParsedMarkdownLine {
     key: String,
     content: String,
     // Populated during [md:...] tag parsing — retained for future layer-aware recall
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for planned layer-aware recall logic
     layer: Option<MemoryLayer>,
     // Populated during [md:...] tag parsing — retained for future layer-aware recall
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for planned provenance-aware recall logic
     provenance: Option<MemoryProvenance>,
 }
 
@@ -411,7 +411,7 @@ impl MarkdownMemory {
     }
 
     // Used by unit tests in this module (e.g. markdown_list_by_category)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Test-only helper for category filtering assertions
     async fn list_projection_entries(
         &self,
         category: Option<&MemoryCategory>,

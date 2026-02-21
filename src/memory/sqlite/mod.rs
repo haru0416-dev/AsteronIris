@@ -11,6 +11,17 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// Extension trait for `Mutex::lock()` — converts `PoisonError` to `anyhow::Error`.
+pub(crate) trait MutexLockAnyhow<T> {
+    fn lock_anyhow(&self) -> anyhow::Result<std::sync::MutexGuard<'_, T>>;
+}
+
+impl<T> MutexLockAnyhow<T> for Mutex<T> {
+    fn lock_anyhow(&self) -> anyhow::Result<std::sync::MutexGuard<'_, T>> {
+        self.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))
+    }
+}
+
 mod codec;
 mod events;
 mod projection;
@@ -29,14 +40,12 @@ mod search;
 pub struct SqliteMemory {
     conn: Mutex<Connection>,
     // Retained for diagnostics and potential reconnection logic
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for diagnostics and future reconnection workflows
     db_path: PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
     // Used by the projection search layer (search_projection) — currently dormant
-    #[allow(dead_code)]
     vector_weight: f32,
     // Used by the projection search layer (search_projection) — currently dormant
-    #[allow(dead_code)]
     keyword_weight: f32,
     cache_max: usize,
 }
@@ -176,10 +185,7 @@ impl SqliteMemory {
 
         // Check cache
         {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            let conn = self.conn.lock_anyhow()?;
 
             let mut stmt = conn
                 .prepare_cached("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")
@@ -203,10 +209,7 @@ impl SqliteMemory {
 
         // Store in cache + LRU eviction
         {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            let conn = self.conn.lock_anyhow()?;
 
             conn.execute(
                 "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, created_at, accessed_at)
@@ -233,14 +236,10 @@ impl SqliteMemory {
 
     /// Safe reindex: rebuild FTS5 + embeddings with rollback on failure.
     /// Public maintenance API — callable externally for manual index rebuilds.
-    #[allow(dead_code)]
     pub async fn reindex(&self) -> anyhow::Result<usize> {
         // Step 1: Rebuild FTS5
         {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            let conn = self.conn.lock_anyhow()?;
 
             conn.execute_batch("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")?;
         }
@@ -251,10 +250,7 @@ impl SqliteMemory {
         }
 
         let entries: Vec<(String, String)> = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            let conn = self.conn.lock_anyhow()?;
 
             let mut stmt =
                 conn.prepare_cached("SELECT id, content FROM memories WHERE embedding IS NULL")?;
@@ -268,10 +264,7 @@ impl SqliteMemory {
         for (id, content) in &entries {
             if let Ok(Some(emb)) = self.get_or_compute_embedding(content).await {
                 let bytes = vector::vec_to_bytes(&emb);
-                let conn = self
-                    .conn
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+                let conn = self.conn.lock_anyhow()?;
                 conn.execute(
                     "UPDATE memories SET embedding = ?1 WHERE id = ?2",
                     params![bytes, id],

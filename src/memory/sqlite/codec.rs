@@ -4,7 +4,6 @@ use crate::memory::{MemoryCategory, MemorySource, PrivacyLevel};
 
 impl SqliteMemory {
     // Used by projection layer methods (upsert/list_projection_entry) — currently dormant
-    #[allow(dead_code)]
     pub(super) fn category_to_str(cat: &MemoryCategory) -> String {
         match cat {
             MemoryCategory::Core => "core".into(),
@@ -15,7 +14,6 @@ impl SqliteMemory {
     }
 
     // Used by projection layer methods (fetch/list/keyword search) — currently dormant
-    #[allow(dead_code)]
     pub(super) fn str_to_category(s: &str) -> MemoryCategory {
         match s {
             "core" => MemoryCategory::Core,

@@ -1,4 +1,4 @@
-use super::SqliteMemory;
+use super::{MutexLockAnyhow, SqliteMemory};
 use crate::memory::traits::MemoryLayer;
 use crate::memory::vector;
 use crate::memory::{
@@ -58,10 +58,7 @@ impl SqliteMemory {
         input: MemoryEventInput,
     ) -> anyhow::Result<MemoryEvent> {
         let input = input.normalize_for_ingress()?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
 
         let event_id = Uuid::new_v4().to_string();
         let ingested_at = Local::now().to_rfc3339();
@@ -316,10 +313,7 @@ impl SqliteMemory {
             return Ok(Vec::new());
         }
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
 
         let like_query = format!("%{}%", query.query);
         #[allow(clippy::cast_possible_wrap)]
@@ -418,7 +412,7 @@ impl SqliteMemory {
     }
 
     // Projection layer — prepared API for direct key/value memory operations, not yet wired to Memory trait
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Projection API kept for planned Memory-trait wiring
     pub(super) async fn upsert_projection_entry(
         &self,
         key: &str,
@@ -430,10 +424,7 @@ impl SqliteMemory {
             .await?
             .map(|emb| vector::vec_to_bytes(&emb));
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
         let now = Local::now().to_rfc3339();
         let cat = Self::category_to_str(&category);
         let layer = Self::layer_to_str(MemoryLayer::Working);
@@ -476,7 +467,7 @@ impl SqliteMemory {
     }
 
     // Projection layer — hybrid vector+keyword search, not yet wired to Memory trait
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Projection API kept for planned Memory-trait wiring
     pub(super) async fn search_projection(
         &self,
         query: &str,
@@ -490,10 +481,7 @@ impl SqliteMemory {
 
         let search_limit = limit.saturating_mul(2);
         let (keyword_results, vector_results) = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            let conn = self.conn.lock_anyhow()?;
 
             let keyword_results = Self::fts5_search(&conn, query, search_limit).unwrap_or_default();
             let vector_results = if let Some(ref qe) = query_embedding {
@@ -531,10 +519,7 @@ impl SqliteMemory {
             .map(|scored| scored.id.clone())
             .collect::<Vec<_>>();
         let mut entries_by_id = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            let conn = self.conn.lock_anyhow()?;
             Self::fetch_entries_by_ids(&conn, &merged_ids)?
         };
 
@@ -546,10 +531,7 @@ impl SqliteMemory {
         }
 
         if results.is_empty() {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            let conn = self.conn.lock_anyhow()?;
             results.extend(Self::keyword_fallback_search(&conn, query, limit)?);
         }
 
@@ -558,7 +540,6 @@ impl SqliteMemory {
     }
 
     // Called by search_projection — projection layer currently dormant
-    #[allow(dead_code)]
     fn fetch_entries_by_ids(
         conn: &rusqlite::Connection,
         ids: &[String],
@@ -595,7 +576,6 @@ impl SqliteMemory {
     }
 
     // Called by search_projection — projection layer currently dormant
-    #[allow(dead_code)]
     fn keyword_fallback_search(
         conn: &rusqlite::Connection,
         query: &str,
@@ -664,10 +644,7 @@ impl SqliteMemory {
         &self,
         key: &str,
     ) -> anyhow::Result<Option<MemoryEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
 
         let mut stmt = conn.prepare_cached(
             "SELECT id, key, content, category, created_at FROM memories WHERE key = ?1",
@@ -697,10 +674,7 @@ impl SqliteMemory {
         &self,
         category: Option<&MemoryCategory>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
 
         let mut results = Vec::with_capacity(64);
 
@@ -743,10 +717,7 @@ impl SqliteMemory {
     // Projection layer — not yet wired to Memory trait
     #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn delete_projection_entry(&self, key: &str) -> anyhow::Result<bool> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
         let affected = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
         Ok(affected > 0)
     }
@@ -754,10 +725,7 @@ impl SqliteMemory {
     // Projection layer — not yet wired to Memory trait
     #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn count_projection_entries(&self) -> anyhow::Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self.conn.lock_anyhow()?;
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?;
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Ok(count as usize)

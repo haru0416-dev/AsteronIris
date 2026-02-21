@@ -1,3 +1,4 @@
+use anyhow::Context;
 use async_trait::async_trait;
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -170,8 +171,7 @@ fn validate_custom_base_url(raw: &str, policy: CustomBaseUrlPolicy) -> anyhow::R
         anyhow::bail!("custom embedding base URL is empty");
     }
 
-    let url = reqwest::Url::parse(raw)
-        .map_err(|_| anyhow::anyhow!("invalid custom embedding base URL"))?;
+    let url = reqwest::Url::parse(raw).context("invalid custom embedding base URL")?;
 
     match url.scheme() {
         "https" => {}
@@ -249,7 +249,7 @@ impl EmbeddingProvider for OpenAiEmbedding {
             .json(&body)
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Embedding HTTP request failed: {e}"))?;
+            .context("embedding HTTP request failed")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
