@@ -457,6 +457,10 @@ impl Channel for EmailChannel {
                             sender,
                             content,
                             channel: "email".to_string(),
+                            conversation_id: None,
+                            thread_id: None,
+                            reply_to: None,
+                            message_id: None,
                             timestamp: ts,
                             attachments: Vec::new(),
                         };

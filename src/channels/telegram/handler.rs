@@ -261,6 +261,10 @@ impl Channel for TelegramChannel {
                         sender: chat_id,
                         content: text.to_string(),
                         channel: "telegram".to_string(),
+                        conversation_id: None,
+                        thread_id: None,
+                        reply_to: None,
+                        message_id: None,
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()

@@ -122,6 +122,10 @@ impl WhatsAppChannel {
                         sender: normalized_from,
                         content,
                         channel: "whatsapp".to_string(),
+                        conversation_id: None,
+                        thread_id: None,
+                        reply_to: None,
+                        message_id: None,
                         timestamp,
                         attachments: Vec::new(),
                     });
