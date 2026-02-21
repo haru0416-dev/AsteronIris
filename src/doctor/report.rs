@@ -6,7 +6,10 @@ use chrono::{DateTime, Utc};
 pub(crate) fn autonomy_governance_lines(config: &Config) -> Vec<String> {
     let mut lines = Vec::with_capacity(6);
 
-    lines.push(format!("autonomy level: {:?}", config.autonomy.level));
+    lines.push(format!(
+        "autonomy level: {:?}",
+        config.autonomy.effective_autonomy_level()
+    ));
 
     let external_actions = match config.autonomy.external_action_execution {
         ExternalActionExecution::Disabled => "disabled",

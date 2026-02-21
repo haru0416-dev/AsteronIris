@@ -63,7 +63,7 @@ pub fn print_summary(config: &Config) {
     println!(
         "    › {} {:?}",
         t!("onboard.summary.autonomy"),
-        config.autonomy.level
+        config.autonomy.effective_autonomy_level()
     );
     println!(
         "    › {} {} (auto-save: {})",

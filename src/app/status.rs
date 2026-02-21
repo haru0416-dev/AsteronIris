@@ -35,7 +35,7 @@ pub fn render_status(config: &Config) -> String {
         format!(
             "  {}      {:?}",
             t!("status.autonomy"),
-            config.autonomy.level
+            config.autonomy.effective_autonomy_level()
         ),
         format!(
             "   {} {}",

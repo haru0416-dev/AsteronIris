@@ -227,6 +227,54 @@ fn from_config_maps_all_fields() {
     assert_eq!(policy.workspace_dir, PathBuf::from("/tmp/test-workspace"));
 }
 
+#[test]
+fn from_config_uses_effective_autonomy_when_rollout_caps_level() {
+    let autonomy_config = crate::config::AutonomyConfig {
+        level: AutonomyLevel::Full,
+        rollout: crate::config::schema::AutonomyRolloutConfig {
+            enabled: true,
+            stage: Some(crate::config::schema::AutonomyRolloutStage::ReadOnly),
+            ..crate::config::schema::AutonomyRolloutConfig::default()
+        },
+        ..crate::config::AutonomyConfig::default()
+    };
+
+    let policy = SecurityPolicy::from_config(&autonomy_config, Path::new("/tmp/test-workspace"));
+    assert_eq!(policy.autonomy, AutonomyLevel::ReadOnly);
+}
+
+#[test]
+fn from_config_rollout_disabled_preserves_configured_autonomy() {
+    let autonomy_config = crate::config::AutonomyConfig {
+        level: AutonomyLevel::Full,
+        rollout: crate::config::schema::AutonomyRolloutConfig {
+            enabled: false,
+            stage: Some(crate::config::schema::AutonomyRolloutStage::ReadOnly),
+            ..crate::config::schema::AutonomyRolloutConfig::default()
+        },
+        ..crate::config::AutonomyConfig::default()
+    };
+
+    let policy = SecurityPolicy::from_config(&autonomy_config, Path::new("/tmp/test-workspace"));
+    assert_eq!(policy.autonomy, AutonomyLevel::Full);
+}
+
+#[test]
+fn from_config_rollout_cannot_escalate_configured_autonomy() {
+    let autonomy_config = crate::config::AutonomyConfig {
+        level: AutonomyLevel::Supervised,
+        rollout: crate::config::schema::AutonomyRolloutConfig {
+            enabled: true,
+            stage: Some(crate::config::schema::AutonomyRolloutStage::Full),
+            ..crate::config::schema::AutonomyRolloutConfig::default()
+        },
+        ..crate::config::AutonomyConfig::default()
+    };
+
+    let policy = SecurityPolicy::from_config(&autonomy_config, Path::new("/tmp/test-workspace"));
+    assert_eq!(policy.autonomy, AutonomyLevel::Supervised);
+}
+
 // ── Default policy ──────────────────────────────────────
 
 #[test]

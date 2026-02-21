@@ -81,6 +81,7 @@ async fn handle_client_message(
                 permission_store: Some(Arc::clone(&state.permission_store)),
                 rate_limiter: Arc::clone(&state.rate_limiter),
                 tenant_context: TenantPolicyContext::disabled(),
+                approval_broker: None,
             };
 
             match tool_loop

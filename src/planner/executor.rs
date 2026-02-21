@@ -1,0 +1,383 @@
+use crate::planner::{Plan, PlanStep, StepStatus};
+use anyhow::Result;
+use async_trait::async_trait;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+pub struct PlanExecutor;
+
+pub struct AgentLoopPlanInterface;
+
+#[derive(Debug, Clone)]
+pub struct ExecutionReport {
+    pub plan_id: String,
+    pub completed_steps: Vec<String>,
+    pub failed_steps: Vec<String>,
+    pub skipped_steps: Vec<String>,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StepOutput {
+    pub success: bool,
+    pub output: String,
+    pub error: Option<String>,
+}
+
+#[async_trait]
+pub trait StepRunner: Send + Sync {
+    async fn run_step(&self, step: &PlanStep) -> Result<StepOutput>;
+}
+
+impl PlanExecutor {
+    pub async fn execute(plan: &mut Plan, runner: &dyn StepRunner) -> Result<ExecutionReport> {
+        let execution_order = plan.execution_order()?;
+        let step_index = plan.step_index();
+
+        let mut dependencies = BTreeMap::new();
+        let mut downstream = BTreeMap::new();
+        for node in &plan.dag.nodes {
+            dependencies.insert(node.id.clone(), BTreeSet::new());
+            downstream.insert(node.id.clone(), BTreeSet::new());
+        }
+        for edge in &plan.dag.edges {
+            if let Some(parents) = dependencies.get_mut(&edge.to) {
+                parents.insert(edge.from.clone());
+            }
+            if let Some(children) = downstream.get_mut(&edge.from) {
+                children.insert(edge.to.clone());
+            }
+        }
+
+        let mut completed_steps = Vec::new();
+        let mut failed_steps = Vec::new();
+        let mut skipped_steps = Vec::new();
+        let mut skipped_ids = BTreeSet::new();
+
+        for step_id in execution_order {
+            if skipped_ids.contains(&step_id) {
+                if let Some(index) = step_index.get(&step_id) {
+                    plan.steps[*index].status = StepStatus::Skipped;
+                    skipped_steps.push(step_id.clone());
+                }
+                continue;
+            }
+
+            let Some(index) = step_index.get(&step_id).copied() else {
+                continue;
+            };
+
+            plan.steps[index].status = StepStatus::Running;
+            let step_snapshot = plan.steps[index].clone();
+            let result = runner.run_step(&step_snapshot).await?;
+
+            if result.success {
+                plan.steps[index].status = StepStatus::Completed;
+                plan.steps[index].output = Some(result.output);
+                plan.steps[index].error = None;
+                completed_steps.push(step_id);
+                continue;
+            }
+
+            plan.steps[index].status = StepStatus::Failed;
+            plan.steps[index].output = Some(result.output);
+            plan.steps[index].error = result.error;
+            failed_steps.push(step_id.clone());
+            mark_downstream_skipped(&step_id, &downstream, &mut skipped_ids);
+        }
+
+        Ok(ExecutionReport {
+            plan_id: plan.id.clone(),
+            completed_steps,
+            failed_steps: failed_steps.clone(),
+            skipped_steps,
+            success: failed_steps.is_empty(),
+        })
+    }
+}
+
+impl AgentLoopPlanInterface {
+    pub async fn execute_plan(
+        &self,
+        plan: &mut Plan,
+        runner: &dyn StepRunner,
+    ) -> Result<ExecutionReport> {
+        PlanExecutor::execute(plan, runner).await
+    }
+}
+
+fn mark_downstream_skipped(
+    root_id: &str,
+    downstream: &BTreeMap<String, BTreeSet<String>>,
+    skipped_ids: &mut BTreeSet<String>,
+) {
+    let mut queue = VecDeque::new();
+    queue.push_back(root_id.to_string());
+
+    while let Some(current) = queue.pop_front() {
+        if let Some(children) = downstream.get(&current) {
+            for child in children {
+                if skipped_ids.insert(child.clone()) {
+                    queue.push_back(child.clone());
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planner::{DagContract, DagEdge, DagNode, Plan, PlanStep, StepAction, StepStatus};
+    use anyhow::bail;
+    use async_trait::async_trait;
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    struct MockRunner {
+        outcomes: BTreeMap<String, StepOutput>,
+        calls: Mutex<Vec<String>>,
+        fail_with_error: bool,
+    }
+
+    impl MockRunner {
+        fn new(outcomes: BTreeMap<String, StepOutput>) -> Self {
+            Self {
+                outcomes,
+                calls: Mutex::new(Vec::new()),
+                fail_with_error: false,
+            }
+        }
+
+        fn with_runner_error(mut self) -> Self {
+            self.fail_with_error = true;
+            self
+        }
+
+        fn called_ids(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl StepRunner for MockRunner {
+        async fn run_step(&self, step: &PlanStep) -> Result<StepOutput> {
+            self.calls.lock().unwrap().push(step.id.clone());
+
+            if self.fail_with_error && step.id == "A" {
+                bail!("runner transport error");
+            }
+
+            if let Some(outcome) = self.outcomes.get(&step.id) {
+                return Ok(outcome.clone());
+            }
+
+            Ok(StepOutput {
+                success: true,
+                output: format!("ok:{}", step.id),
+                error: None,
+            })
+        }
+    }
+
+    fn step(id: &str) -> PlanStep {
+        PlanStep {
+            id: id.to_string(),
+            description: format!("step {id}"),
+            action: StepAction::ToolCall {
+                tool_name: "shell".to_string(),
+                args: json!({"id":id}),
+            },
+            status: StepStatus::Pending,
+            depends_on: Vec::new(),
+            output: None,
+            error: None,
+        }
+    }
+
+    fn make_plan(nodes: Vec<&str>, edges: Vec<(&str, &str)>) -> Plan {
+        let dag = DagContract::new(
+            nodes.iter().map(|id| DagNode::new(*id)).collect(),
+            edges
+                .iter()
+                .map(|(from, to)| DagEdge::new(*from, *to))
+                .collect(),
+        );
+
+        Plan::new(
+            "plan-1",
+            "executor tests",
+            nodes.iter().map(|id| step(id)).collect(),
+            dag,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn executor_runs_steps_in_topological_order() {
+        let mut plan = make_plan(vec!["A", "B", "C"], vec![("A", "B"), ("B", "C")]);
+        let runner = MockRunner::new(BTreeMap::new());
+
+        let report = PlanExecutor::execute(&mut plan, &runner).await.unwrap();
+
+        assert_eq!(runner.called_ids(), vec!["A", "B", "C"]);
+        assert!(report.success);
+        assert_eq!(report.completed_steps, vec!["A", "B", "C"]);
+    }
+
+    #[tokio::test]
+    async fn executor_marks_failed_step_and_skips_dependents() {
+        let mut plan = make_plan(vec!["A", "B", "C"], vec![("A", "B"), ("B", "C")]);
+
+        let mut outcomes = BTreeMap::new();
+        outcomes.insert(
+            "B".to_string(),
+            StepOutput {
+                success: false,
+                output: "failed output".to_string(),
+                error: Some("B failed".to_string()),
+            },
+        );
+        let runner = MockRunner::new(outcomes);
+
+        let report = PlanExecutor::execute(&mut plan, &runner).await.unwrap();
+
+        assert_eq!(runner.called_ids(), vec!["A", "B"]);
+        assert_eq!(plan.steps[0].status, StepStatus::Completed);
+        assert_eq!(plan.steps[1].status, StepStatus::Failed);
+        assert_eq!(plan.steps[2].status, StepStatus::Skipped);
+        assert_eq!(report.failed_steps, vec!["B"]);
+        assert_eq!(report.skipped_steps, vec!["C"]);
+        assert!(!report.success);
+    }
+
+    #[tokio::test]
+    async fn executor_handles_all_success_case() {
+        let mut plan = make_plan(vec!["A", "B"], vec![("A", "B")]);
+        let runner = MockRunner::new(BTreeMap::new());
+
+        let report = PlanExecutor::execute(&mut plan, &runner).await.unwrap();
+
+        assert!(
+            plan.steps
+                .iter()
+                .all(|step| step.status == StepStatus::Completed)
+        );
+        assert!(report.failed_steps.is_empty());
+        assert!(report.skipped_steps.is_empty());
+        assert!(report.success);
+    }
+
+    #[tokio::test]
+    async fn executor_handles_first_step_failure() {
+        let mut plan = make_plan(vec!["A", "B", "C"], vec![("A", "B"), ("B", "C")]);
+
+        let mut outcomes = BTreeMap::new();
+        outcomes.insert(
+            "A".to_string(),
+            StepOutput {
+                success: false,
+                output: String::new(),
+                error: Some("A failed".to_string()),
+            },
+        );
+        let runner = MockRunner::new(outcomes);
+
+        let report = PlanExecutor::execute(&mut plan, &runner).await.unwrap();
+
+        assert_eq!(runner.called_ids(), vec!["A"]);
+        assert_eq!(plan.steps[0].status, StepStatus::Failed);
+        assert_eq!(plan.steps[1].status, StepStatus::Skipped);
+        assert_eq!(plan.steps[2].status, StepStatus::Skipped);
+        assert_eq!(report.skipped_steps, vec!["B", "C"]);
+    }
+
+    #[tokio::test]
+    async fn executor_independent_branch_continues_after_failure() {
+        let mut plan = make_plan(vec!["A", "B", "C", "D"], vec![("A", "B"), ("C", "D")]);
+
+        let mut outcomes = BTreeMap::new();
+        outcomes.insert(
+            "A".to_string(),
+            StepOutput {
+                success: false,
+                output: String::new(),
+                error: Some("A failed".to_string()),
+            },
+        );
+        let runner = MockRunner::new(outcomes);
+
+        let report = PlanExecutor::execute(&mut plan, &runner).await.unwrap();
+
+        assert_eq!(plan.steps[0].status, StepStatus::Failed);
+        assert_eq!(plan.steps[1].status, StepStatus::Skipped);
+        assert_eq!(plan.steps[2].status, StepStatus::Completed);
+        assert_eq!(plan.steps[3].status, StepStatus::Completed);
+        assert_eq!(report.failed_steps, vec!["A"]);
+        assert_eq!(report.skipped_steps, vec!["B"]);
+        assert_eq!(report.completed_steps, vec!["C", "D"]);
+    }
+
+    #[tokio::test]
+    async fn execution_report_reflects_correct_counts() {
+        let mut plan = make_plan(
+            vec!["A", "B", "C", "D", "E"],
+            vec![("A", "B"), ("A", "C"), ("D", "E")],
+        );
+
+        let mut outcomes = BTreeMap::new();
+        outcomes.insert(
+            "A".to_string(),
+            StepOutput {
+                success: false,
+                output: "x".to_string(),
+                error: Some("fail".to_string()),
+            },
+        );
+        let runner = MockRunner::new(outcomes);
+
+        let report = PlanExecutor::execute(&mut plan, &runner).await.unwrap();
+
+        assert_eq!(report.plan_id, "plan-1");
+        assert_eq!(report.completed_steps.len(), 2);
+        assert_eq!(report.failed_steps.len(), 1);
+        assert_eq!(report.skipped_steps.len(), 2);
+        assert!(!report.success);
+    }
+
+    #[tokio::test]
+    async fn executor_preserves_output_and_error_fields() {
+        let mut plan = make_plan(vec!["A"], Vec::new());
+
+        let mut outcomes = BTreeMap::new();
+        outcomes.insert(
+            "A".to_string(),
+            StepOutput {
+                success: false,
+                output: "stderr chunk".to_string(),
+                error: Some("exit code 1".to_string()),
+            },
+        );
+        let runner = MockRunner::new(outcomes);
+
+        let _report = PlanExecutor::execute(&mut plan, &runner).await.unwrap();
+
+        assert_eq!(plan.steps[0].status, StepStatus::Failed);
+        assert_eq!(plan.steps[0].output.as_deref(), Some("stderr chunk"));
+        assert_eq!(plan.steps[0].error.as_deref(), Some("exit code 1"));
+    }
+
+    #[tokio::test]
+    async fn executor_propagates_runner_errors() {
+        let mut plan = make_plan(vec!["A", "B"], vec![("A", "B")]);
+        let runner = MockRunner::new(BTreeMap::new()).with_runner_error();
+
+        let error = PlanExecutor::execute(&mut plan, &runner)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(error, "runner transport error");
+        assert_eq!(plan.steps[0].status, StepStatus::Running);
+        assert_eq!(plan.steps[1].status, StepStatus::Pending);
+    }
+}

@@ -5,7 +5,7 @@ use crate::memory::{self, Memory};
 use crate::providers::response::ContentBlock;
 use crate::providers::{self, Provider};
 use crate::security::policy::EntityRateLimiter;
-use crate::security::{PermissionStore, SecurityPolicy};
+use crate::security::{PermissionStore, SecurityPolicy, broker_for_channel};
 use crate::tools;
 use crate::tools::middleware::ExecutionContext;
 use crate::tools::registry::ToolRegistry;
@@ -258,7 +258,7 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
         )
     );
 
-    let global_autonomy = rt.config.autonomy.level;
+    let global_autonomy = rt.config.autonomy.effective_autonomy_level();
     let channel_policy = rt.channel_policies.get(&msg.channel);
     let channel_level = channel_policy
         .and_then(|policy| policy.autonomy_level)
@@ -333,6 +333,7 @@ async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
         permission_store: Some(Arc::clone(&rt.permission_store)),
         rate_limiter: Arc::clone(&rt.rate_limiter),
         tenant_context,
+        approval_broker: Some(broker_for_channel(&msg.channel)),
     };
     let tool_loop = ToolLoop::new(
         Arc::clone(&rt.registry),

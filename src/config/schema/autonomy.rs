@@ -179,8 +179,22 @@ impl Default for AutonomyConfig {
 }
 
 impl AutonomyConfig {
+    #[must_use]
+    pub fn effective_autonomy_level(&self) -> AutonomyLevel {
+        if !self.rollout.enabled {
+            return self.level;
+        }
+
+        let Some(stage) = self.rollout.stage else {
+            return self.level;
+        };
+
+        min_autonomy(self.level, rollout_stage_to_autonomy(stage))
+    }
+
+    #[must_use]
     pub fn selected_temperature_band(&self) -> TemperatureBand {
-        match self.level {
+        match self.effective_autonomy_level() {
             AutonomyLevel::ReadOnly => self.temperature_bands.read_only,
             AutonomyLevel::Supervised => self.temperature_bands.supervised,
             AutonomyLevel::Full => self.temperature_bands.full,
@@ -209,6 +223,26 @@ impl AutonomyConfig {
             );
         }
         Ok(())
+    }
+}
+
+#[must_use]
+fn rollout_stage_to_autonomy(stage: AutonomyRolloutStage) -> AutonomyLevel {
+    match stage {
+        AutonomyRolloutStage::ReadOnly => AutonomyLevel::ReadOnly,
+        AutonomyRolloutStage::Supervised => AutonomyLevel::Supervised,
+        AutonomyRolloutStage::Full => AutonomyLevel::Full,
+    }
+}
+
+#[must_use]
+fn min_autonomy(global: AutonomyLevel, channel: AutonomyLevel) -> AutonomyLevel {
+    match (global, channel) {
+        (AutonomyLevel::ReadOnly, _) | (_, AutonomyLevel::ReadOnly) => AutonomyLevel::ReadOnly,
+        (AutonomyLevel::Supervised, _) | (_, AutonomyLevel::Supervised) => {
+            AutonomyLevel::Supervised
+        }
+        (AutonomyLevel::Full, AutonomyLevel::Full) => AutonomyLevel::Full,
     }
 }
 
@@ -295,6 +329,116 @@ mod tests {
         assert_eq!(supervised_band.max, 0.3);
         assert_eq!(full_band.min, 0.4);
         assert_eq!(full_band.max, 0.9);
+    }
+
+    #[test]
+    fn effective_autonomy_level_rollout_disabled_returns_configured_level() {
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Full,
+            rollout: AutonomyRolloutConfig {
+                enabled: false,
+                stage: Some(AutonomyRolloutStage::ReadOnly),
+                ..AutonomyRolloutConfig::default()
+            },
+            ..AutonomyConfig::default()
+        };
+
+        assert_eq!(config.effective_autonomy_level(), AutonomyLevel::Full);
+    }
+
+    #[test]
+    fn effective_autonomy_level_rollout_enabled_read_only_overrides_full() {
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Full,
+            rollout: AutonomyRolloutConfig {
+                enabled: true,
+                stage: Some(AutonomyRolloutStage::ReadOnly),
+                ..AutonomyRolloutConfig::default()
+            },
+            ..AutonomyConfig::default()
+        };
+
+        assert_eq!(config.effective_autonomy_level(), AutonomyLevel::ReadOnly);
+    }
+
+    #[test]
+    fn effective_autonomy_level_rollout_enabled_supervised_caps_full() {
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Full,
+            rollout: AutonomyRolloutConfig {
+                enabled: true,
+                stage: Some(AutonomyRolloutStage::Supervised),
+                ..AutonomyRolloutConfig::default()
+            },
+            ..AutonomyConfig::default()
+        };
+
+        assert_eq!(config.effective_autonomy_level(), AutonomyLevel::Supervised);
+    }
+
+    #[test]
+    fn effective_autonomy_level_rollout_enabled_without_stage_returns_configured_level() {
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            rollout: AutonomyRolloutConfig {
+                enabled: true,
+                stage: None,
+                ..AutonomyRolloutConfig::default()
+            },
+            ..AutonomyConfig::default()
+        };
+
+        assert_eq!(config.effective_autonomy_level(), AutonomyLevel::Supervised);
+    }
+
+    #[test]
+    fn effective_autonomy_level_rollout_enabled_full_keeps_full_when_config_full() {
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Full,
+            rollout: AutonomyRolloutConfig {
+                enabled: true,
+                stage: Some(AutonomyRolloutStage::Full),
+                ..AutonomyRolloutConfig::default()
+            },
+            ..AutonomyConfig::default()
+        };
+
+        assert_eq!(config.effective_autonomy_level(), AutonomyLevel::Full);
+    }
+
+    #[test]
+    fn effective_autonomy_level_rollout_cannot_escalate_supervised_to_full() {
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            rollout: AutonomyRolloutConfig {
+                enabled: true,
+                stage: Some(AutonomyRolloutStage::Full),
+                ..AutonomyRolloutConfig::default()
+            },
+            ..AutonomyConfig::default()
+        };
+
+        assert_eq!(config.effective_autonomy_level(), AutonomyLevel::Supervised);
+    }
+
+    #[test]
+    fn selected_temperature_band_uses_effective_autonomy_level() {
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Full,
+            rollout: AutonomyRolloutConfig {
+                enabled: true,
+                stage: Some(AutonomyRolloutStage::ReadOnly),
+                ..AutonomyRolloutConfig::default()
+            },
+            temperature_bands: TemperatureBandsConfig {
+                read_only: TemperatureBand { min: 0.0, max: 0.1 },
+                supervised: TemperatureBand { min: 0.2, max: 0.7 },
+                full: TemperatureBand { min: 0.8, max: 1.1 },
+            },
+            ..AutonomyConfig::default()
+        };
+
+        assert_eq!(config.selected_temperature_band().max, 0.1);
     }
 
     #[test]

@@ -269,12 +269,13 @@ pub(super) async fn execute_main_session_turn_with_accounting(
     accounting
         .consume_answer_call()
         .context("consume answer call budget")?;
+    let effective_autonomy_level = config.autonomy.effective_autonomy_level();
     let requested_temperature = params.temperature;
     let clamped_temperature = config.autonomy.clamp_temperature(requested_temperature);
     if (requested_temperature - clamped_temperature).abs() > f64::EPSILON {
         let band = config.autonomy.selected_temperature_band();
         tracing::info!(
-            autonomy_level = ?config.autonomy.level,
+            autonomy_level = ?effective_autonomy_level,
             requested_temperature,
             clamped_temperature,
             band_min = band.min,
@@ -285,7 +286,7 @@ pub(super) async fn execute_main_session_turn_with_accounting(
     let tool_loop = ToolLoop::new(Arc::clone(&params.registry), params.max_tool_iterations);
     let ctx = ExecutionContext {
         security: Arc::new(security.clone()),
-        autonomy_level: config.autonomy.level,
+        autonomy_level: effective_autonomy_level,
         entity_id: "cli:local".to_string(),
         turn_number: 0,
         workspace_dir: config.workspace_dir.clone(),
@@ -293,6 +294,7 @@ pub(super) async fn execute_main_session_turn_with_accounting(
         permission_store: Some(Arc::clone(&params.permission_store)),
         rate_limiter: Arc::clone(&params.rate_limiter),
         tenant_context: TenantPolicyContext::disabled(),
+        approval_broker: None,
     };
     let tool_result = tool_loop
         .run(

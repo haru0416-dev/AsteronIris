@@ -4,7 +4,7 @@ use crate::security::external_content::{ExternalAction, prepare_external_content
 use crate::security::policy::{
     AutonomyLevel, EntityRateLimiter, RateLimitError, TenantPolicyContext,
 };
-use crate::security::{PermissionStore, SecurityPolicy};
+use crate::security::{ApprovalBroker, PermissionStore, SecurityPolicy};
 use crate::tools::traits::{ActionIntent, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -13,7 +13,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExecutionContext {
     pub security: Arc<SecurityPolicy>,
     pub autonomy_level: AutonomyLevel,
@@ -24,6 +24,7 @@ pub struct ExecutionContext {
     pub permission_store: Option<Arc<PermissionStore>>,
     pub rate_limiter: Arc<EntityRateLimiter>,
     pub tenant_context: TenantPolicyContext,
+    pub approval_broker: Option<Arc<dyn ApprovalBroker>>,
 }
 
 impl ExecutionContext {
@@ -38,6 +39,7 @@ impl ExecutionContext {
             permission_store: None,
             rate_limiter: Arc::new(EntityRateLimiter::new(100, 20)),
             tenant_context: TenantPolicyContext::disabled(),
+            approval_broker: None,
         }
     }
 }
@@ -175,7 +177,7 @@ impl ToolMiddleware for SecurityMiddleware {
 
         if ctx.autonomy_level == AutonomyLevel::Supervised {
             return Ok(MiddlewareDecision::RequireApproval(ActionIntent::new(
-                "tool_execution",
+                tool_name,
                 &ctx.entity_id,
                 serde_json::json!({
                     "tool": tool_name,

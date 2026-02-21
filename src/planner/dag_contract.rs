@@ -1,7 +1,8 @@
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DagNode {
     pub id: String,
 }
@@ -12,7 +13,7 @@ impl DagNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DagEdge {
     pub from: String,
     pub to: String,
@@ -27,7 +28,7 @@ impl DagEdge {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DagContract {
     pub nodes: Vec<DagNode>,
     pub edges: Vec<DagEdge>,
@@ -42,6 +43,63 @@ impl DagContract {
         let node_ids = self.validate_nodes()?;
         let adjacency = self.validate_edges(&node_ids)?;
         validate_cycle_free(&node_ids, &adjacency)
+    }
+
+    pub fn topological_sort(&self) -> Result<Vec<String>> {
+        self.validate()?;
+
+        let mut in_degree = BTreeMap::new();
+        let mut adjacency = BTreeMap::new();
+        for node in &self.nodes {
+            in_degree.insert(node.id.clone(), 0_usize);
+            adjacency.insert(node.id.clone(), Vec::new());
+        }
+
+        for edge in &self.edges {
+            if let Some(degree) = in_degree.get_mut(&edge.to) {
+                *degree += 1;
+            }
+            if let Some(neighbors) = adjacency.get_mut(&edge.from) {
+                neighbors.push(edge.to.clone());
+            }
+        }
+
+        for neighbors in adjacency.values_mut() {
+            neighbors.sort_unstable();
+        }
+
+        let mut queue = in_degree
+            .iter()
+            .filter_map(|(node_id, degree)| {
+                if *degree == 0 {
+                    Some(node_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<BTreeSet<_>>();
+
+        let mut sorted = Vec::new();
+        while let Some(node_id) = queue.pop_first() {
+            sorted.push(node_id.clone());
+
+            if let Some(neighbors) = adjacency.get(&node_id) {
+                for neighbor in neighbors {
+                    if let Some(degree) = in_degree.get_mut(neighbor) {
+                        *degree -= 1;
+                        if *degree == 0 {
+                            queue.insert(neighbor.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if sorted.len() != self.nodes.len() {
+            bail!("cycle detected while sorting DAG");
+        }
+
+        Ok(sorted)
     }
 
     fn validate_nodes(&self) -> Result<BTreeSet<String>> {
@@ -297,5 +355,75 @@ mod tests {
 
         let error = dag.validate().unwrap_err().to_string();
         assert_eq!(error, "node id cannot be empty");
+    }
+
+    #[test]
+    fn topological_sort_linear_chain() {
+        let dag = DagContract::new(
+            vec![DagNode::new("A"), DagNode::new("B"), DagNode::new("C")],
+            vec![DagEdge::new("A", "B"), DagEdge::new("B", "C")],
+        );
+
+        let order = dag.topological_sort().unwrap();
+        assert_eq!(order, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn topological_sort_diamond() {
+        let dag = DagContract::new(
+            vec![
+                DagNode::new("A"),
+                DagNode::new("B"),
+                DagNode::new("C"),
+                DagNode::new("D"),
+            ],
+            vec![
+                DagEdge::new("A", "B"),
+                DagEdge::new("A", "C"),
+                DagEdge::new("B", "D"),
+                DagEdge::new("C", "D"),
+            ],
+        );
+
+        let order = dag.topological_sort().unwrap();
+        assert_eq!(order, vec!["A", "B", "C", "D"]);
+    }
+
+    #[test]
+    fn topological_sort_alphabetical_tie_breaking() {
+        let dag = DagContract::new(
+            vec![DagNode::new("C"), DagNode::new("A"), DagNode::new("B")],
+            Vec::new(),
+        );
+
+        let order = dag.topological_sort().unwrap();
+        assert_eq!(order, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn topological_sort_empty_graph() {
+        let dag = DagContract::new(Vec::new(), Vec::new());
+
+        let order = dag.topological_sort().unwrap();
+        assert!(order.is_empty());
+    }
+
+    #[test]
+    fn topological_sort_single_node() {
+        let dag = DagContract::new(vec![DagNode::new("solo")], Vec::new());
+
+        let order = dag.topological_sort().unwrap();
+        assert_eq!(order, vec!["solo"]);
+    }
+
+    #[test]
+    fn topological_sort_rejects_cycle() {
+        let dag = DagContract::new(
+            vec![DagNode::new("A"), DagNode::new("B")],
+            vec![DagEdge::new("A", "B"), DagEdge::new("B", "A")],
+        );
+
+        let error = dag.topological_sort().unwrap_err().to_string();
+        assert_eq!(error, "cycle detected: A -> B -> A");
     }
 }

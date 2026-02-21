@@ -122,7 +122,7 @@ impl SecurityPolicy {
         workspace_dir: &Path,
     ) -> Self {
         Self {
-            autonomy: autonomy_config.level,
+            autonomy: autonomy_config.effective_autonomy_level(),
             external_action_execution: autonomy_config.external_action_execution,
             workspace_dir: workspace_dir.to_path_buf(),
             workspace_only: autonomy_config.workspace_only,
