@@ -40,7 +40,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         };
         // Auto-start channels if user said yes during wizard
         if autostart {
-            asteroniris::channels::start_channels(Arc::new(config)).await?;
+            asteroniris::transport::channels::start_channels(Arc::new(config)).await?;
         }
         return Ok(());
     }
@@ -79,7 +79,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             model,
             temperature,
         } => {
-            asteroniris::intelligence::agent::run(
+            asteroniris::core::agent::run(
                 Arc::clone(&config),
                 message,
                 provider,
@@ -120,16 +120,16 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             asteroniris::platform::service::handle_command(&service_command, &config)
         }
 
-        Commands::Doctor => asteroniris::diagnostics::doctor::run(&config),
+        Commands::Doctor => asteroniris::runtime::diagnostics::doctor::run(&config),
 
         Commands::Channel { channel_command } => match channel_command {
             ChannelCommands::Start => {
-                asteroniris::channels::start_channels(Arc::clone(&config)).await
+                asteroniris::transport::channels::start_channels(Arc::clone(&config)).await
             }
             ChannelCommands::Doctor => {
-                asteroniris::channels::doctor_channels(Arc::clone(&config)).await
+                asteroniris::transport::channels::doctor_channels(Arc::clone(&config)).await
             }
-            other => asteroniris::channels::handle_command(other, &config),
+            other => asteroniris::transport::channels::handle_command(other, &config),
         },
 
         Commands::Integrations {

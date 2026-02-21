@@ -1,5 +1,5 @@
 use crate::config::schema::{McpConfig, McpTransport};
-use crate::intelligence::tools::Tool;
+use crate::core::tools::Tool;
 use crate::plugins::mcp::client_connection::McpConnection;
 use crate::plugins::mcp::client_proxy_tool::McpToolProxy;
 use anyhow::Result;

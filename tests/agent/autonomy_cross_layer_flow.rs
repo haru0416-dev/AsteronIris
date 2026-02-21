@@ -3,20 +3,20 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use asteroniris::config::{Config, PersonaConfig};
-use asteroniris::intelligence::agent::loop_::{
+use asteroniris::core::agent::loop_::{
     run_main_session_turn_for_integration, run_main_session_turn_for_integration_with_policy,
 };
-use asteroniris::intelligence::memory::{
+use asteroniris::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
-use asteroniris::intelligence::providers::Provider;
-use asteroniris::intelligence::tools::{ActionIntent, ActionOperator, NoopOperator};
-use asteroniris::observability::traits::{
+use asteroniris::core::persona::state_header::StateHeaderV1;
+use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
+use asteroniris::core::providers::Provider;
+use asteroniris::core::tools::{ActionIntent, ActionOperator, NoopOperator};
+use asteroniris::platform::cron::{self, CronJobKind, CronJobOrigin};
+use asteroniris::runtime::observability::traits::{
     AutonomyLifecycleSignal, Observer, ObserverEvent, ObserverMetric,
 };
-use asteroniris::persona::state_header::StateHeaderV1;
-use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
-use asteroniris::platform::cron::{self, CronJobKind, CronJobOrigin};
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::external_content::{ExternalAction, prepare_external_content};
 use asteroniris::security::policy::TenantPolicyContext;

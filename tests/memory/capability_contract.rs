@@ -1,7 +1,7 @@
 use arrow_array::{Float64Array, StringArray};
 use asteroniris::config::MemoryConfig;
-use asteroniris::intelligence::memory::traits::MemoryLayer;
-use asteroniris::intelligence::memory::{
+use asteroniris::core::memory::traits::MemoryLayer;
+use asteroniris::core::memory::{
     CapabilitySupport, ForgetMode, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance,
     MemorySource, PrivacyLevel, RecallQuery, backend_capability_matrix,
     capability_matrix_for_backend, capability_matrix_for_memory, create_memory,
@@ -98,7 +98,7 @@ async fn lancedb_capability_contract() {
         "contract-entity",
         "slot",
         "seed value",
-        asteroniris::intelligence::memory::MemoryCategory::Core,
+        asteroniris::core::memory::MemoryCategory::Core,
     )
     .await;
     ensure_forget_mode_supported(&memory, ForgetMode::Soft)
@@ -253,7 +253,7 @@ async fn lancedb_reports_unsupported_semantics() {
         "entity-lancedb",
         "forget.target",
         "sensitive value",
-        asteroniris::intelligence::memory::MemoryCategory::Core,
+        asteroniris::core::memory::MemoryCategory::Core,
     )
     .await;
 

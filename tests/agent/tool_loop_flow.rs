@@ -2,13 +2,13 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use asteroniris::intelligence::agent::{LoopStopReason, ToolLoop};
-use asteroniris::intelligence::providers::response::{
+use asteroniris::core::agent::{LoopStopReason, ToolLoop};
+use asteroniris::core::providers::response::{
     ContentBlock, ProviderMessage, ProviderResponse, StopReason,
 };
-use asteroniris::intelligence::providers::traits::Provider;
-use asteroniris::intelligence::tools::middleware::{ExecutionContext, default_middleware_chain};
-use asteroniris::intelligence::tools::{FileReadTool, ShellTool, ToolRegistry, ToolSpec};
+use asteroniris::core::providers::traits::Provider;
+use asteroniris::core::tools::middleware::{ExecutionContext, default_middleware_chain};
+use asteroniris::core::tools::{FileReadTool, ShellTool, ToolRegistry, ToolSpec};
 use asteroniris::security::{AutonomyLevel, EntityRateLimiter, SecurityPolicy};
 use async_trait::async_trait;
 use serde_json::json;

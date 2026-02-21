@@ -3,9 +3,10 @@ use std::sync::Arc;
 use tokio::time::Duration;
 
 pub(super) async fn run_heartbeat_worker(config: Arc<crate::config::Config>) -> Result<()> {
-    let observer: Arc<dyn crate::observability::Observer> =
-        Arc::from(crate::observability::create_observer(&config.observability));
-    let engine = crate::diagnostics::heartbeat::engine::HeartbeatEngine::new(
+    let observer: Arc<dyn crate::runtime::observability::Observer> = Arc::from(
+        crate::runtime::observability::create_observer(&config.observability),
+    );
+    let engine = crate::runtime::diagnostics::heartbeat::engine::HeartbeatEngine::new(
         config.heartbeat.clone(),
         config.workspace_dir.clone(),
         observer,
@@ -26,13 +27,15 @@ pub(super) async fn run_heartbeat_worker(config: Arc<crate::config::Config>) -> 
             let prompt = format!("[Heartbeat Task] {task}");
             let temp = config.default_temperature;
             if let Err(e) =
-                crate::intelligence::agent::run(Arc::clone(&config), Some(prompt), None, None, temp)
-                    .await
+                crate::core::agent::run(Arc::clone(&config), Some(prompt), None, None, temp).await
             {
-                crate::diagnostics::health::mark_component_error("heartbeat", e.to_string());
+                crate::runtime::diagnostics::health::mark_component_error(
+                    "heartbeat",
+                    e.to_string(),
+                );
                 tracing::warn!("Heartbeat task failed: {e}");
             } else {
-                crate::diagnostics::health::mark_component_ok("heartbeat");
+                crate::runtime::diagnostics::health::mark_component_ok("heartbeat");
             }
         }
     }

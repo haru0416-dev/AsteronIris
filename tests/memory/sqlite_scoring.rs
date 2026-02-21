@@ -1,4 +1,4 @@
-use asteroniris::intelligence::memory::{
+use asteroniris::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource, PrivacyLevel,
     RecallQuery, SqliteMemory,
 };

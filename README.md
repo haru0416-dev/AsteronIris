@@ -195,7 +195,7 @@ and [`AGENTS.md`](AGENTS.md) for architecture and code-style reference.
 
 ```
 src/
-├── core/         # AI core entrypoints (agent/memory/providers/tools/planner/sessions)
+├── core/         # AI core (agent/memory/providers/tools/planner/sessions/persona/eval)
 ├── transport/    # External I/O and HTTP ingress (channels + gateway)
 ├── runtime/      # Runtime orchestration, tunnel, diagnostics, observability, usage
 ├── security/     # Policy, auth, pairing, encrypted vault, writeback guard

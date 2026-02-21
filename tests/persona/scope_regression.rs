@@ -1,4 +1,4 @@
-use asteroniris::channels::build_system_prompt;
+use asteroniris::transport::channels::build_system_prompt;
 use asteroniris::transport::gateway::{
     MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS, WebhookBody, verify_whatsapp_signature,
 };

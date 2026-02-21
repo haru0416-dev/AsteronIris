@@ -1,9 +1,9 @@
+pub mod diagnostics;
 pub mod environment;
+pub mod observability;
 pub mod tunnel;
+pub mod usage;
 
-pub use crate::diagnostics;
-pub use crate::observability;
-pub use crate::usage;
 pub use environment::docker;
 pub use environment::native;
 pub use environment::traits;

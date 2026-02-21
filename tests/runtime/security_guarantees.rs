@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use asteroniris::channels::policy::min_autonomy;
-use asteroniris::intelligence::agent::augment_prompt_with_trust_boundary;
-use asteroniris::intelligence::tools::middleware::{ExecutionContext, default_middleware_chain};
-use asteroniris::intelligence::tools::{FileReadTool, ShellTool, ToolRegistry};
+use asteroniris::core::agent::augment_prompt_with_trust_boundary;
+use asteroniris::core::tools::middleware::{ExecutionContext, default_middleware_chain};
+use asteroniris::core::tools::{FileReadTool, ShellTool, ToolRegistry};
 use asteroniris::security::{
     AutonomyLevel, EntityRateLimiter, GrantScope, PermissionGrant, PermissionStore, SecurityPolicy,
 };
+use asteroniris::transport::channels::policy::min_autonomy;
 use serde_json::json;
 use tempfile::TempDir;
 

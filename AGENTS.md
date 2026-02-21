@@ -48,13 +48,13 @@ Trait + factory dispatch everywhere. Each subsystem defines a trait and a factor
 | Module | Trait / Entry | Role |
 |--------|--------------|------|
 | `core/` | Domain facade | AI core namespace (agent, memory, providers, tools, planner, sessions, persona, eval) |
-| `intelligence/memory/` | `Memory` trait, `create_memory()` | SQLite / LanceDB / Markdown backends |
-| `intelligence/providers/` | `Provider` trait | LLM provider factory + secret scrubbing |
-| `channels/` | `Channel` trait | CLI / Telegram / Discord / Slack / WhatsApp / Matrix / Email / IRC |
-| `intelligence/tools/` | `Tool` trait, `default_tools()` / `all_tools()` | Shell, file, memory, browser, composio |
+| `core/memory/` | `Memory` trait, `create_memory()` | SQLite / LanceDB / Markdown backends |
+| `core/providers/` | `Provider` trait | LLM provider factory + secret scrubbing |
+| `transport/channels/` | `Channel` trait | CLI / Telegram / Discord / Slack / WhatsApp / Matrix / Email / IRC |
+| `core/tools/` | `Tool` trait, `default_tools()` / `all_tools()` | Shell, file, memory, browser, composio |
 | `security/` | `SecurityPolicy` | Deny-by-default allowlist, pairing, vault, writeback guard |
 | `transport/gateway/` | Axum HTTP server | Pairing, webhooks, autosave (64KB body, 30s timeout) |
-| `intelligence/agent/` | Conversation loop | Tool execution, reflection |
+| `core/agent/` | Conversation loop | Tool execution, reflection |
 | `platform/daemon/` | Supervisor | Gateway + channels + heartbeat + cron |
 | `config/` | `Config` | TOML schema + env-var overrides |
 | `plugins/skillforge/` | Skill pipeline | Discovery, evaluation, integration |

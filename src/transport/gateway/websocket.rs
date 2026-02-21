@@ -1,7 +1,7 @@
 use super::AppState;
 use super::events::{ClientMessage, ServerMessage};
-use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
-use crate::intelligence::tools::middleware::ExecutionContext;
+use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::core::tools::middleware::ExecutionContext;
 use crate::security::policy::TenantPolicyContext;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};

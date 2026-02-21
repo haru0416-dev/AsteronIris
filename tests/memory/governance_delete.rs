@@ -1,8 +1,8 @@
-use asteroniris::intelligence::memory::{
+use asteroniris::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
     SqliteMemory,
 };
-use asteroniris::intelligence::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
+use asteroniris::core::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
 
 use rusqlite::Connection;

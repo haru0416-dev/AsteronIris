@@ -9,6 +9,7 @@ pub struct ChatCompletionRequest {
     #[serde(default)]
     pub stream: Option<bool>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub max_tokens: Option<u64>,
 }
 

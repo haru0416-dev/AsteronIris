@@ -1,19 +1,19 @@
 use super::handlers::{
     handle_health, handle_pair, handle_webhook, handle_whatsapp_message, handle_whatsapp_verify,
 };
-use super::openai_compat;
+use super::openai_compat_handler::handle_chat_completions;
 use super::websocket::ws_handler;
 use super::{AppState, MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS};
 
-use crate::channels::WhatsAppChannel;
 use crate::config::Config;
-use crate::intelligence::memory::{self, Memory};
-use crate::intelligence::providers::{self, Provider};
-use crate::intelligence::tools;
-use crate::intelligence::tools::ToolRegistry;
+use crate::core::memory::{self, Memory};
+use crate::core::providers::{self, Provider};
+use crate::core::tools;
+use crate::core::tools::ToolRegistry;
 use crate::security::auth::AuthBroker;
 use crate::security::pairing::{PairingGuard, is_public_bind};
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
+use crate::transport::channels::WhatsAppChannel;
 use anyhow::{Context, Result};
 use axum::{
     Router,
@@ -150,7 +150,7 @@ pub async fn run_gateway_with_listener(
         webhook_secret.is_some(),
     );
 
-    crate::diagnostics::health::mark_component_ok("gateway");
+    crate::runtime::diagnostics::health::mark_component_ok("gateway");
 
     let state = AppState {
         provider,
@@ -265,10 +265,7 @@ fn build_app(state: AppState) -> Router {
         .route("/pair", post(handle_pair))
         .route("/webhook", post(handle_webhook))
         .route("/ws", get(ws_handler))
-        .route(
-            "/v1/chat/completions",
-            post(openai_compat::handle_chat_completions),
-        )
+        .route("/v1/chat/completions", post(handle_chat_completions))
         .route("/whatsapp", get(handle_whatsapp_verify))
         .route("/whatsapp", post(handle_whatsapp_message))
         .with_state(state)

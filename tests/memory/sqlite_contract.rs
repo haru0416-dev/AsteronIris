@@ -1,6 +1,6 @@
 use super::memory_harness::sqlite_fixture as temp_sqlite;
-use asteroniris::intelligence::memory::traits::Memory;
-use asteroniris::intelligence::memory::{
+use asteroniris::core::memory::traits::Memory;
+use asteroniris::core::memory::{
     ForgetMode, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel,
 };
 
@@ -26,7 +26,7 @@ async fn sqlite_append_recall_forget_contract() {
     .expect("append");
 
     let recalled = mem
-        .recall_scoped(asteroniris::intelligence::memory::RecallQuery::new(
+        .recall_scoped(asteroniris::core::memory::RecallQuery::new(
             "user-1", "blue", 10,
         ))
         .await

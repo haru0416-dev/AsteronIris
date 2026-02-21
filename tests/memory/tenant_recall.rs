@@ -1,12 +1,12 @@
 use super::memory_harness::append_test_event;
 use super::memory_harness::sqlite_fixture;
 use asteroniris::config::Config;
-use asteroniris::intelligence::agent::loop_::build_context_for_integration;
-use asteroniris::intelligence::agent::loop_::run_main_session_turn_for_integration_with_policy;
-use asteroniris::intelligence::memory::{Memory, MemoryCategory, RecallQuery};
-use asteroniris::intelligence::providers::Provider;
-use asteroniris::intelligence::tools::memory_recall::MemoryRecallTool;
-use asteroniris::intelligence::tools::{ExecutionContext, Tool};
+use asteroniris::core::agent::loop_::build_context_for_integration;
+use asteroniris::core::agent::loop_::run_main_session_turn_for_integration_with_policy;
+use asteroniris::core::memory::{Memory, MemoryCategory, RecallQuery};
+use asteroniris::core::providers::Provider;
+use asteroniris::core::tools::memory_recall::MemoryRecallTool;
+use asteroniris::core::tools::{ExecutionContext, Tool};
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::{
     TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR, TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR,

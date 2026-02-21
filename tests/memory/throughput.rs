@@ -5,10 +5,10 @@ use std::time::Instant;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
-use asteroniris::intelligence::memory::embeddings::EmbeddingProvider;
-use asteroniris::intelligence::memory::lancedb::LanceDbMemory;
-use asteroniris::intelligence::memory::sqlite::SqliteMemory;
-use asteroniris::intelligence::memory::{
+use asteroniris::core::memory::embeddings::EmbeddingProvider;
+use asteroniris::core::memory::lancedb::LanceDbMemory;
+use asteroniris::core::memory::sqlite::SqliteMemory;
+use asteroniris::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
 };
 

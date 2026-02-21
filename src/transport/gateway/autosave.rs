@@ -1,5 +1,5 @@
-use crate::intelligence::memory::traits::MemoryLayer;
-use crate::intelligence::memory::{
+use crate::core::memory::traits::MemoryLayer;
+use crate::core::memory::{
     MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
 use crate::security::policy::TenantPolicyContext;

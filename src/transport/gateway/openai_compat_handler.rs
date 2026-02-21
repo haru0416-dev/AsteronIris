@@ -1,5 +1,5 @@
-use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
-use crate::intelligence::tools::middleware::ExecutionContext;
+use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::core::tools::middleware::ExecutionContext;
 use crate::security::policy::TenantPolicyContext;
 use crate::transport::gateway::AppState;
 use crate::transport::gateway::openai_compat_auth::validate_api_key;

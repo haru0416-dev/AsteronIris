@@ -16,7 +16,7 @@ pub async fn run(config: Arc<Config>) -> Result<()> {
     let mut interval = time::interval(Duration::from_secs(poll_secs));
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-    crate::diagnostics::health::mark_component_ok("scheduler");
+    crate::runtime::diagnostics::health::mark_component_ok("scheduler");
 
     loop {
         interval.tick().await;
@@ -24,25 +24,31 @@ pub async fn run(config: Arc<Config>) -> Result<()> {
         let jobs = match due_jobs(&config, Utc::now()) {
             Ok(jobs) => jobs,
             Err(e) => {
-                crate::diagnostics::health::mark_component_error("scheduler", e.to_string());
+                crate::runtime::diagnostics::health::mark_component_error(
+                    "scheduler",
+                    e.to_string(),
+                );
                 tracing::warn!("Scheduler query failed: {e}");
                 continue;
             }
         };
 
         for job in jobs {
-            crate::diagnostics::health::mark_component_ok("scheduler");
+            crate::runtime::diagnostics::health::mark_component_ok("scheduler");
             let (success, output) = execute_job_with_retry(&config, &security, &job).await;
 
             if !success {
-                crate::diagnostics::health::mark_component_error(
+                crate::runtime::diagnostics::health::mark_component_error(
                     "scheduler",
                     format!("job {} failed", job.id),
                 );
             }
 
             if let Err(e) = reschedule_after_run(&config, &job, success, &output) {
-                crate::diagnostics::health::mark_component_error("scheduler", e.to_string());
+                crate::runtime::diagnostics::health::mark_component_error(
+                    "scheduler",
+                    e.to_string(),
+                );
                 tracing::warn!("Failed to persist scheduler run result: {e}");
             }
         }

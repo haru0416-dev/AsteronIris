@@ -1,6 +1,6 @@
 use super::memory_harness::sqlite_fixture as temp_sqlite;
-use asteroniris::intelligence::memory::traits::Memory;
-use asteroniris::intelligence::memory::{
+use asteroniris::core::memory::traits::Memory;
+use asteroniris::core::memory::{
     MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
 };
 

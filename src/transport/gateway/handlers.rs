@@ -1,10 +1,10 @@
-use crate::channels::Channel;
-use crate::intelligence::agent::tool_loop::{LoopStopReason, ToolLoop};
-use crate::intelligence::providers;
-use crate::intelligence::tools::middleware::ExecutionContext;
+use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::core::providers;
+use crate::core::tools::middleware::ExecutionContext;
 use crate::security::pairing::constant_time_eq;
 use crate::security::policy::TenantPolicyContext;
-use crate::util::truncate_with_ellipsis;
+use crate::transport::channels::Channel;
+use crate::utils::text::truncate_with_ellipsis;
 use axum::{
     body::Bytes,
     extract::{Query, State},
@@ -57,7 +57,7 @@ async fn run_gateway_tool_loop(
     model: &str,
     temperature: f64,
     source_identifier: &str,
-) -> anyhow::Result<crate::intelligence::agent::tool_loop::ToolLoopResult> {
+) -> anyhow::Result<crate::core::agent::tool_loop::ToolLoopResult> {
     let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
     let full_prompt = system_prompt.unwrap_or_default();
     let ctx = ExecutionContext {
@@ -95,7 +95,7 @@ pub(super) async fn handle_health(State(state): State<AppState>) -> impl IntoRes
     let body = serde_json::json!({
         "status": "ok",
         "paired": state.pairing.is_paired(),
-        "runtime": crate::diagnostics::health::snapshot_json(),
+        "runtime": crate::runtime::diagnostics::health::snapshot_json(),
     });
     Json(body)
 }

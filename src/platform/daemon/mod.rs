@@ -20,13 +20,14 @@ pub async fn run(config: Arc<Config>, host: String, port: u16) -> Result<()> {
         .channel_max_backoff_secs
         .max(initial_backoff);
 
-    crate::diagnostics::health::mark_component_ok("daemon");
+    crate::runtime::diagnostics::health::mark_component_ok("daemon");
 
     if config.heartbeat.enabled {
-        let _ = crate::diagnostics::heartbeat::engine::HeartbeatEngine::ensure_heartbeat_file(
-            &config.workspace_dir,
-        )
-        .await;
+        let _ =
+            crate::runtime::diagnostics::heartbeat::engine::HeartbeatEngine::ensure_heartbeat_file(
+                &config.workspace_dir,
+            )
+            .await;
     }
 
     let mut handles: Vec<JoinHandle<()>> = vec![spawn_state_writer(Arc::clone(&config))];
@@ -45,7 +46,7 @@ pub async fn run(config: Arc<Config>, host: String, port: u16) -> Result<()> {
     println!("   {}", t!("daemon.stop_hint"));
 
     tokio::signal::ctrl_c().await?;
-    crate::diagnostics::health::mark_component_error("daemon", "shutdown requested");
+    crate::runtime::diagnostics::health::mark_component_error("daemon", "shutdown requested");
 
     for handle in &handles {
         handle.abort();

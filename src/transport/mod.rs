@@ -1,2 +1,2 @@
-pub use crate::channels;
+pub mod channels;
 pub mod gateway;

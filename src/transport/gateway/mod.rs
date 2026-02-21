@@ -11,7 +11,6 @@ mod autosave;
 mod defense;
 mod events;
 mod handlers;
-pub mod openai_compat;
 pub(crate) mod openai_compat_auth;
 pub(crate) mod openai_compat_handler;
 pub(crate) mod openai_compat_streaming;
@@ -27,13 +26,13 @@ pub use server::run_gateway_with_listener;
 #[allow(unused_imports)]
 pub use signature::verify_whatsapp_signature;
 
-use crate::channels::WhatsAppChannel;
 use crate::config::GatewayDefenseMode;
-use crate::intelligence::memory::Memory;
-use crate::intelligence::providers::Provider;
-use crate::intelligence::tools::ToolRegistry;
+use crate::core::memory::Memory;
+use crate::core::providers::Provider;
+use crate::core::tools::ToolRegistry;
 use crate::security::pairing::PairingGuard;
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
+use crate::transport::channels::WhatsAppChannel;
 use std::sync::Arc;
 
 #[cfg(test)]

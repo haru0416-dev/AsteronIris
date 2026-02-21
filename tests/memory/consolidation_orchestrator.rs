@@ -3,13 +3,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use asteroniris::config::Config;
-use asteroniris::intelligence::agent::loop_::run_main_session_turn_for_integration_with_policy;
-use asteroniris::intelligence::memory::traits::MemoryLayer;
-use asteroniris::intelligence::memory::{
+use asteroniris::core::agent::loop_::run_main_session_turn_for_integration_with_policy;
+use asteroniris::core::memory::traits::MemoryLayer;
+use asteroniris::core::memory::{
     CONSOLIDATION_SLOT_KEY, ConsolidationDisposition, ConsolidationInput, Memory, MemoryEventInput,
     MemoryEventType, MemorySource, PrivacyLevel, RecallQuery, SqliteMemory, run_consolidation_once,
 };
-use asteroniris::intelligence::providers::Provider;
+use asteroniris::core::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
 use async_trait::async_trait;
@@ -53,7 +53,7 @@ impl Memory for DelayedConsolidationMemory {
     async fn append_event(
         &self,
         input: MemoryEventInput,
-    ) -> anyhow::Result<asteroniris::intelligence::memory::MemoryEvent> {
+    ) -> anyhow::Result<asteroniris::core::memory::MemoryEvent> {
         if input.slot_key == CONSOLIDATION_SLOT_KEY {
             tokio::time::sleep(self.delay).await;
         }
@@ -63,7 +63,7 @@ impl Memory for DelayedConsolidationMemory {
     async fn recall_scoped(
         &self,
         query: RecallQuery,
-    ) -> anyhow::Result<Vec<asteroniris::intelligence::memory::MemoryRecallItem>> {
+    ) -> anyhow::Result<Vec<asteroniris::core::memory::MemoryRecallItem>> {
         self.inner.recall_scoped(query).await
     }
 
@@ -71,7 +71,7 @@ impl Memory for DelayedConsolidationMemory {
         &self,
         entity_id: &str,
         slot_key: &str,
-    ) -> anyhow::Result<Option<asteroniris::intelligence::memory::BeliefSlot>> {
+    ) -> anyhow::Result<Option<asteroniris::core::memory::BeliefSlot>> {
         self.inner.resolve_slot(entity_id, slot_key).await
     }
 
@@ -79,9 +79,9 @@ impl Memory for DelayedConsolidationMemory {
         &self,
         entity_id: &str,
         slot_key: &str,
-        mode: asteroniris::intelligence::memory::ForgetMode,
+        mode: asteroniris::core::memory::ForgetMode,
         reason: &str,
-    ) -> anyhow::Result<asteroniris::intelligence::memory::ForgetOutcome> {
+    ) -> anyhow::Result<asteroniris::core::memory::ForgetOutcome> {
         self.inner
             .forget_slot(entity_id, slot_key, mode, reason)
             .await

@@ -1,7 +1,7 @@
-use asteroniris::intelligence::memory::{
+use asteroniris::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
-use asteroniris::intelligence::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
+use asteroniris::core::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
 
 use serde_json::json;

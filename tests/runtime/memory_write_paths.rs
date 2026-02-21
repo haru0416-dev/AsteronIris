@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use asteroniris::channels::build_system_prompt;
 use asteroniris::config::Config;
-use asteroniris::intelligence::agent::loop_::run_main_session_turn_for_integration_with_policy;
-use asteroniris::intelligence::memory::{Memory, SqliteMemory};
-use asteroniris::intelligence::providers::Provider;
+use asteroniris::core::agent::loop_::run_main_session_turn_for_integration_with_policy;
+use asteroniris::core::memory::{Memory, SqliteMemory};
+use asteroniris::core::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
+use asteroniris::transport::channels::build_system_prompt;
 use async_trait::async_trait;
 use rusqlite::{Connection, params};
 use tempfile::TempDir;

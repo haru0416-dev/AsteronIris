@@ -1,5 +1,5 @@
-use crate::intelligence::tools::middleware::ExecutionContext;
-use crate::intelligence::tools::{Tool, ToolResult};
+use crate::core::tools::middleware::ExecutionContext;
+use crate::core::tools::{Tool, ToolResult};
 use crate::plugins::mcp::client_connection::McpConnection;
 use crate::plugins::mcp::content::{ToolContent, render_content_to_text};
 use async_trait::async_trait;
