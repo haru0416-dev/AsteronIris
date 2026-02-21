@@ -33,6 +33,32 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+  coverage:
+    name: Coverage (baseline)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      COVERAGE_BASELINE_THRESHOLD: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          version: "29.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify protoc
+        run: protoc --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+      - name: Generate lcov report
+        run: cargo llvm-cov --lcov --output-path lcov.info -- --skip inventory_scope_lock::inventory_scope_lock
+      - name: Upload coverage report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+
   build:
     name: Build
     runs-on: ${{ matrix.os }}
