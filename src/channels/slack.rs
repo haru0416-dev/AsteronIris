@@ -199,6 +199,10 @@ impl Channel for SlackChannel {
                         sender: channel_id.clone(),
                         content: text.to_string(),
                         channel: "slack".to_string(),
+                        conversation_id: None,
+                        thread_id: None,
+                        reply_to: None,
+                        message_id: None,
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()

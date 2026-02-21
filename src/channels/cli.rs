@@ -46,6 +46,10 @@ impl Channel for CliChannel {
                 sender: "user".to_string(),
                 content: line,
                 channel: "cli".to_string(),
+                conversation_id: None,
+                thread_id: None,
+                reply_to: None,
+                message_id: None,
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -97,6 +101,10 @@ mod tests {
             sender: "user".into(),
             content: "hello".into(),
             channel: "cli".into(),
+            conversation_id: None,
+            thread_id: None,
+            reply_to: None,
+            message_id: None,
             timestamp: 1_234_567_890,
             attachments: Vec::new(),
         };
@@ -114,6 +122,10 @@ mod tests {
             sender: "s".into(),
             content: "c".into(),
             channel: "ch".into(),
+            conversation_id: None,
+            thread_id: None,
+            reply_to: None,
+            message_id: None,
             timestamp: 0,
             attachments: Vec::new(),
         };
