@@ -1,11 +1,54 @@
-use crate::planner::{Plan, PlanStep, StepStatus};
+use crate::planner::{Plan, PlanStep, StepAction, StepStatus};
+use crate::tools::ToolRegistry;
+use crate::tools::middleware::ExecutionContext;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 pub struct PlanExecutor;
 
 pub struct AgentLoopPlanInterface;
+
+pub struct ToolStepRunner {
+    registry: Arc<ToolRegistry>,
+    ctx: ExecutionContext,
+}
+
+impl ToolStepRunner {
+    pub fn new(registry: Arc<ToolRegistry>, ctx: ExecutionContext) -> Self {
+        Self { registry, ctx }
+    }
+}
+
+#[async_trait]
+impl StepRunner for ToolStepRunner {
+    async fn run_step(&self, step: &PlanStep) -> Result<StepOutput> {
+        match &step.action {
+            StepAction::ToolCall { tool_name, args } => {
+                let result = self
+                    .registry
+                    .execute(tool_name, args.clone(), &self.ctx)
+                    .await?;
+                Ok(StepOutput {
+                    success: result.success,
+                    output: result.output,
+                    error: result.error,
+                })
+            }
+            StepAction::Prompt { text } => Ok(StepOutput {
+                success: true,
+                output: format!("[prompt] {text}"),
+                error: None,
+            }),
+            StepAction::Checkpoint { label } => Ok(StepOutput {
+                success: true,
+                output: format!("[checkpoint] {label}"),
+                error: None,
+            }),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ExecutionReport {
@@ -379,5 +422,199 @@ mod tests {
         assert_eq!(error, "runner transport error");
         assert_eq!(plan.steps[0].status, StepStatus::Running);
         assert_eq!(plan.steps[1].status, StepStatus::Pending);
+    }
+
+    use crate::security::SecurityPolicy;
+    use crate::tools::ToolRegistry;
+    use crate::tools::middleware::ExecutionContext;
+    use crate::tools::traits::{Tool, ToolResult, ToolSpec};
+
+    struct EchoTool;
+
+    #[async_trait]
+    impl Tool for EchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+
+        fn description(&self) -> &str {
+            "echoes input"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            json!({"type": "object", "properties": {"msg": {"type": "string"}}})
+        }
+
+        async fn execute(
+            &self,
+            args: serde_json::Value,
+            _ctx: &ExecutionContext,
+        ) -> anyhow::Result<ToolResult> {
+            let msg = args
+                .get("msg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(empty)");
+            Ok(ToolResult {
+                success: true,
+                output: msg.to_string(),
+                error: None,
+                attachments: Vec::new(),
+            })
+        }
+    }
+
+    fn test_ctx() -> ExecutionContext {
+        let security = Arc::new(SecurityPolicy::default());
+        ExecutionContext::test_default(security)
+    }
+
+    #[tokio::test]
+    async fn tool_step_runner_executes_tool_call() {
+        let mut registry = ToolRegistry::new(vec![]);
+        registry.register(Box::new(EchoTool));
+        let runner = ToolStepRunner::new(Arc::new(registry), test_ctx());
+
+        let step = PlanStep {
+            id: "s1".to_string(),
+            description: "echo test".to_string(),
+            action: StepAction::ToolCall {
+                tool_name: "echo".to_string(),
+                args: json!({"msg": "hello"}),
+            },
+            status: StepStatus::Pending,
+            depends_on: Vec::new(),
+            output: None,
+            error: None,
+        };
+
+        let out = runner.run_step(&step).await.unwrap();
+        assert!(out.success);
+        assert_eq!(out.output, "hello");
+        assert!(out.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn tool_step_runner_handles_prompt_action() {
+        let registry = ToolRegistry::new(vec![]);
+        let runner = ToolStepRunner::new(Arc::new(registry), test_ctx());
+
+        let step = PlanStep {
+            id: "p1".to_string(),
+            description: "ask user".to_string(),
+            action: StepAction::Prompt {
+                text: "Confirm deployment?".to_string(),
+            },
+            status: StepStatus::Pending,
+            depends_on: Vec::new(),
+            output: None,
+            error: None,
+        };
+
+        let out = runner.run_step(&step).await.unwrap();
+        assert!(out.success);
+        assert_eq!(out.output, "[prompt] Confirm deployment?");
+    }
+
+    #[tokio::test]
+    async fn tool_step_runner_handles_checkpoint_action() {
+        let registry = ToolRegistry::new(vec![]);
+        let runner = ToolStepRunner::new(Arc::new(registry), test_ctx());
+
+        let step = PlanStep {
+            id: "c1".to_string(),
+            description: "pre-deploy gate".to_string(),
+            action: StepAction::Checkpoint {
+                label: "pre-deploy".to_string(),
+            },
+            status: StepStatus::Pending,
+            depends_on: Vec::new(),
+            output: None,
+            error: None,
+        };
+
+        let out = runner.run_step(&step).await.unwrap();
+        assert!(out.success);
+        assert_eq!(out.output, "[checkpoint] pre-deploy");
+    }
+
+    #[tokio::test]
+    async fn tool_step_runner_reports_tool_not_found() {
+        let registry = ToolRegistry::new(vec![]);
+        let runner = ToolStepRunner::new(Arc::new(registry), test_ctx());
+
+        let step = PlanStep {
+            id: "s1".to_string(),
+            description: "missing tool".to_string(),
+            action: StepAction::ToolCall {
+                tool_name: "nonexistent".to_string(),
+                args: json!({}),
+            },
+            status: StepStatus::Pending,
+            depends_on: Vec::new(),
+            output: None,
+            error: None,
+        };
+
+        let out = runner.run_step(&step).await.unwrap();
+        assert!(!out.success);
+        assert!(out.error.as_deref().unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn tool_step_runner_integrates_with_plan_executor() {
+        let mut registry = ToolRegistry::new(vec![]);
+        registry.register(Box::new(EchoTool));
+        let runner = ToolStepRunner::new(Arc::new(registry), test_ctx());
+
+        let dag = DagContract::new(
+            vec![DagNode::new("A"), DagNode::new("B"), DagNode::new("C")],
+            vec![DagEdge::new("A", "B"), DagEdge::new("B", "C")],
+        );
+
+        let steps = vec![
+            PlanStep {
+                id: "A".to_string(),
+                description: "echo step".to_string(),
+                action: StepAction::ToolCall {
+                    tool_name: "echo".to_string(),
+                    args: json!({"msg": "step-a"}),
+                },
+                status: StepStatus::Pending,
+                depends_on: Vec::new(),
+                output: None,
+                error: None,
+            },
+            PlanStep {
+                id: "B".to_string(),
+                description: "checkpoint".to_string(),
+                action: StepAction::Checkpoint {
+                    label: "mid".to_string(),
+                },
+                status: StepStatus::Pending,
+                depends_on: vec!["A".to_string()],
+                output: None,
+                error: None,
+            },
+            PlanStep {
+                id: "C".to_string(),
+                description: "prompt".to_string(),
+                action: StepAction::Prompt {
+                    text: "done?".to_string(),
+                },
+                status: StepStatus::Pending,
+                depends_on: vec!["B".to_string()],
+                output: None,
+                error: None,
+            },
+        ];
+
+        let mut plan = Plan::new("integration-test", "mixed actions", steps, dag).unwrap();
+        let report = PlanExecutor::execute(&mut plan, &runner).await.unwrap();
+
+        assert!(report.success);
+        assert_eq!(report.completed_steps, vec!["A", "B", "C"]);
+        assert_eq!(plan.steps[0].output.as_deref(), Some("step-a"));
+        assert_eq!(plan.steps[1].output.as_deref(), Some("[checkpoint] mid"));
+        assert_eq!(plan.steps[2].output.as_deref(), Some("[prompt] done?"));
     }
 }
