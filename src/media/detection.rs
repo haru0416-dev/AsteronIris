@@ -1,8 +1,15 @@
 use super::types::MediaType;
 
 #[must_use]
+#[cfg(feature = "media")]
 pub fn detect_mime(data: &[u8]) -> Option<String> {
     infer::get(data).map(|info| info.mime_type().to_string())
+}
+
+#[must_use]
+#[cfg(not(feature = "media"))]
+pub fn detect_mime(_data: &[u8]) -> Option<String> {
+    None
 }
 
 #[must_use]

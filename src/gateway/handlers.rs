@@ -95,7 +95,7 @@ pub(super) async fn handle_health(State(state): State<AppState>) -> impl IntoRes
     let body = serde_json::json!({
         "status": "ok",
         "paired": state.pairing.is_paired(),
-        "runtime": crate::health::snapshot_json(),
+        "runtime": crate::diagnostics::health::snapshot_json(),
     });
     Json(body)
 }

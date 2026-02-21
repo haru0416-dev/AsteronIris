@@ -20,20 +20,23 @@ where
         let max_backoff = max_backoff_secs.max(backoff);
 
         loop {
-            crate::health::mark_component_ok(name);
+            crate::diagnostics::health::mark_component_ok(name);
             match run_component().await {
                 Ok(()) => {
-                    crate::health::mark_component_error(name, "component exited unexpectedly");
+                    crate::diagnostics::health::mark_component_error(
+                        name,
+                        "component exited unexpectedly",
+                    );
                     tracing::warn!("Daemon component '{name}' exited unexpectedly");
                     backoff = initial_backoff_secs.max(1);
                 }
                 Err(e) => {
-                    crate::health::mark_component_error(name, e.to_string());
+                    crate::diagnostics::health::mark_component_error(name, e.to_string());
                     tracing::error!("Daemon component '{name}' failed: {e}");
                 }
             }
 
-            crate::health::bump_component_restart(name);
+            crate::diagnostics::health::bump_component_restart(name);
             tokio::time::sleep(Duration::from_secs(backoff)).await;
             backoff = backoff.saturating_mul(2).min(max_backoff);
         }
@@ -74,7 +77,7 @@ pub(super) fn spawn_supervised_components(
             },
         ));
     } else {
-        crate::health::mark_component_ok("channels");
+        crate::diagnostics::health::mark_component_ok("channels");
         tracing::info!("No real-time channels configured; channel supervisor disabled");
     }
 
@@ -119,7 +122,7 @@ mod tests {
         handle.abort();
         let _ = handle.await;
 
-        let snapshot = crate::health::snapshot_json();
+        let snapshot = crate::diagnostics::health::snapshot_json();
         let component = &snapshot["components"]["daemon-test-fail"];
         assert_eq!(component["status"], "error");
         assert!(component["restart_count"].as_u64().unwrap_or(0) >= 1);
@@ -139,7 +142,7 @@ mod tests {
         handle.abort();
         let _ = handle.await;
 
-        let snapshot = crate::health::snapshot_json();
+        let snapshot = crate::diagnostics::health::snapshot_json();
         let component = &snapshot["components"]["daemon-test-exit"];
         assert_eq!(component["status"], "error");
         assert!(component["restart_count"].as_u64().unwrap_or(0) >= 1);

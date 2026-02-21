@@ -19,44 +19,10 @@ use std::sync::Arc;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-mod agent;
 mod app;
-mod auth;
-mod channels;
 mod cli;
-mod config;
-mod cron;
-mod daemon;
-mod doctor;
-mod gateway;
-mod health;
-mod heartbeat;
-mod integrations;
-#[cfg(feature = "mcp")]
-mod mcp;
-#[cfg(feature = "media")]
-#[allow(unused_imports)]
-mod media;
-mod memory;
-mod observability;
-mod onboard;
-mod persona;
-mod providers;
-mod runtime;
-mod security;
-mod service;
-mod skillforge;
-mod skills;
-mod tools;
-mod tunnel;
-mod ui;
-mod util;
-
-pub(crate) use cli::commands::{
-    AuthCommands, ChannelCommands, Cli, CronCommands, IntegrationCommands, ServiceCommands,
-    SkillCommands,
-};
-use config::Config;
+use asteroniris::Config;
+use cli::commands::Cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {

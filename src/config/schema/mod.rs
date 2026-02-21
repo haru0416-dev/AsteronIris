@@ -13,8 +13,8 @@ pub use autonomy::{AutonomyConfig, AutonomyRolloutStage};
 #[allow(unused_imports)]
 pub use autonomy::{AutonomyRolloutConfig, TemperatureBand, TemperatureBandsConfig};
 pub use channels::{
-    ChannelsConfig, DiscordConfig, IMessageConfig, IrcConfig, MatrixConfig, SlackConfig,
-    TelegramConfig, WebhookConfig, WhatsAppConfig,
+    ChannelsConfig, DiscordConfig, EmailConfig, IMessageConfig, IrcConfig, MatrixConfig,
+    SlackConfig, TelegramConfig, WebhookConfig, WhatsAppConfig,
 };
 pub use core::{
     BrowserConfig, ComposioConfig, Config, HeartbeatConfig, IdentityConfig, PersonaConfig,

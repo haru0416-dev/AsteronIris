@@ -30,7 +30,7 @@ pub(super) fn spawn_state_writer(config: Arc<Config>) -> JoinHandle<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(super::STATUS_FLUSH_SECONDS));
         loop {
             interval.tick().await;
-            let mut json = crate::health::snapshot_json();
+            let mut json = crate::diagnostics::health::snapshot_json();
             if let Some(snapshot) = json.as_object().cloned() {
                 let status = DaemonStatus {
                     snapshot,

@@ -15,9 +15,6 @@ extern crate rust_i18n;
 
 i18n!("locales", fallback = "en");
 
-use clap::Subcommand;
-use serde::{Deserialize, Serialize};
-
 pub mod agent;
 pub mod auth;
 pub mod channels;
@@ -25,22 +22,21 @@ pub mod commands;
 pub mod config;
 pub mod cron;
 pub mod daemon;
-pub mod doctor;
+pub mod diagnostics;
 pub mod eval;
 pub mod gateway;
-pub mod health;
-pub mod heartbeat;
 pub mod integrations;
+pub mod intelligence;
 pub mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
-#[cfg(feature = "media")]
 pub mod media;
 pub mod memory;
 pub mod observability;
 pub mod onboard;
 pub mod persona;
 pub mod planner;
+pub mod platform;
 pub mod providers;
 pub mod runtime;
 pub mod security;
@@ -53,133 +49,8 @@ pub mod ui;
 pub mod usage;
 pub mod util;
 
+pub use commands::{
+    AuthCommands, ChannelCommands, CronCommands, IntegrationCommands, ServiceCommands,
+    SkillCommands,
+};
 pub use config::Config;
-
-/// Service management subcommands
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ServiceCommands {
-    /// Install daemon service unit for auto-start and restart
-    Install,
-    /// Start daemon service
-    Start,
-    /// Stop daemon service
-    Stop,
-    /// Check daemon service status
-    Status,
-    /// Uninstall daemon service unit
-    Uninstall,
-}
-
-/// Channel management subcommands
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ChannelCommands {
-    /// List all configured channels
-    List,
-    /// Start all configured channels (handled in main.rs for async)
-    Start,
-    /// Run health checks for configured channels (handled in main.rs for async)
-    Doctor,
-    /// Add a new channel configuration
-    Add {
-        /// Channel type (telegram, discord, slack, whatsapp, matrix, imessage, email)
-        channel_type: String,
-        /// Optional configuration as JSON
-        config: String,
-    },
-    /// Remove a channel configuration
-    Remove {
-        /// Channel name to remove
-        name: String,
-    },
-}
-
-/// Skills management subcommands
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SkillCommands {
-    /// List all installed skills
-    List,
-    /// Install a new skill from a URL or local path
-    Install {
-        /// Source URL or local path
-        source: String,
-    },
-    /// Remove an installed skill
-    Remove {
-        /// Skill name to remove
-        name: String,
-    },
-}
-
-/// Cron subcommands
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum CronCommands {
-    /// List all scheduled tasks
-    List,
-    /// Add a new scheduled task
-    Add {
-        /// Cron expression
-        expression: String,
-        /// Command to run
-        command: String,
-    },
-    /// Remove a scheduled task
-    Remove {
-        /// Task ID
-        id: String,
-    },
-}
-
-/// Auth profile subcommands
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AuthCommands {
-    /// List configured auth profiles
-    List,
-    /// Show auth status for a provider
-    Status {
-        /// Provider to inspect (defaults to configured default provider)
-        provider: Option<String>,
-    },
-    /// Save or update an API-key auth profile
-    Login {
-        /// Provider name (e.g. openrouter, openai, anthropic)
-        provider: String,
-        /// Profile id (defaults to <provider>-default)
-        profile: Option<String>,
-        /// Human label for the profile
-        label: Option<String>,
-        /// API key to store (if omitted, prompt securely)
-        api_key: Option<String>,
-        /// Do not set this profile as provider default
-        no_default: bool,
-    },
-    /// Login using OAuth via provider CLI and store imported token profile
-    OAuthLogin {
-        /// OAuth source/provider (codex/openai or claude/anthropic)
-        provider: String,
-        /// Profile id (defaults to <provider>-oauth-default)
-        profile: Option<String>,
-        /// Human label for the profile
-        label: Option<String>,
-        /// Do not set this profile as provider default
-        no_default: bool,
-        /// Skip launching provider login CLI and import from local credentials only
-        skip_cli_login: bool,
-        /// Claude setup token (sk-ant-oat01-...), if already obtained
-        setup_token: Option<String>,
-    },
-    /// Show OAuth source health (codex/claude)
-    OAuthStatus {
-        /// OAuth source/provider to inspect (codex or claude)
-        provider: Option<String>,
-    },
-}
-
-/// Integration subcommands
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum IntegrationCommands {
-    /// Show details about a specific integration
-    Info {
-        /// Integration name
-        name: String,
-    },
-}

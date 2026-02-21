@@ -5,7 +5,7 @@ use tokio::time::Duration;
 pub(super) async fn run_heartbeat_worker(config: Arc<crate::config::Config>) -> Result<()> {
     let observer: Arc<dyn crate::observability::Observer> =
         Arc::from(crate::observability::create_observer(&config.observability));
-    let engine = crate::heartbeat::engine::HeartbeatEngine::new(
+    let engine = crate::diagnostics::heartbeat::engine::HeartbeatEngine::new(
         config.heartbeat.clone(),
         config.workspace_dir.clone(),
         observer,
@@ -28,10 +28,10 @@ pub(super) async fn run_heartbeat_worker(config: Arc<crate::config::Config>) -> 
             if let Err(e) =
                 crate::agent::run(Arc::clone(&config), Some(prompt), None, None, temp).await
             {
-                crate::health::mark_component_error("heartbeat", e.to_string());
+                crate::diagnostics::health::mark_component_error("heartbeat", e.to_string());
                 tracing::warn!("Heartbeat task failed: {e}");
             } else {
-                crate::health::mark_component_ok("heartbeat");
+                crate::diagnostics::health::mark_component_ok("heartbeat");
             }
         }
     }

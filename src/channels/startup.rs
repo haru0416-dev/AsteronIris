@@ -240,7 +240,7 @@ pub async fn start_channels(config: Arc<Config>) -> Result<()> {
     println!("  {}", t!("channels.listening"));
     println!();
 
-    crate::health::mark_component_ok("channels");
+    crate::diagnostics::health::mark_component_ok("channels");
 
     let (initial_backoff_secs, max_backoff_secs) = channel_backoff_settings(&rt.config.reliability);
 

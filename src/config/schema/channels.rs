@@ -12,7 +12,7 @@ pub struct ChannelsConfig {
     pub imessage: Option<IMessageConfig>,
     pub matrix: Option<MatrixConfig>,
     pub whatsapp: Option<WhatsAppConfig>,
-    pub email: Option<crate::channels::email_channel::EmailConfig>,
+    pub email: Option<EmailConfig>,
     pub irc: Option<IrcConfig>,
 }
 
@@ -176,6 +176,45 @@ pub struct IrcConfig {
     pub tool_allowlist: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailConfig {
+    pub imap_host: String,
+    #[serde(default = "default_email_imap_port")]
+    pub imap_port: u16,
+    #[serde(default = "default_email_imap_folder")]
+    pub imap_folder: String,
+    pub smtp_host: String,
+    #[serde(default = "default_email_smtp_port")]
+    pub smtp_port: u16,
+    #[serde(default = "default_true")]
+    pub smtp_tls: bool,
+    pub username: String,
+    pub password: String,
+    pub from_address: String,
+    #[serde(default = "default_email_poll_interval")]
+    pub poll_interval_secs: u64,
+    #[serde(default)]
+    pub allowed_senders: Vec<String>,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            imap_host: String::new(),
+            imap_port: default_email_imap_port(),
+            imap_folder: default_email_imap_folder(),
+            smtp_host: String::new(),
+            smtp_port: default_email_smtp_port(),
+            smtp_tls: true,
+            username: String::new(),
+            password: String::new(),
+            from_address: String::new(),
+            poll_interval_secs: default_email_poll_interval(),
+            allowed_senders: Vec::new(),
+        }
+    }
+}
+
 fn deserialize_autonomy_level_opt<'de, D>(
     deserializer: D,
 ) -> Result<Option<AutonomyLevel>, D::Error>
@@ -198,6 +237,26 @@ where
 
 fn default_irc_port() -> u16 {
     6697
+}
+
+fn default_email_imap_port() -> u16 {
+    993
+}
+
+fn default_email_smtp_port() -> u16 {
+    587
+}
+
+fn default_email_imap_folder() -> String {
+    "INBOX".into()
+}
+
+fn default_email_poll_interval() -> u64 {
+    60
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_cli_enabled() -> bool {

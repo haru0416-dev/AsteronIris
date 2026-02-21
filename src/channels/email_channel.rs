@@ -13,7 +13,6 @@ use async_trait::async_trait;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 use mail_parser::{MessageParser, MimeHeaders};
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Write as IoWrite;
 use std::net::TcpStream;
@@ -23,6 +22,8 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, sleep};
 use tracing::{error, info, warn};
 use uuid::Uuid;
+
+use crate::config::schema::EmailConfig;
 
 use super::traits::{Channel, ChannelMessage};
 
@@ -41,73 +42,6 @@ fn escape_imap_quoted(s: &str) -> String {
         }
     }
     out
-}
-
-/// Email channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmailConfig {
-    /// IMAP server hostname
-    pub imap_host: String,
-    /// IMAP server port (default: 993 for TLS)
-    #[serde(default = "default_imap_port")]
-    pub imap_port: u16,
-    /// IMAP folder to poll (default: INBOX)
-    #[serde(default = "default_imap_folder")]
-    pub imap_folder: String,
-    /// SMTP server hostname
-    pub smtp_host: String,
-    /// SMTP server port (default: 587 for STARTTLS)
-    #[serde(default = "default_smtp_port")]
-    pub smtp_port: u16,
-    /// Use TLS for SMTP (default: true)
-    #[serde(default = "default_true")]
-    pub smtp_tls: bool,
-    /// Email username for authentication
-    pub username: String,
-    /// Email password for authentication
-    pub password: String,
-    /// From address for outgoing emails
-    pub from_address: String,
-    /// Poll interval in seconds (default: 60)
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_secs: u64,
-    /// Allowed sender addresses/domains (empty = deny all, ["*"] = allow all)
-    #[serde(default)]
-    pub allowed_senders: Vec<String>,
-}
-
-fn default_imap_port() -> u16 {
-    993
-}
-fn default_smtp_port() -> u16 {
-    587
-}
-fn default_imap_folder() -> String {
-    "INBOX".into()
-}
-fn default_poll_interval() -> u64 {
-    60
-}
-fn default_true() -> bool {
-    true
-}
-
-impl Default for EmailConfig {
-    fn default() -> Self {
-        Self {
-            imap_host: String::new(),
-            imap_port: default_imap_port(),
-            imap_folder: default_imap_folder(),
-            smtp_host: String::new(),
-            smtp_port: default_smtp_port(),
-            smtp_tls: true,
-            username: String::new(),
-            password: String::new(),
-            from_address: String::new(),
-            poll_interval_secs: default_poll_interval(),
-            allowed_senders: Vec::new(),
-        }
-    }
 }
 
 /// Email channel — IMAP polling for inbound, SMTP for outbound

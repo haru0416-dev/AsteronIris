@@ -1,4 +1,4 @@
-use crate::config::Config;
+use asteroniris::config::Config;
 
 #[allow(clippy::too_many_lines)]
 pub fn render_status(config: &Config) -> String {
@@ -41,8 +41,8 @@ pub fn render_status(config: &Config) -> String {
             "   {} {}",
             t!("status.external_actions"),
             match config.autonomy.external_action_execution {
-                crate::security::ExternalActionExecution::Disabled => "disabled",
-                crate::security::ExternalActionExecution::Enabled => "enabled",
+                asteroniris::security::ExternalActionExecution::Disabled => "disabled",
+                asteroniris::security::ExternalActionExecution::Enabled => "enabled",
             }
         ),
     ];
@@ -58,9 +58,9 @@ pub fn render_status(config: &Config) -> String {
         "   {} {}",
         t!("status.rollout_stage"),
         match config.autonomy.rollout.stage {
-            Some(crate::config::schema::AutonomyRolloutStage::ReadOnly) => "read-only",
-            Some(crate::config::schema::AutonomyRolloutStage::Supervised) => "supervised",
-            Some(crate::config::schema::AutonomyRolloutStage::Full) => "full",
+            Some(asteroniris::config::schema::AutonomyRolloutStage::ReadOnly) => "read-only",
+            Some(asteroniris::config::schema::AutonomyRolloutStage::Supervised) => "supervised",
+            Some(asteroniris::config::schema::AutonomyRolloutStage::Full) => "full",
             None => "off",
         }
     ));
@@ -197,7 +197,7 @@ fn memory_rollout_status(
         "off"
     };
 
-    let capability = crate::memory::capability_matrix_for_backend(backend);
+    let capability = asteroniris::memory::capability_matrix_for_backend(backend);
     let revocation = capability.map_or("unknown", |matrix| {
         capability_support_label(matrix.forget_tombstone)
     });
@@ -208,18 +208,18 @@ fn memory_rollout_status(
     (consolidation, conflict, revocation, governance)
 }
 
-fn capability_support_label(support: crate::memory::CapabilitySupport) -> &'static str {
+fn capability_support_label(support: asteroniris::memory::CapabilitySupport) -> &'static str {
     match support {
-        crate::memory::CapabilitySupport::Supported => "supported",
-        crate::memory::CapabilitySupport::Degraded => "degraded",
-        crate::memory::CapabilitySupport::Unsupported => "unsupported",
+        asteroniris::memory::CapabilitySupport::Supported => "supported",
+        asteroniris::memory::CapabilitySupport::Degraded => "degraded",
+        asteroniris::memory::CapabilitySupport::Unsupported => "unsupported",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::memory_rollout_status;
-    use crate::config::Config;
+    use asteroniris::config::Config;
 
     #[test]
     fn status_reports_memory_rollout_support() {

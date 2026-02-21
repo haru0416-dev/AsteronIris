@@ -150,7 +150,7 @@ pub async fn run_gateway_with_listener(
         webhook_secret.is_some(),
     );
 
-    crate::health::mark_component_ok("gateway");
+    crate::diagnostics::health::mark_component_ok("gateway");
 
     let state = AppState {
         provider,
