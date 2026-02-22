@@ -66,7 +66,8 @@ impl ApprovalBroker for AutoDenyBroker {
 #[must_use]
 pub fn classify_risk(tool_name: &str) -> RiskLevel {
     match tool_name {
-        "shell" => RiskLevel::High,
+        "shell" | "composio" => RiskLevel::High,
+        name if name.starts_with("mcp_") => RiskLevel::High,
         "file_write" | "memory_forget" | "memory_governance" => RiskLevel::Medium,
         _ => RiskLevel::Low,
     }
@@ -183,5 +184,16 @@ mod tests {
     #[test]
     fn approval_decision_approved_equality() {
         assert_eq!(ApprovalDecision::Approved, ApprovalDecision::Approved);
+    }
+
+    #[test]
+    fn classify_risk_composio_is_high() {
+        assert_eq!(classify_risk("composio"), RiskLevel::High);
+    }
+
+    #[test]
+    fn classify_risk_mcp_tools_are_high() {
+        assert_eq!(classify_risk("mcp_filesystem_read"), RiskLevel::High);
+        assert_eq!(classify_risk("mcp_github_search"), RiskLevel::High);
     }
 }
