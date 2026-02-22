@@ -15,6 +15,7 @@ pub(crate) mod openai_compat_auth;
 pub(crate) mod openai_compat_handler;
 pub(crate) mod openai_compat_streaming;
 pub(crate) mod openai_compat_types;
+mod replay_guard;
 mod server;
 mod signature;
 mod websocket;
@@ -33,6 +34,7 @@ use crate::core::tools::ToolRegistry;
 use crate::security::pairing::PairingGuard;
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
 use crate::transport::channels::WhatsAppChannel;
+use replay_guard::ReplayGuard;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -66,6 +68,7 @@ pub struct AppState {
     pub defense_mode: GatewayDefenseMode,
     pub defense_kill_switch: bool,
     pub security: Arc<SecurityPolicy>,
+    pub replay_guard: Arc<ReplayGuard>,
 }
 
 /// Webhook request body

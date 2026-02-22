@@ -2,6 +2,7 @@ use super::handlers::{
     handle_health, handle_pair, handle_webhook, handle_whatsapp_message, handle_whatsapp_verify,
 };
 use super::openai_compat_handler::handle_chat_completions;
+use super::replay_guard::ReplayGuard;
 use super::websocket::ws_handler;
 use super::{AppState, MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS};
 
@@ -175,6 +176,7 @@ fn build_gateway_state(
         defense_mode: config.gateway.defense_mode,
         defense_kill_switch: config.gateway.defense_kill_switch,
         security: resources.security,
+        replay_guard: Arc::new(ReplayGuard::new()),
     }
 }
 

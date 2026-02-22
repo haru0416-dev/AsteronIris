@@ -417,6 +417,12 @@ pub(super) async fn handle_whatsapp_message(
         }
     }
 
+    // ── Replay protection: check if we've seen this body before ──
+    if !state.replay_guard.check_and_record(&body) {
+        tracing::warn!("WhatsApp webhook replay detected");
+        return whatsapp_ack_response();
+    }
+
     let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&body) else {
         return invalid_whatsapp_payload_response();
     };

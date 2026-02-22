@@ -313,6 +313,7 @@ async fn webhook_policy_blocks_when_action_limit_is_exhausted() {
             max_actions_per_hour: 0,
             ..SecurityPolicy::default()
         }),
+        replay_guard: Arc::new(ReplayGuard::new()),
     };
 
     let mut headers = HeaderMap::new();
@@ -399,6 +400,7 @@ fn effective_defense_mode_kill_switch_forces_audit() {
         defense_mode: GatewayDefenseMode::Enforce,
         defense_kill_switch: true,
         security: Arc::new(SecurityPolicy::default()),
+        replay_guard: Arc::new(ReplayGuard::new()),
     };
     assert!(matches!(
         defense::effective_defense_mode(&state),
@@ -471,6 +473,7 @@ fn make_test_state(pairing: PairingGuard) -> AppState {
         defense_mode: GatewayDefenseMode::Enforce,
         defense_kill_switch: false,
         security: Arc::new(SecurityPolicy::default()),
+        replay_guard: Arc::new(ReplayGuard::new()),
     }
 }
 
@@ -530,6 +533,7 @@ fn make_whatsapp_state() -> AppState {
         defense_mode: GatewayDefenseMode::Enforce,
         defense_kill_switch: false,
         security: Arc::new(SecurityPolicy::default()),
+        replay_guard: Arc::new(ReplayGuard::new()),
     }
 }
 
