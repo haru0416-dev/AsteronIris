@@ -1,5 +1,5 @@
 use super::auth::encode_sasl_plain;
-use super::channel::IrcChannel;
+use super::channel::{IrcChannel, IrcChannelConfig};
 use super::message::split_message;
 use super::parse::IrcMessage;
 use crate::transport::channels::traits::Channel;
@@ -202,18 +202,18 @@ fn wildcard_allows_anyone() {
 
 #[test]
 fn specific_user_allowed() {
-    let ch = IrcChannel::new(
-        "irc.test".into(),
-        6697,
-        "bot".into(),
-        None,
-        vec![],
-        vec!["alice".into(), "bob".into()],
-        None,
-        None,
-        None,
-        true,
-    );
+    let ch = IrcChannel::new(IrcChannelConfig {
+        server: "irc.test".into(),
+        port: 6697,
+        nickname: "bot".into(),
+        username: None,
+        channels: vec![],
+        allowed_users: vec!["alice".into(), "bob".into()],
+        server_password: None,
+        nickserv_password: None,
+        sasl_password: None,
+        verify_tls: true,
+    });
     assert!(ch.is_user_allowed("alice"));
     assert!(ch.is_user_allowed("bob"));
     assert!(!ch.is_user_allowed("eve"));
@@ -221,18 +221,18 @@ fn specific_user_allowed() {
 
 #[test]
 fn allowlist_case_insensitive() {
-    let ch = IrcChannel::new(
-        "irc.test".into(),
-        6697,
-        "bot".into(),
-        None,
-        vec![],
-        vec!["Alice".into()],
-        None,
-        None,
-        None,
-        true,
-    );
+    let ch = IrcChannel::new(IrcChannelConfig {
+        server: "irc.test".into(),
+        port: 6697,
+        nickname: "bot".into(),
+        username: None,
+        channels: vec![],
+        allowed_users: vec!["Alice".into()],
+        server_password: None,
+        nickserv_password: None,
+        sasl_password: None,
+        verify_tls: true,
+    });
     assert!(ch.is_user_allowed("alice"));
     assert!(ch.is_user_allowed("ALICE"));
     assert!(ch.is_user_allowed("Alice"));
@@ -240,18 +240,18 @@ fn allowlist_case_insensitive() {
 
 #[test]
 fn empty_allowlist_denies_all() {
-    let ch = IrcChannel::new(
-        "irc.test".into(),
-        6697,
-        "bot".into(),
-        None,
-        vec![],
-        vec![],
-        None,
-        None,
-        None,
-        true,
-    );
+    let ch = IrcChannel::new(IrcChannelConfig {
+        server: "irc.test".into(),
+        port: 6697,
+        nickname: "bot".into(),
+        username: None,
+        channels: vec![],
+        allowed_users: vec![],
+        server_password: None,
+        nickserv_password: None,
+        sasl_password: None,
+        verify_tls: true,
+    });
     assert!(!ch.is_user_allowed("anyone"));
 }
 
@@ -259,35 +259,35 @@ fn empty_allowlist_denies_all() {
 
 #[test]
 fn new_defaults_username_to_nickname() {
-    let ch = IrcChannel::new(
-        "irc.test".into(),
-        6697,
-        "mybot".into(),
-        None,
-        vec![],
-        vec![],
-        None,
-        None,
-        None,
-        true,
-    );
+    let ch = IrcChannel::new(IrcChannelConfig {
+        server: "irc.test".into(),
+        port: 6697,
+        nickname: "mybot".into(),
+        username: None,
+        channels: vec![],
+        allowed_users: vec![],
+        server_password: None,
+        nickserv_password: None,
+        sasl_password: None,
+        verify_tls: true,
+    });
     assert_eq!(ch.username, "mybot");
 }
 
 #[test]
 fn new_uses_explicit_username() {
-    let ch = IrcChannel::new(
-        "irc.test".into(),
-        6697,
-        "mybot".into(),
-        Some("customuser".into()),
-        vec![],
-        vec![],
-        None,
-        None,
-        None,
-        true,
-    );
+    let ch = IrcChannel::new(IrcChannelConfig {
+        server: "irc.test".into(),
+        port: 6697,
+        nickname: "mybot".into(),
+        username: Some("customuser".into()),
+        channels: vec![],
+        allowed_users: vec![],
+        server_password: None,
+        nickserv_password: None,
+        sasl_password: None,
+        verify_tls: true,
+    });
     assert_eq!(ch.username, "customuser");
     assert_eq!(ch.nickname, "mybot");
 }
@@ -300,18 +300,18 @@ fn name_returns_irc() {
 
 #[test]
 fn new_stores_all_fields() {
-    let ch = IrcChannel::new(
-        "irc.example.com".into(),
-        6697,
-        "zcbot".into(),
-        Some("asteroniris".into()),
-        vec!["#test".into()],
-        vec!["alice".into()],
-        Some("serverpass".into()),
-        Some("nspass".into()),
-        Some("saslpass".into()),
-        false,
-    );
+    let ch = IrcChannel::new(IrcChannelConfig {
+        server: "irc.example.com".into(),
+        port: 6697,
+        nickname: "zcbot".into(),
+        username: Some("asteroniris".into()),
+        channels: vec!["#test".into()],
+        allowed_users: vec!["alice".into()],
+        server_password: Some("serverpass".into()),
+        nickserv_password: Some("nspass".into()),
+        sasl_password: Some("saslpass".into()),
+        verify_tls: false,
+    });
     assert_eq!(ch.server, "irc.example.com");
     assert_eq!(ch.port, 6697);
     assert_eq!(ch.nickname, "zcbot");
@@ -396,16 +396,16 @@ fn irc_config_default_port() {
 // ── Helpers ─────────────────────────────────────────────
 
 fn make_channel() -> IrcChannel {
-    IrcChannel::new(
-        "irc.example.com".into(),
-        6697,
-        "zcbot".into(),
-        None,
-        vec!["#asteroniris".into()],
-        vec!["*".into()],
-        None,
-        None,
-        None,
-        true,
-    )
+    IrcChannel::new(IrcChannelConfig {
+        server: "irc.example.com".into(),
+        port: 6697,
+        nickname: "zcbot".into(),
+        username: None,
+        channels: vec!["#asteroniris".into()],
+        allowed_users: vec!["*".into()],
+        server_password: None,
+        nickserv_password: None,
+        sasl_password: None,
+        verify_tls: true,
+    })
 }

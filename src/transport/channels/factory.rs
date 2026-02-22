@@ -5,7 +5,8 @@ use crate::transport::channels::DiscordChannel;
 use crate::transport::channels::EmailChannel;
 use crate::transport::channels::policy::{ChannelEntry, ChannelPolicy};
 use crate::transport::channels::{
-    IMessageChannel, IrcChannel, MatrixChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
+    IMessageChannel, IrcChannel, IrcChannelConfig, MatrixChannel, SlackChannel, TelegramChannel,
+    WhatsAppChannel,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -99,18 +100,18 @@ pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
     if let Some(irc) = channels_config.irc {
         channels.push(ChannelEntry {
             name: "IRC",
-            channel: Arc::new(IrcChannel::new(
-                irc.server,
-                irc.port,
-                irc.nickname,
-                irc.username,
-                irc.channels,
-                irc.allowed_users,
-                irc.server_password,
-                irc.nickserv_password,
-                irc.sasl_password,
-                irc.verify_tls.unwrap_or(true),
-            )),
+            channel: Arc::new(IrcChannel::new(IrcChannelConfig {
+                server: irc.server,
+                port: irc.port,
+                nickname: irc.nickname,
+                username: irc.username,
+                channels: irc.channels,
+                allowed_users: irc.allowed_users,
+                server_password: irc.server_password,
+                nickserv_password: irc.nickserv_password,
+                sasl_password: irc.sasl_password,
+                verify_tls: irc.verify_tls.unwrap_or(true),
+            })),
             policy: build_policy(irc.autonomy_level, irc.tool_allowlist),
         });
     }

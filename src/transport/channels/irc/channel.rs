@@ -41,22 +41,35 @@ pub struct IrcChannel {
     writer: Arc<Mutex<Option<WriteHalf>>>,
 }
 
+pub struct IrcChannelConfig {
+    pub server: String,
+    pub port: u16,
+    pub nickname: String,
+    pub username: Option<String>,
+    pub channels: Vec<String>,
+    pub allowed_users: Vec<String>,
+    pub server_password: Option<String>,
+    pub nickserv_password: Option<String>,
+    pub sasl_password: Option<String>,
+    pub verify_tls: bool,
+}
+
 type WriteHalf = tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 
 impl IrcChannel {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        server: String,
-        port: u16,
-        nickname: String,
-        username: Option<String>,
-        channels: Vec<String>,
-        allowed_users: Vec<String>,
-        server_password: Option<String>,
-        nickserv_password: Option<String>,
-        sasl_password: Option<String>,
-        verify_tls: bool,
-    ) -> Self {
+    pub fn new(config: IrcChannelConfig) -> Self {
+        let IrcChannelConfig {
+            server,
+            port,
+            nickname,
+            username,
+            channels,
+            allowed_users,
+            server_password,
+            nickserv_password,
+            sasl_password,
+            verify_tls,
+        } = config;
         let username = username.unwrap_or_else(|| nickname.clone());
         Self {
             server,

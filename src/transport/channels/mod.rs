@@ -30,7 +30,7 @@ pub use discord::DiscordChannel;
 #[cfg(feature = "email")]
 pub use email_channel::EmailChannel;
 pub use imessage::IMessageChannel;
-pub use irc::IrcChannel;
+pub use irc::{IrcChannel, IrcChannelConfig};
 pub use matrix::MatrixChannel;
 #[allow(unused_imports)]
 pub use prompt_builder::{

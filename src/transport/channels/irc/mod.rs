@@ -4,7 +4,7 @@ mod message;
 mod parse;
 mod tls;
 
-pub use channel::IrcChannel;
+pub use channel::{IrcChannel, IrcChannelConfig};
 
 #[cfg(test)]
 mod tests;
