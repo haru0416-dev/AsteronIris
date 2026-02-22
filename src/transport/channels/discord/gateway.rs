@@ -10,19 +10,24 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::types::{DEFAULT_HEARTBEAT_INTERVAL_MS, DiscordChannelType, GatewayOpcode};
 
+/// Session + resume URL bundled so they are always read/written atomically.
+#[derive(Debug, Clone, Default)]
+pub struct ResumeState {
+    pub session_id: Option<String>,
+    pub resume_gateway_url: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct DiscordGatewayState {
-    pub session_id: Mutex<Option<String>>,
+    pub resume: Mutex<ResumeState>,
     pub sequence: AtomicI64,
-    pub resume_gateway_url: Mutex<Option<String>>,
 }
 
 impl Default for DiscordGatewayState {
     fn default() -> Self {
         Self {
-            session_id: Mutex::new(None),
+            resume: Mutex::new(ResumeState::default()),
             sequence: AtomicI64::new(-1),
-            resume_gateway_url: Mutex::new(None),
         }
     }
 }
@@ -158,7 +163,7 @@ impl DiscordGateway {
         &self,
         http: &super::http_client::DiscordHttpClient,
     ) -> Result<String> {
-        if let Some(url) = self.state.resume_gateway_url.lock().await.clone()
+        if let Some(url) = self.state.resume.lock().await.resume_gateway_url.clone()
             && !url.is_empty()
         {
             return Ok(url);
@@ -180,7 +185,7 @@ impl DiscordGateway {
     where
         WsSink: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
     {
-        if let Some(session_id) = self.state.session_id.lock().await.clone() {
+        if let Some(session_id) = self.state.resume.lock().await.session_id.clone() {
             let payload = json!({
                 "op": GatewayOpcode::Resume as u8,
                 "d": {
@@ -346,8 +351,9 @@ impl DiscordGateway {
     }
 
     async fn persist_ready_state(&self, session_id: &str, resume_gateway_url: &str) {
-        *self.state.session_id.lock().await = Some(session_id.to_string());
-        *self.state.resume_gateway_url.lock().await = Some(resume_gateway_url.to_string());
+        let mut guard = self.state.resume.lock().await;
+        guard.session_id = Some(session_id.to_string());
+        guard.resume_gateway_url = Some(resume_gateway_url.to_string());
     }
 
     async fn handle_invalid_session(&self, payload: &serde_json::Value) -> Result<()> {
@@ -357,7 +363,17 @@ impl DiscordGateway {
             .unwrap_or(false);
 
         self.state.sequence.store(-1, Ordering::SeqCst);
-        *self.state.session_id.lock().await = None;
+
+        {
+            let mut guard = self.state.resume.lock().await;
+            guard.session_id = None;
+            if !can_resume {
+                tracing::warn!(
+                    "Discord gateway invalid session (resume denied), clearing resume URL"
+                );
+                guard.resume_gateway_url = None;
+            }
+        }
 
         if can_resume {
             let wait_secs = invalid_session_backoff_secs();
@@ -365,11 +381,8 @@ impl DiscordGateway {
                 "Discord gateway invalid session (resume allowed), waiting {wait_secs}s before reconnect"
             );
             tokio::time::sleep(Duration::from_secs(wait_secs)).await;
-            return Ok(());
         }
 
-        tracing::warn!("Discord gateway invalid session (resume denied), clearing resume URL");
-        *self.state.resume_gateway_url.lock().await = None;
         Ok(())
     }
 
@@ -610,8 +623,9 @@ mod tests {
     async fn gateway_state_default_construction() {
         let state = DiscordGatewayState::default();
         assert_eq!(state.sequence.load(Ordering::SeqCst), -1);
-        assert!(state.session_id.lock().await.is_none());
-        assert!(state.resume_gateway_url.lock().await.is_none());
+        let resume = state.resume.lock().await;
+        assert!(resume.session_id.is_none());
+        assert!(resume.resume_gateway_url.is_none());
     }
 
     #[test]

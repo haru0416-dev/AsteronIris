@@ -77,7 +77,7 @@ pub struct ClawHubScout {
 }
 
 impl GitHubScout {
-    pub fn new(token: Option<&str>) -> Self {
+    pub fn new(token: Option<&str>) -> Result<Self> {
         use std::time::Duration;
 
         let mut headers = reqwest::header::HeaderMap::new();
@@ -100,13 +100,12 @@ impl GitHubScout {
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(anyhow::Error::from)
-            .context("Failed to build HTTP client")
-            .unwrap_or_else(|error| panic!("{error:#}"));
+            .context("Failed to build HTTP client")?;
 
-        Self {
+        Ok(Self {
             client,
             queries: vec!["asteroniris skill".into(), "ai agent skill".into()],
-        }
+        })
     }
 
     /// Parse the GitHub search/repositories JSON response.
@@ -162,24 +161,23 @@ impl GitHubScout {
 }
 
 impl HuggingFaceScout {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self> {
         use std::time::Duration;
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(anyhow::Error::from)
-            .context("Failed to build HTTP client")
-            .unwrap_or_else(|error| panic!("{error:#}"));
+            .context("Failed to build HTTP client")?;
 
         let api_base = std::env::var("ASTERONIRIS_SKILLFORGE_HF_API_BASE")
             .unwrap_or_else(|_| "https://huggingface.co".to_string());
 
-        Self {
+        Ok(Self {
             client,
             queries: vec!["asteroniris skill".into()],
             api_base,
-        }
+        })
     }
 
     fn parse_items(body: &serde_json::Value) -> Vec<ScoutResult> {
@@ -253,7 +251,7 @@ impl HuggingFaceScout {
 }
 
 impl ClawHubScout {
-    pub fn new(base_url: Option<&str>, token: Option<&str>) -> Self {
+    pub fn new(base_url: Option<&str>, token: Option<&str>) -> Result<Self> {
         use std::time::Duration;
 
         let mut headers = reqwest::header::HeaderMap::new();
@@ -276,19 +274,18 @@ impl ClawHubScout {
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(anyhow::Error::from)
-            .context("Failed to build HTTP client")
-            .unwrap_or_else(|error| panic!("{error:#}"));
+            .context("Failed to build HTTP client")?;
 
         let base_url = base_url
             .map(str::to_string)
             .or_else(|| std::env::var("CLAWHUB_API_BASE_URL").ok())
             .unwrap_or_else(|| "https://api.clawhub.com".to_string());
 
-        Self {
+        Ok(Self {
             client,
             queries: vec!["asteroniris skill".into(), "ai agent skill".into()],
             base_url: base_url.trim_end_matches('/').to_string(),
-        }
+        })
     }
 
     fn parse_items(body: &serde_json::Value) -> Vec<ScoutResult> {

@@ -112,15 +112,16 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
         let policy_context = channel_runtime_policy_context();
         if let Err(error) = policy_context.enforce_recall_scope(channel_autosave_entity_id()) {
             tracing::warn!(error, "channel autosave skipped due to policy context");
-        } else {
-            let _ = rt
-                .mem
-                .append_event(channel_autosave_input(
-                    &msg.channel,
-                    &msg.sender,
-                    ingress.persisted_summary.clone(),
-                ))
-                .await;
+        } else if let Err(error) = rt
+            .mem
+            .append_event(channel_autosave_input(
+                &msg.channel,
+                &msg.sender,
+                ingress.persisted_summary.clone(),
+            ))
+            .await
+        {
+            tracing::warn!(%error, "failed to autosave channel input");
         }
     }
 
@@ -129,13 +130,16 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
             source,
             "blocked high-risk external content at channel ingress"
         );
-        let _ = reply_to_origin(
+        if let Err(error) = reply_to_origin(
             &rt.channels,
             &msg.channel,
             "⚠️ External content was blocked by safety policy.",
             &msg.sender,
         )
-        .await;
+        .await
+        {
+            tracing::warn!(%error, "failed to send channel safety block reply");
+        }
         return;
     }
 
@@ -227,18 +231,23 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
         .await
     {
         Ok(result) => {
-            if let Some(handle) = stream_forward_handle {
-                let _ = handle.await;
+            if let Some(handle) = stream_forward_handle
+                && let Err(error) = handle.await
+            {
+                tracing::warn!(%error, "stream forward task panicked");
             }
             if let LoopStopReason::Error(error) = &result.stop_reason {
                 eprintln!("  ✗ {}", t!("channels.llm_error", error = error));
-                let _ = reply_to_origin(
+                if let Err(error) = reply_to_origin(
                     &rt.channels,
                     &msg.channel,
                     &format!("! Error: {error}"),
                     &msg.sender,
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(%error, "failed to send channel error reply");
+                }
                 return;
             }
             match result.stop_reason {
@@ -299,17 +308,22 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
             }
         }
         Err(error) => {
-            if let Some(handle) = stream_forward_handle {
-                let _ = handle.await;
+            if let Some(handle) = stream_forward_handle
+                && let Err(error) = handle.await
+            {
+                tracing::warn!(%error, "stream forward task panicked");
             }
             eprintln!("  ✗ {}", t!("channels.llm_error", error = error));
-            let _ = reply_to_origin(
+            if let Err(error) = reply_to_origin(
                 &rt.channels,
                 &msg.channel,
                 &format!("! Error: {error}"),
                 &msg.sender,
             )
-            .await;
+            .await
+            {
+                tracing::warn!(%error, "failed to send channel error reply");
+            }
         }
     }
 }

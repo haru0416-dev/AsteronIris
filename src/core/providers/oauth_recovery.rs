@@ -78,18 +78,21 @@ impl OAuthRecoveryProvider {
     }
 
     async fn attempt_recovery(&self) -> Result<bool> {
-        let mut state = self.state.lock().await;
-        if state
-            .last_failed_at
-            .is_some_and(|failed_at| failed_at.elapsed() < self.cooldown)
         {
-            return Ok(false);
+            let state = self.state.lock().await;
+            if state
+                .last_failed_at
+                .is_some_and(|failed_at| failed_at.elapsed() < self.cooldown)
+            {
+                return Ok(false);
+            }
         }
 
         let provider_name = self.provider_name.clone();
         let recover = Arc::clone(&self.recover);
         let recovered = tokio::task::spawn_blocking(move || (recover)(&provider_name)).await??;
         if !recovered {
+            let mut state = self.state.lock().await;
             state.last_failed_at = Some(Instant::now());
             return Ok(false);
         }
@@ -99,6 +102,8 @@ impl OAuthRecoveryProvider {
         let rebuilt_provider =
             tokio::task::spawn_blocking(move || (rebuild_fn)(&provider_name)).await??;
         *self.inner.write().await = rebuilt_provider;
+
+        let mut state = self.state.lock().await;
         state.last_failed_at = None;
         Ok(true)
     }

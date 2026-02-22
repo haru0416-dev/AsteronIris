@@ -369,8 +369,18 @@ impl Channel for EmailChannel {
         loop {
             tick.tick().await;
             let cfg = Arc::clone(&config);
-            match tokio::task::spawn_blocking(move || Self::fetch_unseen_imap(&cfg)).await {
-                Ok(Ok(messages)) => {
+            let imap_timeout =
+                Duration::from_secs(self.config.poll_interval_secs.saturating_mul(2).max(60));
+            let fetch_future = tokio::task::spawn_blocking(move || Self::fetch_unseen_imap(&cfg));
+            match tokio::time::timeout(imap_timeout, fetch_future).await {
+                Err(_elapsed) => {
+                    error!(
+                        "Email IMAP fetch timed out after {}s",
+                        imap_timeout.as_secs()
+                    );
+                    sleep(Duration::from_secs(10)).await;
+                }
+                Ok(Ok(Ok(messages))) => {
                     for (id, sender, content, ts) in messages {
                         if !self.is_sender_allowed(&sender) {
                             warn!("Blocked email from {}", sender);
@@ -403,11 +413,11 @@ impl Channel for EmailChannel {
                         }
                     }
                 }
-                Ok(Err(e)) => {
+                Ok(Ok(Err(e))) => {
                     error!("Email poll failed: {}", e);
                     sleep(Duration::from_secs(10)).await;
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     error!("Email poll task panicked: {}", e);
                     sleep(Duration::from_secs(10)).await;
                 }

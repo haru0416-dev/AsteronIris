@@ -23,8 +23,10 @@ pub(super) fn state_file_path(config: &Config) -> PathBuf {
 pub(super) fn spawn_state_writer(config: Arc<Config>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let path = state_file_path(&config);
-        if let Some(parent) = path.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
+        if let Some(parent) = path.parent()
+            && let Err(error) = tokio::fs::create_dir_all(parent).await
+        {
+            tracing::warn!(%error, "failed to create state file directory");
         }
 
         let mut interval = tokio::time::interval(Duration::from_secs(super::STATUS_FLUSH_SECONDS));
@@ -40,7 +42,9 @@ pub(super) fn spawn_state_writer(config: Arc<Config>) -> JoinHandle<()> {
             }
 
             let data = serde_json::to_vec_pretty(&json).unwrap_or_else(|_| b"{}".to_vec());
-            let _ = tokio::fs::write(&path, data).await;
+            if let Err(error) = tokio::fs::write(&path, data).await {
+                tracing::warn!(%error, "failed to write daemon state file");
+            }
         }
     })
 }

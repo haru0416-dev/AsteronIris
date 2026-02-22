@@ -9,6 +9,7 @@ pub(super) fn spawn_component_supervisor<F, Fut>(
     name: &'static str,
     initial_backoff_secs: u64,
     max_backoff_secs: u64,
+    max_restarts: u32,
     mut run_component: F,
 ) -> JoinHandle<()>
 where
@@ -18,9 +19,10 @@ where
     tokio::spawn(async move {
         let mut backoff = initial_backoff_secs.max(1);
         let max_backoff = max_backoff_secs.max(backoff);
+        let mut consecutive_failures: u32 = 0;
 
         loop {
-            crate::runtime::diagnostics::health::mark_component_ok(name);
+            tracing::info!("Daemon component '{name}' starting");
             match run_component().await {
                 Ok(()) => {
                     crate::runtime::diagnostics::health::mark_component_error(
@@ -29,14 +31,22 @@ where
                     );
                     tracing::warn!("Daemon component '{name}' exited unexpectedly");
                     backoff = initial_backoff_secs.max(1);
+                    consecutive_failures = consecutive_failures.saturating_add(1);
                 }
                 Err(e) => {
                     crate::runtime::diagnostics::health::mark_component_error(name, e.to_string());
                     tracing::error!("Daemon component '{name}' failed: {e}");
+                    consecutive_failures = consecutive_failures.saturating_add(1);
                 }
             }
 
             crate::runtime::diagnostics::health::bump_component_restart(name);
+            if max_restarts > 0 && consecutive_failures > max_restarts {
+                tracing::error!(
+                    "Daemon component '{name}' exceeded max restarts ({max_restarts}), circuit open"
+                );
+                break;
+            }
             tokio::time::sleep(Duration::from_secs(backoff)).await;
             backoff = backoff.saturating_mul(2).min(max_backoff);
         }
@@ -58,6 +68,7 @@ pub(super) fn spawn_supervised_components(
         "gateway",
         initial_backoff,
         max_backoff,
+        10,
         move || {
             let cfg = Arc::clone(&gateway_cfg);
             let host = host.clone();
@@ -71,6 +82,7 @@ pub(super) fn spawn_supervised_components(
             "channels",
             initial_backoff,
             max_backoff,
+            10,
             move || {
                 let cfg = Arc::clone(&channels_cfg);
                 async move { crate::transport::channels::start_channels(cfg).await }
@@ -87,6 +99,7 @@ pub(super) fn spawn_supervised_components(
             "heartbeat",
             initial_backoff,
             max_backoff,
+            10,
             move || {
                 let cfg = Arc::clone(&heartbeat_cfg);
                 async move { super::heartbeat_worker::run_heartbeat_worker(cfg).await }
@@ -99,6 +112,7 @@ pub(super) fn spawn_supervised_components(
         "scheduler",
         initial_backoff,
         max_backoff,
+        10,
         move || {
             let cfg = Arc::clone(&scheduler_cfg);
             async move { crate::platform::cron::scheduler::run(cfg).await }
@@ -114,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn supervisor_marks_error_and_restart_on_failure() {
-        let handle = spawn_component_supervisor("daemon-test-fail", 1, 1, || async {
+        let handle = spawn_component_supervisor("daemon-test-fail", 1, 1, 0, || async {
             anyhow::bail!("boom")
         });
 
@@ -136,7 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn supervisor_marks_unexpected_exit_as_error() {
-        let handle = spawn_component_supervisor("daemon-test-exit", 1, 1, || async { Ok(()) });
+        let handle = spawn_component_supervisor("daemon-test-exit", 1, 1, 0, || async { Ok(()) });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         handle.abort();

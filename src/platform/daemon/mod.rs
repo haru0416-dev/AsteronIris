@@ -22,12 +22,14 @@ pub async fn run(config: Arc<Config>, host: String, port: u16) -> Result<()> {
 
     crate::runtime::diagnostics::health::mark_component_ok("daemon");
 
-    if config.heartbeat.enabled {
-        let _ =
+    if config.heartbeat.enabled
+        && let Err(error) =
             crate::runtime::diagnostics::heartbeat::engine::HeartbeatEngine::ensure_heartbeat_file(
                 &config.workspace_dir,
             )
-            .await;
+            .await
+    {
+        tracing::warn!(%error, "failed to ensure heartbeat file");
     }
 
     let mut handles: Vec<JoinHandle<()>> = vec![spawn_state_writer(Arc::clone(&config))];
@@ -52,7 +54,9 @@ pub async fn run(config: Arc<Config>, host: String, port: u16) -> Result<()> {
         handle.abort();
     }
     for handle in handles {
-        let _ = handle.await;
+        if let Err(error) = handle.await {
+            tracing::warn!(%error, "daemon task panicked during shutdown");
+        }
     }
 
     Ok(())

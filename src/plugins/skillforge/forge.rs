@@ -64,7 +64,13 @@ impl SkillForge {
             let source: ScoutSource = src.parse().unwrap_or(ScoutSource::GitHub); // ScoutSource::from_str is infallible
             match source {
                 ScoutSource::GitHub => {
-                    let scout = GitHubScout::new(self.config.github_token.as_deref());
+                    let scout = match GitHubScout::new(self.config.github_token.as_deref()) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create GitHub scout, skipping");
+                            continue;
+                        }
+                    };
                     match scout.discover().await {
                         Ok(mut found) => {
                             info!(count = found.len(), "GitHub scout returned candidates");
@@ -76,7 +82,13 @@ impl SkillForge {
                     }
                 }
                 ScoutSource::HuggingFace => {
-                    let scout = HuggingFaceScout::new();
+                    let scout = match HuggingFaceScout::new() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create HuggingFace scout, skipping");
+                            continue;
+                        }
+                    };
                     match scout.discover().await {
                         Ok(mut found) => {
                             info!(count = found.len(), "HuggingFace scout returned candidates");
@@ -91,10 +103,16 @@ impl SkillForge {
                     }
                 }
                 ScoutSource::ClawHub => {
-                    let scout = ClawHubScout::new(
+                    let scout = match ClawHubScout::new(
                         self.config.clawhub_base_url.as_deref(),
                         self.config.clawhub_token.as_deref(),
-                    );
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create ClawHub scout, skipping");
+                            continue;
+                        }
+                    };
                     match scout.discover().await {
                         Ok(mut found) => {
                             info!(count = found.len(), "ClawHub scout returned candidates");
