@@ -130,11 +130,10 @@ fn load_open_skills(repo_dir: &Path) -> Vec<Skill> {
 fn open_skills_enabled() -> bool {
     if let Ok(raw) = std::env::var("ASTERONIRIS_OPEN_SKILLS_ENABLED") {
         let value = raw.trim().to_ascii_lowercase();
-        return !matches!(value.as_str(), "0" | "false" | "off" | "no");
+        return matches!(value.as_str(), "1" | "true" | "on" | "yes");
     }
 
-    // Keep tests deterministic and network-free by default.
-    !cfg!(test)
+    false
 }
 
 fn resolve_open_skills_dir() -> Option<PathBuf> {
@@ -152,6 +151,8 @@ fn ensure_open_skills_repo() -> Option<PathBuf> {
     if !open_skills_enabled() {
         return None;
     }
+
+    tracing::info!("open-skills loading enabled via ASTERONIRIS_OPEN_SKILLS_ENABLED");
 
     let repo_dir = resolve_open_skills_dir()?;
 
