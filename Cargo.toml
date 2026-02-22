@@ -62,6 +62,15 @@ hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 hex  = { version = "0.4", default-features = false, features = ["alloc"] }
 
+# Constant-time comparison (audited)
+subtle = { version = "2", default-features = false }
+
+# Cryptographic RNG for token generation
+rand = { version = "0.9", default-features = false, features = ["std", "thread_rng"] }
+
+# Zeroize secret key buffers on drop
+zeroize = { version = "1", default-features = false, features = ["derive"] }
+
 # Async traits
 async-trait = { version = "0.1", default-features = false }
 
@@ -96,7 +105,7 @@ tokio-rustls      = "0.26"
 webpki-roots      = "1"
 
 axum       = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws"] }
-tower-http = { version = "0.6", default-features = false, features = ["limit", "timeout"] }
+tower-http = { version = "0.6", default-features = false, features = ["limit", "timeout", "cors"] }
 
 # Streaming (OpenAI-compat SSE, WebSocket)
 async-stream = { version = "0.3", default-features = false }
