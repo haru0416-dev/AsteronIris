@@ -1,5 +1,9 @@
 use crate::config::Config;
-use crate::core::memory::{Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
+use crate::core::memory::{
+    Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
+    SourceKind,
+};
+use crate::security::writeback_guard::enforce_verify_repair_write_policy;
 use anyhow::Result;
 use serde_json::{Value, json};
 
@@ -83,11 +87,35 @@ pub(super) const VERIFY_REPAIR_ESCALATION_SLOT_KEY: &str = "autonomy.verify_repa
 
 pub(super) fn analyze_verify_failure(error: &anyhow::Error) -> VerifyFailureAnalysis {
     let message = error.to_string();
-    if message.contains("action limit exceeded") || message.contains("daily cost limit exceeded") {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("action limit exceeded") || lower.contains("daily cost limit exceeded") {
         return VerifyFailureAnalysis {
             failure_class: "policy_limit",
             retryable: false,
         };
+    }
+
+    if lower.contains("insufficient_quota")
+        || lower.contains("exceeded your current quota")
+        || (lower.contains("429") && lower.contains("billing"))
+    {
+        return VerifyFailureAnalysis {
+            failure_class: "quota_exhausted",
+            retryable: false,
+        };
+    }
+
+    for word in lower.split(|c: char| !c.is_ascii_digit()) {
+        if let Ok(code) = word.parse::<u16>()
+            && (400..500).contains(&code)
+            && code != 408
+            && code != 429
+        {
+            return VerifyFailureAnalysis {
+                failure_class: "non_retryable_provider_error",
+                retryable: false,
+            };
+        }
     }
 
     VerifyFailureAnalysis {
@@ -126,10 +154,11 @@ pub(super) fn decide_verify_repair_escalation(
 
 pub(super) async fn emit_verify_repair_escalation_event(
     mem: &dyn Memory,
+    entity_id: &str,
     escalation: &VerifyRepairEscalation,
 ) -> Result<()> {
     let event = MemoryEventInput::new(
-        "default",
+        entity_id,
         VERIFY_REPAIR_ESCALATION_SLOT_KEY,
         MemoryEventType::SummaryCompacted,
         escalation.event_payload().to_string(),
@@ -137,7 +166,46 @@ pub(super) async fn emit_verify_repair_escalation_event(
         PrivacyLevel::Private,
     )
     .with_confidence(1.0)
-    .with_importance(0.9);
+    .with_importance(0.9)
+    .with_source_kind(SourceKind::Manual)
+    .with_source_ref("verify-repair.escalation")
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::System,
+        "verify-repair.escalation",
+    ));
+    enforce_verify_repair_write_policy(&event)?;
     mem.append_event(event).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze_verify_failure;
+
+    #[test]
+    fn analyze_verify_failure_marks_quota_as_non_retryable() {
+        let err = anyhow::anyhow!(
+            "{}",
+            "OpenAI API error (429 Too Many Requests): {\"error\":{\"message\":\"You exceeded your current quota\",\"type\":\"insufficient_quota\"}}"
+        );
+        let analysis = analyze_verify_failure(&err);
+        assert_eq!(analysis.failure_class, "quota_exhausted");
+        assert!(!analysis.retryable);
+    }
+
+    #[test]
+    fn analyze_verify_failure_keeps_transient_errors_retryable() {
+        let err = anyhow::anyhow!("transport timeout while calling provider");
+        let analysis = analyze_verify_failure(&err);
+        assert_eq!(analysis.failure_class, "transient_failure");
+        assert!(analysis.retryable);
+    }
+
+    #[test]
+    fn analyze_verify_failure_marks_404_as_non_retryable() {
+        let err = anyhow::anyhow!("OpenAI API error (404 Not Found): model not found");
+        let analysis = analyze_verify_failure(&err);
+        assert_eq!(analysis.failure_class, "non_retryable_provider_error");
+        assert!(!analysis.retryable);
+    }
 }

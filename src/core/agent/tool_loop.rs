@@ -38,6 +38,7 @@ impl ToolLoop {
             temperature,
             ctx,
             stream_sink,
+            conversation_history,
         } = params;
         let tool_specs: Vec<ToolSpec> = self.registry.specs_for_context(ctx);
         let prompt = augment_prompt_with_trust_boundary(system_prompt, !tool_specs.is_empty());
@@ -53,7 +54,9 @@ impl ToolLoop {
                 content,
             }
         };
-        let mut messages = vec![initial_message];
+        let mut messages = Vec::with_capacity(conversation_history.len() + 1);
+        messages.extend_from_slice(conversation_history);
+        messages.push(initial_message);
         let mut tool_calls = Vec::new();
         let mut attachments = Vec::new();
         let mut iterations = 0_u32;
@@ -551,6 +554,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: None,
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -618,6 +622,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: None,
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -678,6 +683,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: None,
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -715,6 +721,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: None,
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -747,6 +754,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: None,
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -787,6 +795,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: None,
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -849,6 +858,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: None,
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -888,6 +898,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: None,
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -926,6 +937,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -980,6 +992,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+                conversation_history: &[],
             })
             .await
             .unwrap();
@@ -1021,6 +1034,7 @@ mod tests {
                 temperature: 0.2,
                 ctx: &test_ctx(),
                 stream_sink: Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+                conversation_history: &[],
             })
             .await
             .unwrap();

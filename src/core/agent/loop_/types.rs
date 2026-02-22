@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::core::memory::Memory;
+use crate::core::persona::person_identity::person_entity_id;
 use crate::core::providers::Provider;
 use crate::core::tools::ToolRegistry;
 use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
@@ -65,6 +66,7 @@ pub(super) struct TurnExecutionOutcome {
 pub(super) struct MainSessionTurnParams<'a> {
     pub(super) answer_provider: &'a dyn Provider,
     pub(super) reflect_provider: &'a dyn Provider,
+    pub(super) person_id: &'a str,
     pub(super) system_prompt: &'a str,
     pub(super) model_name: &'a str,
     pub(super) temperature: f64,
@@ -95,9 +97,9 @@ pub(in crate::core::agent) struct RuntimeMemoryWriteContext {
 }
 
 impl RuntimeMemoryWriteContext {
-    pub(super) fn main_session_default() -> Self {
+    pub(super) fn main_session_person(person_id: &str) -> Self {
         Self {
-            entity_id: "default".to_string(),
+            entity_id: person_entity_id(person_id),
             policy_context: TenantPolicyContext::disabled(),
         }
     }

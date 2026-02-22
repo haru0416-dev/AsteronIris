@@ -23,6 +23,7 @@ pub struct ToolLoopRunParams<'a> {
     pub temperature: f64,
     pub ctx: &'a ExecutionContext,
     pub stream_sink: Option<Arc<dyn StreamSink>>,
+    pub conversation_history: &'a [ProviderMessage],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

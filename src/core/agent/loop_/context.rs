@@ -58,7 +58,7 @@ fn build_context_recall_query(
     user_msg: &str,
     policy_context: TenantPolicyContext,
 ) -> Result<RecallQuery> {
-    let query = RecallQuery::new(entity_id, user_msg, 5).with_policy_context(policy_context);
+    let query = RecallQuery::new(entity_id, user_msg, 8).with_policy_context(policy_context);
     query.enforce_policy()?;
     Ok(query)
 }

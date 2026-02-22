@@ -100,6 +100,7 @@ fn main_turn_params<'a>(
     MainSessionTurnParams {
         answer_provider,
         reflect_provider,
+        person_id: "person-test",
         system_prompt,
         model_name,
         temperature,
@@ -125,6 +126,7 @@ async fn persona_loop_two_calls_per_turn() {
         mem.clone(),
         config.workspace_dir.clone(),
         config.persona.clone(),
+        "person-test",
     );
     let initial = sample_state();
     persistence
@@ -174,6 +176,7 @@ async fn persona_loop_call2_failure_preserves_answer() {
         mem.clone(),
         config.workspace_dir.clone(),
         config.persona.clone(),
+        "person-test",
     );
     let initial = sample_state();
     persistence
@@ -276,6 +279,7 @@ async fn persona_reflect_no_retry() {
         mem.clone(),
         config.workspace_dir.clone(),
         config.persona.clone(),
+        "person-test",
     );
     let initial = sample_state();
     persistence
@@ -342,6 +346,7 @@ async fn persona_budget_counter_stable() {
         mem.clone(),
         config.workspace_dir.clone(),
         config.persona.clone(),
+        "person-test",
     );
     let initial = sample_state();
     persistence
@@ -393,8 +398,9 @@ async fn persona_budget_counter_stable() {
                 0.2,
             ),
             &format!("turn-{turn}-message"),
-            &RuntimeMemoryWriteContext::main_session_default(),
+            &RuntimeMemoryWriteContext::main_session_person("person-test"),
             &noop_observer(),
+            &[],
         )
         .await
         .unwrap();
@@ -575,7 +581,7 @@ async fn verify_repair_emits_escalation_event() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 
     let escalation = mem
-        .resolve_slot("default", VERIFY_REPAIR_ESCALATION_SLOT_KEY)
+        .resolve_slot("person:person-test", VERIFY_REPAIR_ESCALATION_SLOT_KEY)
         .await
         .unwrap()
         .expect("escalation event should be written");
@@ -657,16 +663,105 @@ async fn post_turn_inference_hook_appends_tagged_events() {
     assert!(response.contains("INFERRED_CLAIM"));
 
     let inferred = mem
-        .resolve_slot("default", "inference.preference.language")
+        .resolve_slot("person:person-test", "inference.preference.language")
         .await
         .unwrap()
         .expect("inferred claim should persist");
     assert_eq!(inferred.source, MemorySource::Inferred);
 
     let contradiction = mem
-        .resolve_slot("default", "contradiction.preference.language")
+        .resolve_slot("person:person-test", "contradiction.preference.language")
         .await
         .unwrap()
         .expect("contradiction event should be represented as event");
     assert_eq!(contradiction.source, MemorySource::System);
+}
+
+#[tokio::test]
+async fn planner_path_executes_for_multistep_request() {
+    let temp = TempDir::new().unwrap();
+    let mut config = test_config(temp.path());
+    config.persona.enabled_main_session = false;
+
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = MockProvider {
+        calls: calls.clone(),
+        responses: vec![
+            json!({
+                "id": "p1",
+                "description": "simple plan",
+                "steps": [
+                    {
+                        "id": "A",
+                        "description": "first",
+                        "action": {"kind": "checkpoint", "label": "a"},
+                        "depends_on": []
+                    },
+                    {
+                        "id": "B",
+                        "description": "second",
+                        "action": {"kind": "checkpoint", "label": "b"},
+                        "depends_on": ["A"]
+                    },
+                    {
+                        "id": "C",
+                        "description": "third",
+                        "action": {"kind": "checkpoint", "label": "done"},
+                        "depends_on": ["B"]
+                    }
+                ]
+            })
+            .to_string(),
+        ],
+        fail_on_call: None,
+    };
+    let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+    let response = execute_main_session_turn(
+        &config,
+        &security,
+        mem,
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.2),
+        "1. First collect context 2. Then plan steps 3. Finally execute",
+        &noop_observer(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response, "[checkpoint] done");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn planner_fallback_uses_direct_tool_loop_on_invalid_json() {
+    let temp = TempDir::new().unwrap();
+    let mut config = test_config(temp.path());
+    config.persona.enabled_main_session = false;
+
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = MockProvider {
+        calls: calls.clone(),
+        responses: vec![
+            "not-a-plan".to_string(),
+            "fallback-direct-response".to_string(),
+        ],
+        fail_on_call: None,
+    };
+    let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+    let response = execute_main_session_turn(
+        &config,
+        &security,
+        mem,
+        &main_turn_params(&config, &provider, &provider, "system", "test-model", 0.2),
+        "1. First gather data 2. Then produce plan 3. Finally run",
+        &noop_observer(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response, "fallback-direct-response");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

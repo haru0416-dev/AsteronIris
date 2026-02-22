@@ -29,7 +29,10 @@ use types::PERSONA_PER_TURN_CALL_BUDGET;
 // ── Crate imports for run() ──────────────────────────────────────
 use crate::config::Config;
 use crate::core::memory::{self, Memory};
+use crate::core::persona::person_identity::resolve_person_id;
+use crate::core::providers::response::ProviderMessage;
 use crate::core::providers::{self, Provider};
+use crate::core::subagents::{SubagentRuntimeConfig, configure_runtime};
 use crate::core::tools;
 use crate::core::tools::ToolRegistry;
 use crate::runtime;
@@ -78,19 +81,30 @@ pub async fn run(
         .as_deref()
         .or(config.default_model.as_deref())
         .unwrap_or("anthropic/claude-sonnet-4-20250514");
+    let system_prompt = build_agent_system_prompt(&config, model_name);
 
     let (answer_provider, reflect_provider) =
         resolve_providers(&config, &auth_broker, provider_name).context("resolve LLM providers")?;
+    let subagent_provider = resolve_subagent_provider(&config, &auth_broker, provider_name)
+        .context("resolve sub-agent provider")?;
+    configure_runtime(SubagentRuntimeConfig {
+        provider: subagent_provider,
+        system_prompt: system_prompt.clone(),
+        default_model: model_name.to_string(),
+        default_temperature: temperature,
+    })
+    .context("configure sub-agent runtime")?;
 
     observer.record_event(&ObserverEvent::AgentStart {
         provider: provider_name.to_string(),
         model: model_name.to_string(),
     });
 
-    let system_prompt = build_agent_system_prompt(&config, model_name);
+    let person_id = resolve_person_id(&config);
     let turn_params = MainSessionTurnParams {
         answer_provider: answer_provider.as_ref(),
         reflect_provider: reflect_provider.as_ref(),
+        person_id: &person_id,
         system_prompt: &system_prompt,
         model_name,
         temperature,
@@ -178,6 +192,21 @@ fn resolve_providers(
     Ok((answer_provider, reflect_provider))
 }
 
+fn resolve_subagent_provider(
+    config: &Config,
+    auth_broker: &AuthBroker,
+    provider_name: &str,
+) -> Result<Arc<dyn Provider>> {
+    let provider: Box<dyn Provider> = providers::create_resilient_provider_with_oauth_recovery(
+        config,
+        provider_name,
+        &config.reliability,
+        |name| auth_broker.resolve_provider_api_key(name),
+    )
+    .context("create resilient subagent provider")?;
+    Ok(Arc::from(provider))
+}
+
 fn build_agent_system_prompt(config: &Config, model_name: &str) -> String {
     let skills = crate::plugins::skills::load_skills(&config.workspace_dir);
     let tool_descs = crate::core::tools::tool_descriptions(
@@ -224,6 +253,7 @@ async fn run_session(
             turn_params,
             &msg,
             observer,
+            &[],
         )
         .await
         .context("execute agent session turn")?;
@@ -233,6 +263,7 @@ async fn run_session(
         }
         println!("{}", outcome.response);
     } else {
+        const MAX_HISTORY_MESSAGES: usize = 20;
         println!("🦀 AsteronIris Interactive Mode");
         println!("Type /quit to exit.\n");
 
@@ -243,6 +274,8 @@ async fn run_session(
             let _ = crate::transport::channels::Channel::listen(&cli, tx).await;
         });
 
+        let mut conversation_history: Vec<ProviderMessage> = Vec::new();
+
         while let Some(msg) = rx.recv().await {
             let outcome = execute_main_session_turn_with_metrics(
                 config,
@@ -251,9 +284,25 @@ async fn run_session(
                 turn_params,
                 &msg.content,
                 observer,
+                &conversation_history,
             )
             .await
             .context("execute agent session turn")?;
+
+            // Accumulate conversation history (10-turn sliding window = 20 messages)
+            conversation_history.push(ProviderMessage::user(&msg.content));
+            conversation_history.push(ProviderMessage {
+                role: crate::core::providers::response::MessageRole::Assistant,
+                content: vec![crate::core::providers::response::ContentBlock::Text {
+                    text: outcome.response.clone(),
+                }],
+            });
+
+            if conversation_history.len() > MAX_HISTORY_MESSAGES {
+                let excess = conversation_history.len() - MAX_HISTORY_MESSAGES;
+                conversation_history.drain(..excess);
+            }
+
             if let Some(tokens) = outcome.tokens_used {
                 token_sum = token_sum.saturating_add(tokens);
                 saw_token_usage = true;

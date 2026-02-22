@@ -1,8 +1,11 @@
 use super::RuntimeMemoryWriteContext;
 use crate::core::memory::traits::MemoryLayer;
-use crate::core::memory::{Memory, MemoryInferenceEvent, MemoryProvenance, MemorySource};
+use crate::core::memory::{
+    Memory, MemoryInferenceEvent, MemoryProvenance, MemorySource, SourceKind,
+};
 use crate::runtime::observability::Observer;
 use crate::runtime::observability::traits::AutonomyLifecycleSignal;
+use crate::security::writeback_guard::enforce_inference_write_policy;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
@@ -80,7 +83,10 @@ pub(super) async fn run_post_turn_inference_pass(
         let (reference, source_class) = inference_provenance_reference(&event);
         let input = event
             .into_memory_event_input()
+            .with_source_kind(SourceKind::Conversation)
+            .with_source_ref(reference)
             .with_provenance(MemoryProvenance::source_reference(source_class, reference));
+        enforce_inference_write_policy(&input).context("enforce inference write policy")?;
         mem.append_event(input)
             .await
             .context("append inferred memory event")?;
