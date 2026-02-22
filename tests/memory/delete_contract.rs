@@ -47,11 +47,11 @@ async fn memory_delete_contract_artifact_matrix() {
         ForgetArtifactRequirement::MustBeNonRetrievable
     );
     assert_eq!(
-        check_for_artifact(&soft, ForgetArtifact::RetrievalDocs).requirement,
+        check_for_artifact(&soft, ForgetArtifact::RetrievalUnits).requirement,
         ForgetArtifactRequirement::MustBeNonRetrievable
     );
     assert!(check_for_artifact(&soft, ForgetArtifact::Slot).satisfied);
-    assert!(check_for_artifact(&soft, ForgetArtifact::RetrievalDocs).satisfied);
+    assert!(check_for_artifact(&soft, ForgetArtifact::RetrievalUnits).satisfied);
 
     memory_harness::append_test_event(
         &memory,
@@ -103,7 +103,7 @@ async fn memory_delete_contract_artifact_matrix() {
     assert!(!tombstone.degraded);
     assert_eq!(tombstone.status, ForgetStatus::Complete);
     assert!(check_for_artifact(&tombstone, ForgetArtifact::Slot).satisfied);
-    assert!(check_for_artifact(&tombstone, ForgetArtifact::RetrievalDocs).satisfied);
+    assert!(check_for_artifact(&tombstone, ForgetArtifact::RetrievalUnits).satisfied);
 }
 
 #[tokio::test]
@@ -210,14 +210,15 @@ async fn memory_delete_contract_sqlite_hard_delete_dsar_authoritative() {
         .expect("belief slot count query should succeed");
     let retrieval_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM retrieval_docs WHERE doc_id = ?1",
+            "SELECT COUNT(*) FROM retrieval_units WHERE unit_id = ?1",
             rusqlite::params!["entity-dsar:pii.email"],
             |row| row.get(0),
         )
         .expect("retrieval docs count query should succeed");
     let projection_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM memories WHERE key = ?1",
+            "SELECT COUNT(*) FROM retrieval_units
+             WHERE entity_id = '__projection__' AND slot_key = ?1 AND chunk_index = 0",
             rusqlite::params!["pii.email"],
             |row| row.get(0),
         )

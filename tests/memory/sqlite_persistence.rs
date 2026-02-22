@@ -63,7 +63,7 @@ async fn sqlite_persists_layer_and_provenance() {
     let doc_row: (String, Option<String>, Option<String>, Option<String>, String, Option<String>) = conn
         .query_row(
             "SELECT layer, provenance_source_class, provenance_reference, provenance_evidence_uri, retention_tier, retention_expires_at
-             FROM retrieval_docs WHERE doc_id = 'default:persona.preference.language'",
+             FROM retrieval_units WHERE unit_id = 'default:persona.preference.language'",
             [],
             |row| {
                 Ok((
@@ -113,7 +113,24 @@ async fn sqlite_legacy_rows_still_resolve() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(schema_version, 3);
+    assert_eq!(schema_version, 5);
+
+    let memories_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memories'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let retrieval_docs_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='retrieval_docs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(memories_count, 0);
+    assert_eq!(retrieval_docs_count, 0);
 }
 
 fn seed_legacy_v2_db(tmp: &TempDir) {

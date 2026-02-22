@@ -34,3 +34,33 @@ async fn sqlite_search_limit_zero_returns_empty() {
         .expect("recall");
     assert!(results.is_empty());
 }
+
+#[tokio::test]
+async fn sqlite_recall_phased_delegates_to_scoped() {
+    let (_tmp, mem) = temp_sqlite();
+    mem.append_event(MemoryEventInput::new(
+        "user-phased",
+        "notes.runtime",
+        MemoryEventType::FactAdded,
+        "phased recall test value",
+        MemorySource::ExplicitUser,
+        PrivacyLevel::Private,
+    ))
+    .await
+    .expect("append");
+
+    let scoped = mem
+        .recall_scoped(RecallQuery::new("user-phased", "phased recall", 5))
+        .await
+        .expect("scoped recall");
+    let phased = mem
+        .recall_phased(RecallQuery::new("user-phased", "phased recall", 5))
+        .await
+        .expect("phased recall");
+
+    assert_eq!(scoped.len(), phased.len());
+    assert_eq!(
+        scoped.first().map(|item| item.slot_key.as_str()),
+        phased.first().map(|item| item.slot_key.as_str())
+    );
+}

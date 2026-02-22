@@ -42,14 +42,20 @@ fn insert_stale_retrieval_doc(
     let now = Utc::now().to_rfc3339();
     let doc_id = format!("{entity_id}:{slot_key}");
     conn.execute(
-        "INSERT INTO retrieval_docs (
-            doc_id, entity_id, slot_key, text_body, layer,
+        "INSERT INTO retrieval_units (
+            unit_id, entity_id, slot_key, content, content_type, signal_tier,
+            promotion_status, chunk_index, source_uri, source_kind,
+            recency_score, importance, reliability, contradiction_penalty, visibility,
+            embedding, embedding_model, embedding_dim,
+            layer,
             provenance_source_class, provenance_reference, provenance_evidence_uri,
             retention_tier, retention_expires_at,
-            recency_score, importance, reliability, contradiction_penalty, visibility, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, 'working', ?5, ?6, NULL, 'working', NULL, 1.0, 1.0, 1.0, 0.0, 'private', ?7)
-         ON CONFLICT(doc_id) DO UPDATE SET
-            text_body = excluded.text_body,
+            created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, 'belief', 'belief', 'promoted', NULL, NULL, NULL,
+                   1.0, 1.0, 1.0, 0.0, 'private', NULL, NULL, NULL,
+                   'working', ?5, ?6, NULL, 'working', NULL, ?7, ?7)
+         ON CONFLICT(unit_id) DO UPDATE SET
+            content = excluded.content,
             layer = excluded.layer,
             provenance_source_class = excluded.provenance_source_class,
             provenance_reference = excluded.provenance_reference,

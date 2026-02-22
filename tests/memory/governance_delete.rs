@@ -63,14 +63,20 @@ async fn dsar_delete_completeness_detects_residue() {
     let conn = Connection::open(db_path).expect("sqlite db should be accessible");
     conn.execute_batch(
         "CREATE TRIGGER IF NOT EXISTS test_reinsert_retrieval_residue
-         AFTER DELETE ON retrieval_docs
-         WHEN old.doc_id = 'tenant-alpha:user-residue:profile.email'
+         AFTER DELETE ON retrieval_units
+         WHEN old.unit_id = 'tenant-alpha:user-residue:profile.email'
          BEGIN
-             INSERT INTO retrieval_docs (
-                 doc_id,
+             INSERT INTO retrieval_units (
+                 unit_id,
                  entity_id,
                  slot_key,
-                 text_body,
+                 content,
+                 content_type,
+                 signal_tier,
+                 promotion_status,
+                 chunk_index,
+                 source_uri,
+                 source_kind,
                  layer,
                  provenance_source_class,
                  provenance_reference,
@@ -82,12 +88,22 @@ async fn dsar_delete_completeness_detects_residue() {
                  reliability,
                  contradiction_penalty,
                  visibility,
+                 embedding,
+                 embedding_model,
+                 embedding_dim,
+                 created_at,
                  updated_at
              ) VALUES (
-                 old.doc_id,
+                 old.unit_id,
                  old.entity_id,
                  old.slot_key,
-                 old.text_body,
+                 old.content,
+                 old.content_type,
+                 old.signal_tier,
+                 old.promotion_status,
+                 old.chunk_index,
+                 old.source_uri,
+                 old.source_kind,
                  old.layer,
                  old.provenance_source_class,
                  old.provenance_reference,
@@ -99,6 +115,10 @@ async fn dsar_delete_completeness_detects_residue() {
                  old.reliability,
                  old.contradiction_penalty,
                  old.visibility,
+                 old.embedding,
+                 old.embedding_model,
+                 old.embedding_dim,
+                 old.created_at,
                  old.updated_at
              );
          END;",
@@ -134,8 +154,8 @@ async fn dsar_delete_completeness_detects_residue() {
         .as_array()
         .expect("artifact checks should be array")
         .iter()
-        .find(|check| check["artifact"] == "retrieval_docs")
-        .expect("retrieval docs artifact check should exist");
+        .find(|check| check["artifact"] == "retrieval_units")
+        .expect("retrieval units artifact check should exist");
     assert_eq!(residue_check["satisfied"], false);
     assert_eq!(residue_check["observed"], "present_retrievable");
 

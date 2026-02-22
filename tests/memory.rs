@@ -1,6 +1,8 @@
 #[path = "support/memory_harness.rs"]
 mod memory_harness;
 
+#[path = "memory/backend_compatibility.rs"]
+mod backend_compatibility;
 #[path = "memory/backend_parity.rs"]
 mod backend_parity;
 #[path = "memory/capability_contract.rs"]

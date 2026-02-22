@@ -2,8 +2,8 @@ use asteroniris::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
 use asteroniris::core::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
-use asteroniris::security::{AutonomyLevel, SecurityPolicy};
 use asteroniris::security::policy::TenantPolicyContext;
+use asteroniris::security::{AutonomyLevel, SecurityPolicy};
 
 use serde_json::json;
 use std::sync::Arc;

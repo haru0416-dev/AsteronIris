@@ -7,13 +7,13 @@ async fn sqlite_schema_contains_core_tables() {
     let db_path = tmp.path().join("memory").join("brain.db");
     let conn = Connection::open(db_path).expect("open db");
 
-    let memories_count: i64 = conn
+    let retrieval_units_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memories'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='retrieval_units'",
             [],
             |row| row.get(0),
         )
-        .expect("query memories table");
+        .expect("query retrieval_units table");
     let events_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_events'",
@@ -22,7 +22,7 @@ async fn sqlite_schema_contains_core_tables() {
         )
         .expect("query events table");
 
-    assert_eq!(memories_count, 1);
+    assert_eq!(retrieval_units_count, 1);
     assert_eq!(events_count, 1);
 }
 
@@ -34,7 +34,7 @@ async fn sqlite_schema_contains_fts_table() {
 
     let fts_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memories_fts'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='retrieval_fts'",
             [],
             |row| row.get(0),
         )

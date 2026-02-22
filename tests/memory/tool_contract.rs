@@ -77,19 +77,15 @@ async fn memory_tool_schema_backward_compat() {
         .expect("legacy forget payload shape should execute");
     assert!(forget_result.success);
 
-    let missing_entity = store
+    // entity_id now falls back to ctx.entity_id when absent
+    let fallback_entity = store
         .execute(
             json!({"slot_key": "profile.locale", "value": "en-US"}),
             &ctx,
         )
-        .await;
-    assert!(missing_entity.is_err());
-    assert_eq!(
-        missing_entity
-            .expect_err("missing entity should fail")
-            .to_string(),
-        "Missing 'entity_id' parameter"
-    );
+        .await
+        .expect("should succeed with ctx.entity_id fallback");
+    assert!(fallback_entity.success);
 
     let missing_slot_key = forget
         .execute(json!({"entity_id": "tenant-alpha:user-100"}), &ctx)
