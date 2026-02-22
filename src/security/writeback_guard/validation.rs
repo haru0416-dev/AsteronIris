@@ -1,7 +1,7 @@
 use super::constants::{
-    ALLOWED_TOP_LEVEL_FIELDS, MAX_MEMORY_APPEND_ITEM_CHARS, MAX_MEMORY_APPEND_ITEMS,
-    MAX_SELF_TASK_EXPIRY_HOURS, MAX_SELF_TASK_INSTRUCTIONS_CHARS, MAX_SELF_TASK_TITLE_CHARS,
-    MAX_SELF_TASKS,
+    ALLOWED_TOP_LEVEL_FIELDS, FORBIDDEN_TOP_LEVEL_SOURCE_FIELDS, MAX_MEMORY_APPEND_ITEM_CHARS,
+    MAX_MEMORY_APPEND_ITEMS, MAX_SELF_TASK_EXPIRY_HOURS, MAX_SELF_TASK_INSTRUCTIONS_CHARS,
+    MAX_SELF_TASK_TITLE_CHARS, MAX_SELF_TASKS,
 };
 #[cfg(test)]
 use super::constants::{
@@ -147,6 +147,15 @@ pub fn validate_writeback_payload(
     let Some(root) = payload.as_object() else {
         return reject("payload must be a JSON object");
     };
+
+    for field in &FORBIDDEN_TOP_LEVEL_SOURCE_FIELDS {
+        if root.contains_key(*field) {
+            return reject(&format!(
+                "payload.{field} is forbidden; writeback cannot modify source identity"
+            ));
+        }
+    }
+
     if let Err(reason) = ensure_no_unknown_fields(root, &ALLOWED_TOP_LEVEL_FIELDS, "payload") {
         return reject(&reason);
     }
@@ -802,6 +811,30 @@ mod tests {
             }
             WritebackGuardVerdict::Rejected { reason } => {
                 assert!(reason.contains("payload contains unknown field: unknown"));
+            }
+        }
+
+        let mut forbidden_source_kind = valid_payload();
+        forbidden_source_kind["source_kind"] = json!("discord");
+        let verdict = validate_writeback_payload(&forbidden_source_kind, &immutable_fields());
+        match verdict {
+            WritebackGuardVerdict::Accepted(_) => {
+                panic!("expected rejection for forbidden payload.source_kind")
+            }
+            WritebackGuardVerdict::Rejected { reason } => {
+                assert!(reason.contains("payload.source_kind is forbidden"));
+            }
+        }
+
+        let mut forbidden_source_ref = valid_payload();
+        forbidden_source_ref["source_ref"] = json!("channel:discord:test");
+        let verdict = validate_writeback_payload(&forbidden_source_ref, &immutable_fields());
+        match verdict {
+            WritebackGuardVerdict::Accepted(_) => {
+                panic!("expected rejection for forbidden payload.source_ref")
+            }
+            WritebackGuardVerdict::Rejected { reason } => {
+                assert!(reason.contains("payload.source_ref is forbidden"));
             }
         }
 

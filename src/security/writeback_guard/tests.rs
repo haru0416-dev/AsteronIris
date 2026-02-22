@@ -1,4 +1,7 @@
 use super::*;
+use crate::core::memory::{
+    MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel, SourceKind,
+};
 use serde_json::{Value, json};
 
 fn immutable_fields() -> ImmutableStateHeader {
@@ -314,4 +317,196 @@ fn guard_rejects_self_task_with_poison_pattern() {
             assert!(!reason.contains("Ignore previous instructions"));
         }
     }
+}
+
+fn valid_persona_event(slot_key: &str, event_type: MemoryEventType) -> MemoryEventInput {
+    MemoryEventInput::new(
+        "person:person-test",
+        slot_key,
+        event_type,
+        "safe value",
+        MemorySource::System,
+        PrivacyLevel::Private,
+    )
+    .with_source_kind(SourceKind::Manual)
+    .with_source_ref("persona-policy-test")
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::System,
+        "persona.policy.test",
+    ))
+}
+
+#[test]
+fn persona_policy_accepts_canonical_and_writeback_slots() {
+    let canonical = valid_persona_event(
+        "persona/person-test/state_header/v1",
+        MemoryEventType::FactUpdated,
+    );
+    enforce_persona_long_term_write_policy(&canonical, "person-test").unwrap();
+
+    let writeback = valid_persona_event("persona.writeback.0", MemoryEventType::SummaryCompacted);
+    enforce_persona_long_term_write_policy(&writeback, "person-test").unwrap();
+}
+
+#[test]
+fn persona_policy_rejects_wrong_source_kind_or_source_ref() {
+    let mut event = valid_persona_event("persona.writeback.0", MemoryEventType::SummaryCompacted);
+    event.source_kind = Some(SourceKind::Discord);
+    let err = enforce_persona_long_term_write_policy(&event, "person-test")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("source_kind=manual"));
+
+    let mut event = valid_persona_event("persona.writeback.0", MemoryEventType::SummaryCompacted);
+    event.source_ref = Some("  ".to_string());
+    let err = enforce_persona_long_term_write_policy(&event, "person-test")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("source_ref"));
+}
+
+#[test]
+fn persona_policy_rejects_invalid_entity_slot_or_event_type() {
+    let mut wrong_entity =
+        valid_persona_event("persona.writeback.0", MemoryEventType::SummaryCompacted);
+    wrong_entity.entity_id = "person:other".to_string();
+    let err = enforce_persona_long_term_write_policy(&wrong_entity, "person-test")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("entity_id mismatch"));
+
+    let wrong_slot = valid_persona_event("conversation.user_msg", MemoryEventType::FactAdded);
+    let err = enforce_persona_long_term_write_policy(&wrong_slot, "person-test")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("rejected slot_key"));
+
+    let wrong_type = valid_persona_event("persona.writeback.0", MemoryEventType::FactAdded);
+    let err = enforce_persona_long_term_write_policy(&wrong_type, "person-test")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("summary_compacted"));
+}
+
+#[test]
+fn tool_memory_policy_requires_manual_non_secret_and_metadata() {
+    let event = valid_persona_event("persona.writeback.0", MemoryEventType::SummaryCompacted);
+    enforce_tool_memory_write_policy(&event).unwrap();
+
+    let mut secret = event.clone();
+    secret.privacy_level = PrivacyLevel::Secret;
+    let err = enforce_tool_memory_write_policy(&secret)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("privacy_level=secret"));
+
+    let mut missing_ref = event.clone();
+    missing_ref.source_ref = None;
+    let err = enforce_tool_memory_write_policy(&missing_ref)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("source_ref"));
+}
+
+#[test]
+fn external_autosave_policy_requires_external_shape() {
+    let event = MemoryEventInput::new(
+        "person:discord.u_1",
+        "external.channel.discord.u_1",
+        MemoryEventType::FactAdded,
+        "safe",
+        MemorySource::ExplicitUser,
+        PrivacyLevel::Private,
+    )
+    .with_source_kind(SourceKind::Discord)
+    .with_source_ref("channel:discord:u_1")
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::ExplicitUser,
+        "channels.autosave.ingress",
+    ));
+    enforce_external_autosave_write_policy(&event).unwrap();
+
+    let mut wrong_source = event.clone();
+    wrong_source.source = MemorySource::System;
+    let err = enforce_external_autosave_write_policy(&wrong_source)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("source=explicit_user"));
+}
+
+#[test]
+fn agent_autosave_policy_accepts_conversation_entries() {
+    let user_input = MemoryEventInput::new(
+        "person:agent.test",
+        "conversation.user_msg",
+        MemoryEventType::FactAdded,
+        "hello",
+        MemorySource::ExplicitUser,
+        PrivacyLevel::Private,
+    )
+    .with_source_kind(SourceKind::Conversation)
+    .with_source_ref("agent.autosave.user_msg")
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::ExplicitUser,
+        "agent.autosave.user_msg",
+    ));
+    enforce_agent_autosave_write_policy(&user_input).unwrap();
+
+    let assistant_input = MemoryEventInput::new(
+        "person:agent.test",
+        "conversation.assistant_resp",
+        MemoryEventType::FactAdded,
+        "hi",
+        MemorySource::System,
+        PrivacyLevel::Private,
+    )
+    .with_source_kind(SourceKind::Conversation)
+    .with_source_ref("agent.autosave.assistant_resp")
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::System,
+        "agent.autosave.assistant_resp",
+    ));
+    enforce_agent_autosave_write_policy(&assistant_input).unwrap();
+}
+
+#[test]
+fn inference_and_verify_repair_policies_enforce_shape() {
+    let inference = MemoryEventInput::new(
+        "person:test",
+        "inference.preference.language",
+        MemoryEventType::InferredClaim,
+        "prefers rust",
+        MemorySource::Inferred,
+        PrivacyLevel::Private,
+    )
+    .with_source_kind(SourceKind::Conversation)
+    .with_source_ref("inference.post_turn.inferred_claim")
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::Inferred,
+        "inference.post_turn.inferred_claim",
+    ));
+    enforce_inference_write_policy(&inference).unwrap();
+
+    let verify = MemoryEventInput::new(
+        "person:test",
+        "autonomy.verify_repair.escalation",
+        MemoryEventType::SummaryCompacted,
+        "{}",
+        MemorySource::System,
+        PrivacyLevel::Private,
+    )
+    .with_source_kind(SourceKind::Manual)
+    .with_source_ref("verify-repair.escalation")
+    .with_provenance(MemoryProvenance::source_reference(
+        MemorySource::System,
+        "verify-repair.escalation",
+    ));
+    enforce_verify_repair_write_policy(&verify).unwrap();
+
+    let mut broken = verify.clone();
+    broken.source_kind = Some(SourceKind::Conversation);
+    let err = enforce_verify_repair_write_policy(&broken)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("source_kind=manual"));
 }
