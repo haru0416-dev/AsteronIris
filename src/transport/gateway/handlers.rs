@@ -1,4 +1,4 @@
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
 use crate::core::providers;
 use crate::core::tools::middleware::ExecutionContext;
 use crate::security::pairing::constant_time_eq;
@@ -73,16 +73,16 @@ async fn run_gateway_tool_loop(
         approval_broker: None,
     };
     let result = tool_loop
-        .run(
-            state.provider.as_ref(),
-            full_prompt,
+        .run(ToolLoopRunParams {
+            provider: state.provider.as_ref(),
+            system_prompt: full_prompt,
             user_message,
-            &[],
+            image_content: &[],
             model,
             temperature,
-            &ctx,
-            None,
-        )
+            ctx: &ctx,
+            stream_sink: None,
+        })
         .await?;
     if let LoopStopReason::Error(error) = &result.stop_reason {
         anyhow::bail!("tool loop failed: {error}");

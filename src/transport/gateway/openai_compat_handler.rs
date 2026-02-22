@@ -1,4 +1,4 @@
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::security::policy::TenantPolicyContext;
 use crate::transport::gateway::AppState;
@@ -47,16 +47,16 @@ pub async fn handle_chat_completions(
     };
 
     match tool_loop
-        .run(
-            state.provider.as_ref(),
-            system_prompt.as_deref().unwrap_or_default(),
-            &user_message,
-            &[],
-            &model,
+        .run(ToolLoopRunParams {
+            provider: state.provider.as_ref(),
+            system_prompt: system_prompt.as_deref().unwrap_or_default(),
+            user_message: &user_message,
+            image_content: &[],
+            model: &model,
             temperature,
-            &ctx,
-            None,
-        )
+            ctx: &ctx,
+            stream_sink: None,
+        })
         .await
     {
         Ok(result) => {

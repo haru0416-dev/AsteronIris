@@ -1,6 +1,6 @@
 use super::AppState;
 use super::events::{ClientMessage, ServerMessage};
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::security::policy::TenantPolicyContext;
 use axum::extract::State;
@@ -85,16 +85,16 @@ async fn handle_client_message(
             };
 
             match tool_loop
-                .run(
-                    state.provider.as_ref(),
-                    "",
-                    &message,
-                    &[],
-                    &state.model,
-                    state.temperature,
-                    &ctx,
-                    None,
-                )
+                .run(ToolLoopRunParams {
+                    provider: state.provider.as_ref(),
+                    system_prompt: "",
+                    user_message: &message,
+                    image_content: &[],
+                    model: &state.model,
+                    temperature: state.temperature,
+                    ctx: &ctx,
+                    stream_sink: None,
+                })
                 .await
             {
                 Ok(result) => {

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
 use crate::core::providers::streaming::{ChannelStreamSink, StreamSink};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::media::MediaProcessor;
@@ -214,16 +214,16 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
         });
 
     match tool_loop
-        .run(
-            rt.provider.as_ref(),
-            &rt.system_prompt,
-            &message_input,
-            &image_blocks,
-            &rt.model,
-            rt.temperature,
-            &ctx,
+        .run(ToolLoopRunParams {
+            provider: rt.provider.as_ref(),
+            system_prompt: &rt.system_prompt,
+            user_message: &message_input,
+            image_content: &image_blocks,
+            model: &rt.model,
+            temperature: rt.temperature,
+            ctx: &ctx,
             stream_sink,
-        )
+        })
         .await
     {
         Ok(result) => {
