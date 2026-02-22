@@ -214,7 +214,8 @@ async fn tenant_recall_all_entrypoints_block_cross_scope() {
     );
 
     let tool = MemoryRecallTool::new(memory.clone());
-    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
+    let mut ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
+    ctx.tenant_context = TenantPolicyContext::enabled("tenant-alpha");
     let tool_result = tool
         .execute(
             json!({
@@ -343,7 +344,8 @@ async fn tenant_recall_e2e_cross_tenant_block() {
     let tenant_alpha_context = TenantPolicyContext::enabled("tenant-alpha");
 
     let tool = MemoryRecallTool::new(memory.clone());
-    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
+    let mut ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
+    ctx.tenant_context = TenantPolicyContext::enabled("tenant-alpha");
     let cross_tool_result = tool
         .execute(
             json!({

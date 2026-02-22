@@ -5,6 +5,7 @@ use asteroniris::core::tools::{
     ExecutionContext, MemoryForgetTool, MemoryRecallTool, MemoryStoreTool, Tool,
 };
 use asteroniris::security::SecurityPolicy;
+use asteroniris::security::policy::TenantPolicyContext;
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -116,9 +117,11 @@ async fn memory_tool_schema_backward_compat() {
 #[tokio::test]
 async fn memory_tool_policy_context_validation() {
     let (_temp, memory) = sqlite_memory();
-    let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
+    let mut ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
 
     let recall = MemoryRecallTool::new(memory.clone());
+
+    // Test 1: Invalid policy_context in args is silently ignored (tool succeeds)
     let invalid_recall_context = recall
         .execute(
             json!({
@@ -128,15 +131,14 @@ async fn memory_tool_policy_context_validation() {
             }),
             &ctx,
         )
-        .await;
-    assert!(invalid_recall_context.is_err());
-    assert_eq!(
-        invalid_recall_context
-            .expect_err("invalid policy context should fail")
-            .to_string(),
-        "Invalid 'policy_context' parameter: expected object"
+        .await
+        .expect("invalid policy_context in args should be ignored");
+    assert!(
+        invalid_recall_context.success,
+        "tool should succeed when policy_context arg is invalid"
     );
 
+    // Test 2: Invalid policy_context.tenant_mode_enabled in args is silently ignored
     let invalid_recall_flag = recall
         .execute(
             json!({
@@ -149,13 +151,32 @@ async fn memory_tool_policy_context_validation() {
             }),
             &ctx,
         )
-        .await;
-    assert!(invalid_recall_flag.is_err());
-    assert_eq!(
-        invalid_recall_flag
-            .expect_err("invalid policy context flag should fail")
-            .to_string(),
-        "Invalid 'policy_context.tenant_mode_enabled' parameter: expected boolean"
+        .await
+        .expect("invalid policy_context flag in args should be ignored");
+    assert!(
+        invalid_recall_flag.success,
+        "tool should succeed when policy_context.tenant_mode_enabled is invalid"
+    );
+
+    // Test 3: Cross-tenant blocking works through ctx.tenant_context
+    ctx.tenant_context = TenantPolicyContext::enabled("tenant-alpha");
+    let cross_tenant_blocked = recall
+        .execute(
+            json!({
+                "entity_id": "tenant-beta:user-200",
+                "query": "anything"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("cross-tenant recall should return error result");
+    assert!(
+        !cross_tenant_blocked.success,
+        "cross-tenant recall should be blocked"
+    );
+    assert!(
+        cross_tenant_blocked.error.is_some(),
+        "error should be present"
     );
 
     let store = MemoryStoreTool::new(memory.clone());
@@ -204,6 +225,7 @@ async fn memory_tool_policy_context_validation() {
     );
 
     let forget = MemoryForgetTool::new(memory);
+    // Test 4: Invalid policy_context in forget args is silently ignored
     let invalid_forget_context = forget
         .execute(
             json!({
@@ -216,12 +238,10 @@ async fn memory_tool_policy_context_validation() {
             }),
             &ctx,
         )
-        .await;
-    assert!(invalid_forget_context.is_err());
-    assert_eq!(
-        invalid_forget_context
-            .expect_err("invalid forget context should fail")
-            .to_string(),
-        "Invalid 'policy_context.tenant_id' parameter: expected string or null"
+        .await
+        .expect("invalid policy_context in forget args should be ignored");
+    assert!(
+        invalid_forget_context.success,
+        "forget should succeed when policy_context arg is invalid"
     );
 }

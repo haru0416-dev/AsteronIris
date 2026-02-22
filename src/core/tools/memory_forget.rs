@@ -1,7 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use crate::core::memory::{ForgetMode, Memory};
 use crate::core::tools::middleware::ExecutionContext;
-use crate::security::policy::TenantPolicyContext;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -14,40 +13,6 @@ pub struct MemoryForgetTool {
 impl MemoryForgetTool {
     pub fn new(memory: Arc<dyn Memory>) -> Self {
         Self { memory }
-    }
-
-    fn parse_policy_context(args: &serde_json::Value) -> anyhow::Result<TenantPolicyContext> {
-        let Some(raw_context) = args.get("policy_context") else {
-            return Ok(TenantPolicyContext::disabled());
-        };
-
-        let Some(raw_context) = raw_context.as_object() else {
-            anyhow::bail!("Invalid 'policy_context' parameter: expected object");
-        };
-
-        let tenant_mode_enabled = match raw_context.get("tenant_mode_enabled") {
-            Some(value) => value.as_bool().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid 'policy_context.tenant_mode_enabled' parameter: expected boolean"
-                )
-            })?,
-            None => false,
-        };
-
-        let tenant_id = match raw_context.get("tenant_id") {
-            Some(serde_json::Value::String(value)) => Some(value.clone()),
-            Some(serde_json::Value::Null) | None => None,
-            Some(_) => {
-                anyhow::bail!(
-                    "Invalid 'policy_context.tenant_id' parameter: expected string or null"
-                )
-            }
-        };
-
-        Ok(TenantPolicyContext {
-            tenant_mode_enabled,
-            tenant_id,
-        })
     }
 }
 
@@ -107,7 +72,7 @@ impl Tool for MemoryForgetTool {
     async fn execute(
         &self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
+        ctx: &ExecutionContext,
     ) -> anyhow::Result<ToolResult> {
         let key = args
             .get("slot_key")
@@ -124,7 +89,7 @@ impl Tool for MemoryForgetTool {
             .and_then(|v| v.as_str())
             .unwrap_or("user_requested");
 
-        let policy_context = Self::parse_policy_context(&args)?;
+        let policy_context = &ctx.tenant_context;
         if let Err(error) = policy_context.enforce_recall_scope(entity_id) {
             return Ok(ToolResult {
                 success: false,

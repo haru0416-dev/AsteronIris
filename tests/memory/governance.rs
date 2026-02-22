@@ -3,6 +3,7 @@ use asteroniris::core::memory::{
 };
 use asteroniris::core::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
+use asteroniris::security::policy::TenantPolicyContext;
 
 use serde_json::json;
 use std::sync::Arc;
@@ -247,7 +248,8 @@ async fn memory_governance_delete_denied_is_audited() {
     .await;
 
     let tool = MemoryGovernanceTool::new(memory);
-    let ctx = ExecutionContext::from_security(security);
+    let mut ctx = ExecutionContext::from_security(security);
+    ctx.tenant_context = TenantPolicyContext::enabled("tenant-alpha");
     let denied = tool
         .execute(
             json!({

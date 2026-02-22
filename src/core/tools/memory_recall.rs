@@ -1,7 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use crate::core::memory::{Memory, RecallQuery};
 use crate::core::tools::middleware::ExecutionContext;
-use crate::security::policy::TenantPolicyContext;
 use async_trait::async_trait;
 use serde_json::json;
 use std::fmt::Write;
@@ -17,41 +16,10 @@ impl MemoryRecallTool {
         Self { memory }
     }
 
-    fn parse_policy_context(args: &serde_json::Value) -> anyhow::Result<TenantPolicyContext> {
-        let Some(raw_context) = args.get("policy_context") else {
-            return Ok(TenantPolicyContext::disabled());
-        };
-
-        let Some(raw_context) = raw_context.as_object() else {
-            anyhow::bail!("Invalid 'policy_context' parameter: expected object");
-        };
-
-        let tenant_mode_enabled = match raw_context.get("tenant_mode_enabled") {
-            Some(value) => value.as_bool().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid 'policy_context.tenant_mode_enabled' parameter: expected boolean"
-                )
-            })?,
-            None => false,
-        };
-
-        let tenant_id = match raw_context.get("tenant_id") {
-            Some(serde_json::Value::String(value)) => Some(value.clone()),
-            Some(serde_json::Value::Null) | None => None,
-            Some(_) => {
-                anyhow::bail!(
-                    "Invalid 'policy_context.tenant_id' parameter: expected string or null"
-                )
-            }
-        };
-
-        Ok(TenantPolicyContext {
-            tenant_mode_enabled,
-            tenant_id,
-        })
-    }
-
-    fn build_recall_request(args: &serde_json::Value) -> anyhow::Result<RecallQuery> {
+    fn build_recall_request(
+        args: &serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> anyhow::Result<RecallQuery> {
         let query = args
             .get("query")
             .and_then(|v| v.as_str())
@@ -69,7 +37,7 @@ impl MemoryRecallTool {
             .ok_or_else(|| anyhow::anyhow!("Missing 'entity_id' parameter"))?;
 
         let request = RecallQuery::new(entity_id, query, limit)
-            .with_policy_context(Self::parse_policy_context(args)?);
+            .with_policy_context(ctx.tenant_context.clone());
         request.enforce_policy()?;
         Ok(request)
     }
@@ -122,9 +90,9 @@ impl Tool for MemoryRecallTool {
     async fn execute(
         &self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
+        ctx: &ExecutionContext,
     ) -> anyhow::Result<ToolResult> {
-        let request = match Self::build_recall_request(&args) {
+        let request = match Self::build_recall_request(&args, ctx) {
             Ok(request) => request,
             Err(error) => {
                 if error.to_string().starts_with("blocked by security policy:") {
@@ -310,18 +278,15 @@ mod tests {
     async fn recall_rejects_default_scope_when_tenant_mode_enabled() {
         let (_tmp, mem) = seeded_mem();
         let tool = MemoryRecallTool::new(mem);
-        let ctx =
+        let mut ctx =
             ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
+        ctx.tenant_context = crate::security::policy::TenantPolicyContext::enabled("tenant-alpha");
 
         let result = tool
             .execute(
                 json!({
                     "entity_id": "default",
-                    "query": "anything",
-                    "policy_context": {
-                        "tenant_mode_enabled": true,
-                        "tenant_id": "tenant-alpha"
-                    }
+                    "query": "anything"
                 }),
                 &ctx,
             )
