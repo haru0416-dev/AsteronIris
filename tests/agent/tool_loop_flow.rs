@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use asteroniris::core::agent::{LoopStopReason, ToolLoop};
+use asteroniris::core::agent::{LoopStopReason, ToolLoop, ToolLoopRunParams};
 use asteroniris::core::providers::response::{
     ContentBlock, ProviderMessage, ProviderResponse, StopReason,
 };
@@ -163,16 +163,16 @@ async fn tool_loop_single_call() {
     ]);
 
     let result = ToolLoop::new(registry, 8)
-        .run(
-            &provider,
-            "system",
-            "read it",
-            &[],
-            "test-model",
-            0.0,
-            &ctx,
-            None,
-        )
+        .run(ToolLoopRunParams {
+            provider: &provider,
+            system_prompt: "system",
+            user_message: "read it",
+            image_content: &[],
+            model: "test-model",
+            temperature: 0.0,
+            ctx: &ctx,
+            stream_sink: None,
+        })
         .await
         .expect("tool loop should run");
 
@@ -205,16 +205,16 @@ async fn tool_loop_chain() {
     ]);
 
     let result = ToolLoop::new(registry, 8)
-        .run(
-            &provider,
-            "system",
-            "chain tools",
-            &[],
-            "test-model",
-            0.0,
-            &ctx,
-            None,
-        )
+        .run(ToolLoopRunParams {
+            provider: &provider,
+            system_prompt: "system",
+            user_message: "chain tools",
+            image_content: &[],
+            model: "test-model",
+            temperature: 0.0,
+            ctx: &ctx,
+            stream_sink: None,
+        })
         .await
         .expect("tool loop should run");
 
@@ -239,16 +239,16 @@ async fn tool_loop_max_iterations() {
     ]);
 
     let result = ToolLoop::new(registry, 2)
-        .run(
-            &provider,
-            "system",
-            "keep calling",
-            &[],
-            "test-model",
-            0.0,
-            &ctx,
-            None,
-        )
+        .run(ToolLoopRunParams {
+            provider: &provider,
+            system_prompt: "system",
+            user_message: "keep calling",
+            image_content: &[],
+            model: "test-model",
+            temperature: 0.0,
+            ctx: &ctx,
+            stream_sink: None,
+        })
         .await
         .expect("tool loop should run");
 
@@ -273,16 +273,16 @@ async fn tool_loop_hard_cap() {
     let provider = MockProvider::new(responses);
 
     let result = ToolLoop::new(registry, 100)
-        .run(
-            &provider,
-            "system",
-            "hard cap",
-            &[],
-            "test-model",
-            0.0,
-            &ctx,
-            None,
-        )
+        .run(ToolLoopRunParams {
+            provider: &provider,
+            system_prompt: "system",
+            user_message: "hard cap",
+            image_content: &[],
+            model: "test-model",
+            temperature: 0.0,
+            ctx: &ctx,
+            stream_sink: None,
+        })
         .await
         .expect("tool loop should run");
 
@@ -302,16 +302,16 @@ async fn tool_loop_error_recovery() {
     ]);
 
     let result = ToolLoop::new(registry, 8)
-        .run(
-            &provider,
-            "system",
-            "recover",
-            &[],
-            "test-model",
-            0.0,
-            &ctx,
-            None,
-        )
+        .run(ToolLoopRunParams {
+            provider: &provider,
+            system_prompt: "system",
+            user_message: "recover",
+            image_content: &[],
+            model: "test-model",
+            temperature: 0.0,
+            ctx: &ctx,
+            stream_sink: None,
+        })
         .await
         .expect("tool loop should run");
 
@@ -342,16 +342,16 @@ async fn tool_loop_no_tools() {
     let provider = MockProvider::new(vec![end_turn_text("plain")]);
 
     let result = ToolLoop::new(Arc::new(ToolRegistry::new(default_middleware_chain())), 8)
-        .run(
-            &provider,
-            "system",
-            "just text",
-            &[],
-            "test-model",
-            0.0,
-            &ctx,
-            None,
-        )
+        .run(ToolLoopRunParams {
+            provider: &provider,
+            system_prompt: "system",
+            user_message: "just text",
+            image_content: &[],
+            model: "test-model",
+            temperature: 0.0,
+            ctx: &ctx,
+            stream_sink: None,
+        })
         .await
         .expect("tool loop should run");
 
