@@ -22,6 +22,29 @@ pub struct DiscordChannel {
     bot_user_id: std::sync::Mutex<Option<String>>,
 }
 
+struct MessageCreateParams<'a> {
+    tx: &'a tokio::sync::mpsc::Sender<ChannelMessage>,
+    channel_id: &'a str,
+    author_id: &'a str,
+    author_is_bot: bool,
+    content: String,
+    guild_id: Option<&'a str>,
+    thread_id: Option<String>,
+    message_id: &'a str,
+    attachments: &'a [gateway::RawAttachment],
+}
+
+struct InteractionCreateParams<'a> {
+    tx: &'a tokio::sync::mpsc::Sender<ChannelMessage>,
+    interaction_id: &'a str,
+    interaction_token: &'a str,
+    interaction_type: u64,
+    channel_id: &'a str,
+    user_id: &'a str,
+    guild_id: Option<&'a str>,
+    data: &'a serde_json::Value,
+}
+
 impl DiscordChannel {
     pub fn new(config: DiscordConfig) -> Self {
         Self {
@@ -110,17 +133,17 @@ impl DiscordChannel {
                 message_id,
                 attachments,
             } => {
-                self.handle_message_create(
+                self.handle_message_create(MessageCreateParams {
                     tx,
-                    &channel_id,
-                    &author_id,
+                    channel_id: &channel_id,
+                    author_id: &author_id,
                     author_is_bot,
                     content,
-                    guild_id.as_deref(),
+                    guild_id: guild_id.as_deref(),
                     thread_id,
-                    &message_id,
-                    &attachments,
-                )
+                    message_id: &message_id,
+                    attachments: &attachments,
+                })
                 .await;
             }
             GatewayEvent::InteractionCreate {
@@ -132,16 +155,16 @@ impl DiscordChannel {
                 guild_id,
                 data,
             } => {
-                self.handle_interaction_create(
+                self.handle_interaction_create(InteractionCreateParams {
                     tx,
-                    &interaction_id,
-                    &interaction_token,
+                    interaction_id: &interaction_id,
+                    interaction_token: &interaction_token,
                     interaction_type,
-                    &channel_id,
-                    &user_id,
-                    guild_id.as_deref(),
-                    &data,
-                )
+                    channel_id: &channel_id,
+                    user_id: &user_id,
+                    guild_id: guild_id.as_deref(),
+                    data: &data,
+                })
                 .await;
             }
             GatewayEvent::ReactionAdd { .. } | GatewayEvent::ReactionRemove { .. } => {
@@ -169,19 +192,19 @@ impl DiscordChannel {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn handle_message_create(
-        &self,
-        tx: &tokio::sync::mpsc::Sender<ChannelMessage>,
-        channel_id: &str,
-        author_id: &str,
-        author_is_bot: bool,
-        content: String,
-        guild_id: Option<&str>,
-        thread_id: Option<String>,
-        message_id: &str,
-        attachments: &[gateway::RawAttachment],
-    ) {
+    async fn handle_message_create(&self, params: MessageCreateParams<'_>) {
+        let MessageCreateParams {
+            tx,
+            channel_id,
+            author_id,
+            author_is_bot,
+            content,
+            guild_id,
+            thread_id,
+            message_id,
+            attachments,
+        } = params;
+
         if self.is_bot_user(author_id) || author_is_bot {
             return;
         }
@@ -217,18 +240,18 @@ impl DiscordChannel {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn handle_interaction_create(
-        &self,
-        tx: &tokio::sync::mpsc::Sender<ChannelMessage>,
-        interaction_id: &str,
-        interaction_token: &str,
-        interaction_type: u64,
-        channel_id: &str,
-        user_id: &str,
-        guild_id: Option<&str>,
-        data: &serde_json::Value,
-    ) {
+    async fn handle_interaction_create(&self, params: InteractionCreateParams<'_>) {
+        let InteractionCreateParams {
+            tx,
+            interaction_id,
+            interaction_token,
+            interaction_type,
+            channel_id,
+            user_id,
+            guild_id,
+            data,
+        } = params;
+
         if InteractionType::from_u64(interaction_type) != Some(InteractionType::ApplicationCommand)
         {
             return;
