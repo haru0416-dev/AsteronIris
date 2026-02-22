@@ -1,7 +1,7 @@
 use crate::core::providers::response::{
     ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason,
 };
-use crate::core::providers::streaming::{ProviderChatRequest, StreamCollector, StreamSink};
+use crate::core::providers::streaming::{ProviderChatRequest, StreamCollector};
 use crate::core::providers::traits::Provider;
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::registry::ToolRegistry;
@@ -15,7 +15,9 @@ use super::tool_execution::{
 use super::tool_types::{ChatOnceInput, TOOL_LOOP_HARD_CAP, ToolUseExecutionOutcome};
 
 pub use super::tool_execution::augment_prompt_with_trust_boundary;
-pub use super::tool_types::{LoopStopReason, ToolCallRecord, ToolLoop, ToolLoopResult};
+pub use super::tool_types::{
+    LoopStopReason, ToolCallRecord, ToolLoop, ToolLoopResult, ToolLoopRunParams,
+};
 
 impl ToolLoop {
     pub fn new(registry: Arc<ToolRegistry>, max_iterations: u32) -> Self {
@@ -25,18 +27,18 @@ impl ToolLoop {
         }
     }
 
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    pub async fn run(
-        &self,
-        provider: &dyn Provider,
-        system_prompt: &str,
-        user_message: &str,
-        image_content: &[ContentBlock],
-        model: &str,
-        temperature: f64,
-        ctx: &ExecutionContext,
-        stream_sink: Option<Arc<dyn StreamSink>>,
-    ) -> anyhow::Result<ToolLoopResult> {
+    #[allow(clippy::too_many_lines)]
+    pub async fn run(&self, params: ToolLoopRunParams<'_>) -> anyhow::Result<ToolLoopResult> {
+        let ToolLoopRunParams {
+            provider,
+            system_prompt,
+            user_message,
+            image_content,
+            model,
+            temperature,
+            ctx,
+            stream_sink,
+        } = params;
         let tool_specs: Vec<ToolSpec> = self.registry.specs_for_context(ctx);
         let prompt = augment_prompt_with_trust_boundary(system_prompt, !tool_specs.is_empty());
         let initial_message = if image_content.is_empty() {
@@ -540,16 +542,16 @@ mod tests {
         };
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                None,
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: None,
+            })
             .await
             .unwrap();
 
@@ -607,16 +609,16 @@ mod tests {
         };
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                None,
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: None,
+            })
             .await
             .unwrap();
 
@@ -667,16 +669,16 @@ mod tests {
         };
 
         let _ = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                None,
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: None,
+            })
             .await
             .unwrap();
 
@@ -704,16 +706,16 @@ mod tests {
         };
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                None,
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: None,
+            })
             .await
             .unwrap();
 
@@ -736,16 +738,16 @@ mod tests {
         };
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                None,
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: None,
+            })
             .await
             .unwrap();
 
@@ -776,16 +778,16 @@ mod tests {
         };
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                None,
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: None,
+            })
             .await
             .unwrap();
 
@@ -838,16 +840,16 @@ mod tests {
         };
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                None,
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: None,
+            })
             .await
             .unwrap();
 
@@ -877,16 +879,16 @@ mod tests {
         };
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                None,
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: None,
+            })
             .await
             .unwrap();
 
@@ -915,16 +917,16 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+            })
             .await
             .unwrap();
 
@@ -969,16 +971,16 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+            })
             .await
             .unwrap();
 
@@ -1010,16 +1012,16 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
 
         let result = loop_
-            .run(
-                &provider,
-                "system",
-                "hello",
-                &[],
-                "test-model",
-                0.2,
-                &test_ctx(),
-                Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
-            )
+            .run(ToolLoopRunParams {
+                provider: &provider,
+                system_prompt: "system",
+                user_message: "hello",
+                image_content: &[],
+                model: "test-model",
+                temperature: 0.2,
+                ctx: &test_ctx(),
+                stream_sink: Some(Arc::clone(&sink) as Arc<dyn StreamSink>),
+            })
             .await
             .unwrap();
 

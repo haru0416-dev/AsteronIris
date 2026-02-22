@@ -1,5 +1,7 @@
-use crate::core::providers::response::ProviderMessage;
+use crate::core::providers::response::{ContentBlock, ProviderMessage};
 use crate::core::providers::streaming::StreamSink;
+use crate::core::providers::traits::Provider;
+use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::registry::ToolRegistry;
 use crate::core::tools::traits::{OutputAttachment, ToolResult, ToolSpec};
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,17 @@ pub(crate) const TOOL_LOOP_HARD_CAP: u32 = 25;
 pub struct ToolLoop {
     pub(crate) registry: Arc<ToolRegistry>,
     pub(crate) max_iterations: u32,
+}
+
+pub struct ToolLoopRunParams<'a> {
+    pub provider: &'a dyn Provider,
+    pub system_prompt: &'a str,
+    pub user_message: &'a str,
+    pub image_content: &'a [ContentBlock],
+    pub model: &'a str,
+    pub temperature: f64,
+    pub ctx: &'a ExecutionContext,
+    pub stream_sink: Option<Arc<dyn StreamSink>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
