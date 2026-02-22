@@ -4,6 +4,11 @@ use std::time::Duration;
 
 /// Check if an error is non-retryable (client errors that won't resolve with retries).
 fn is_non_retryable(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    if is_quota_exhausted(&msg) {
+        return true;
+    }
+
     // Check for reqwest status errors (returned by .error_for_status())
     if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>()
         && let Some(status) = reqwest_err.status()
@@ -15,7 +20,6 @@ fn is_non_retryable(err: &anyhow::Error) -> bool {
         return status.is_client_error() && code != 429 && code != 408;
     }
     // String fallback: scan for any 4xx status code in error message
-    let msg = err.to_string();
     for word in msg.split(|c: char| !c.is_ascii_digit()) {
         if let Ok(code) = word.parse::<u16>()
             && (400..500).contains(&code)
@@ -24,6 +28,13 @@ fn is_non_retryable(err: &anyhow::Error) -> bool {
         }
     }
     false
+}
+
+fn is_quota_exhausted(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("insufficient_quota")
+        || lower.contains("exceeded your current quota")
+        || lower.contains("billing")
 }
 
 /// Provider wrapper with retry + fallback behavior.
@@ -355,6 +366,11 @@ mod tests {
         // Retryable: transient errors
         assert!(!is_non_retryable(&anyhow::anyhow!("timeout")));
         assert!(!is_non_retryable(&anyhow::anyhow!("connection reset")));
+
+        assert!(is_non_retryable(&anyhow::anyhow!(
+            "{}",
+            "OpenAI API error (429 Too Many Requests): {\"error\":{\"message\":\"You exceeded your current quota\",\"type\":\"insufficient_quota\"}}"
+        )));
     }
 
     #[tokio::test]

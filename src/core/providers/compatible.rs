@@ -13,6 +13,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// A provider that speaks the OpenAI-compatible chat completions API.
 /// Used by: Venice, Vercel AI Gateway, Cloudflare AI Gateway, Moonshot,
@@ -30,6 +31,7 @@ pub struct OpenAiCompatibleProvider {
     cached_chat_url: String,
     /// Pre-computed responses API URL (avoids `format!` per request).
     cached_responses_url: String,
+    prefer_responses_api: bool,
     client: Client,
 }
 
@@ -57,6 +59,7 @@ impl OpenAiCompatibleProvider {
         } else {
             format!("{base_url}/v1/responses")
         };
+        let prefer_responses_api = base_url.contains("responses");
 
         let cached_auth = api_key.map(|k| match &auth_style {
             AuthStyle::Bearer => ("Authorization".to_string(), format!("Bearer {k}")),
@@ -72,6 +75,7 @@ impl OpenAiCompatibleProvider {
             cached_auth,
             cached_chat_url,
             cached_responses_url,
+            prefer_responses_api,
             client: build_provider_client(),
         }
     }
@@ -127,6 +131,8 @@ struct ResponsesRequest {
     input: Vec<ResponsesInput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    store: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
 }
@@ -195,6 +201,51 @@ fn extract_responses_text(response: &ResponsesResponse) -> Option<String> {
     None
 }
 
+fn extract_responses_sse_text(body: &str) -> Option<String> {
+    let mut output_text = String::new();
+    let mut snapshot: Option<String> = None;
+
+    for line in body.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = data.trim();
+        if payload.is_empty() || payload == "[DONE]" {
+            continue;
+        }
+
+        let Ok(value) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+
+        if let Some(text) = value
+            .pointer("/response/output_text")
+            .and_then(Value::as_str)
+            .and_then(|v| first_nonempty(Some(v)))
+        {
+            snapshot = Some(text);
+        }
+
+        if let Some(text) = value
+            .pointer("/output_text")
+            .and_then(Value::as_str)
+            .and_then(|v| first_nonempty(Some(v)))
+        {
+            snapshot = Some(text);
+        }
+
+        if let Some(delta) = value.pointer("/delta").and_then(Value::as_str) {
+            output_text.push_str(delta);
+        }
+    }
+
+    if !output_text.trim().is_empty() {
+        return Some(output_text.trim().to_string());
+    }
+
+    snapshot
+}
+
 fn extract_chat_text(response: &ChatResponse, provider_name: &str) -> anyhow::Result<String> {
     response
         .choices
@@ -225,7 +276,8 @@ impl OpenAiCompatibleProvider {
                 content: message.to_string(),
             }],
             instructions: system_prompt.map(str::to_string),
-            stream: Some(false),
+            store: self.prefer_responses_api.then_some(false),
+            stream: Some(self.prefer_responses_api),
         };
 
         let url = self.responses_url();
@@ -242,13 +294,18 @@ impl OpenAiCompatibleProvider {
             anyhow::bail!("{} Responses API error: {sanitized}", self.name);
         }
 
-        let responses: ResponsesResponse = response
-            .json()
+        let raw_body = response
+            .text()
             .await
-            .with_context(|| format!("{} Responses API JSON decode failed", self.name))?;
+            .with_context(|| format!("{} Responses API body read failed", self.name))?;
 
-        let text = extract_responses_text(&responses)
-            .ok_or_else(|| anyhow::anyhow!("No response from {} Responses API", self.name))?;
+        let text = if let Ok(responses) = serde_json::from_str::<ResponsesResponse>(&raw_body) {
+            extract_responses_text(&responses)
+        } else {
+            extract_responses_sse_text(&raw_body)
+        }
+        .ok_or_else(|| anyhow::anyhow!("{} Responses API JSON decode failed", self.name))?;
+
         Ok(ProviderResponse::text_only(text))
     }
 
@@ -313,6 +370,10 @@ impl OpenAiCompatibleProvider {
             messages,
             temperature,
         };
+
+        if self.prefer_responses_api {
+            return self.chat_via_responses(system_prompt, message, model).await;
+        }
 
         match self.call_chat_completions(&request).await {
             Ok(chat_response) => {

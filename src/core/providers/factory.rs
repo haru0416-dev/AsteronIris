@@ -22,6 +22,7 @@ fn resolve_api_key(name: &str, explicit_api_key: Option<&str>) -> Option<String>
         "anthropic" => vec!["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
         "openrouter" => vec!["OPENROUTER_API_KEY"],
         "openai" => vec!["OPENAI_API_KEY"],
+        "openai-codex" => vec!["OPENAI_CODEX_API_KEY", "OPENAI_API_KEY"],
         "venice" => vec!["VENICE_API_KEY"],
         "groq" => vec!["GROQ_API_KEY"],
         "mistral" => vec!["MISTRAL_API_KEY"],
@@ -92,6 +93,10 @@ fn compatible_provider_spec(name: &str) -> Option<(&'static str, &'static str)> 
         "perplexity" => ("Perplexity", "https://api.perplexity.ai"),
         "cohere" => ("Cohere", "https://api.cohere.com/compatibility"),
         "copilot" | "github-copilot" => ("GitHub Copilot", "https://api.githubcopilot.com"),
+        "openai-codex" => (
+            "OpenAI Codex",
+            "https://chatgpt.com/backend-api/codex/responses",
+        ),
         _ => return None,
     };
     Some(spec)
