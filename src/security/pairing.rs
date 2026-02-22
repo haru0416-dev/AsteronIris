@@ -10,15 +10,16 @@
 
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use subtle::{Choice, ConstantTimeEq};
 
 /// Maximum failed pairing attempts before lockout.
 const MAX_PAIR_ATTEMPTS: u32 = 5;
 /// Lockout duration after too many failed pairing attempts.
 const PAIR_LOCKOUT_SECS: u64 = 300; // 5 minutes
+const DEFAULT_TOKEN_TTL_SECS: u64 = 2_592_000;
 
 /// Manages pairing state for the gateway.
 ///
@@ -31,8 +32,8 @@ pub struct PairingGuard {
     require_pairing: bool,
     /// One-time pairing code (generated on startup, consumed on first pair).
     pairing_code: Mutex<Option<String>>,
-    /// Set of SHA-256 hashed bearer tokens (persisted across restarts).
-    paired_tokens: RwLock<HashSet<String>>,
+    paired_tokens: RwLock<HashMap<String, Instant>>,
+    token_ttl: Duration,
     /// Brute-force protection: failed attempt counter + lockout time.
     failed_attempts: Mutex<(u32, Option<Instant>)>,
 }
@@ -46,17 +47,27 @@ impl PairingGuard {
     /// Existing tokens are accepted in both forms:
     /// - Plaintext (`zc_...`): hashed on load for backward compatibility
     /// - Already hashed (64-char hex): stored as-is
-    pub fn new(require_pairing: bool, existing_tokens: &[String]) -> Self {
-        let tokens: HashSet<String> = existing_tokens
+    pub fn new(
+        require_pairing: bool,
+        existing_tokens: &[String],
+        token_ttl_secs: Option<u64>,
+    ) -> Self {
+        let token_ttl = Duration::from_secs(token_ttl_secs.unwrap_or(DEFAULT_TOKEN_TTL_SECS));
+        let now = Instant::now();
+        let mut tokens: HashMap<String, Instant> = existing_tokens
             .iter()
             .map(|t| {
-                if is_token_hash(t) {
-                    t.clone()
-                } else {
-                    hash_token(t)
-                }
+                (
+                    if is_token_hash(t) {
+                        t.clone()
+                    } else {
+                        hash_token(t)
+                    },
+                    now,
+                )
             })
             .collect();
+        retain_non_expired_tokens(&mut tokens, now, token_ttl);
         let code = if require_pairing && tokens.is_empty() {
             Some(generate_code())
         } else {
@@ -66,6 +77,7 @@ impl PairingGuard {
             require_pairing,
             pairing_code: Mutex::new(code),
             paired_tokens: RwLock::new(tokens),
+            token_ttl,
             failed_attempts: Mutex::new((0, None)),
         }
     }
@@ -123,7 +135,7 @@ impl PairingGuard {
                     .paired_tokens
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                tokens.insert(hash_token(&token));
+                tokens.insert(hash_token(&token), Instant::now());
 
                 // Consume the pairing code so it cannot be reused
                 *pairing_code = None;
@@ -153,30 +165,52 @@ impl PairingGuard {
             return true;
         }
         let hashed = hash_token(token);
-        let tokens = self
+        let now = Instant::now();
+        let mut tokens = self
             .paired_tokens
-            .read()
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        tokens.contains(&hashed)
+        retain_non_expired_tokens(&mut tokens, now, self.token_ttl);
+        tokens.contains_key(&hashed)
     }
 
     /// Returns true if the gateway is already paired (has at least one token).
     pub fn is_paired(&self) -> bool {
-        let tokens = self
+        let now = Instant::now();
+        let mut tokens = self
             .paired_tokens
-            .read()
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        retain_non_expired_tokens(&mut tokens, now, self.token_ttl);
         !tokens.is_empty()
     }
 
     /// Get all paired token hashes (for persisting to config).
     pub fn tokens(&self) -> Vec<String> {
-        let tokens = self
+        let now = Instant::now();
+        let mut tokens = self
             .paired_tokens
-            .read()
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        tokens.iter().cloned().collect()
+        retain_non_expired_tokens(&mut tokens, now, self.token_ttl);
+        tokens.keys().cloned().collect()
     }
+
+    pub fn revoke_all(&self) {
+        let mut tokens = self
+            .paired_tokens
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        tokens.clear();
+    }
+}
+
+fn retain_non_expired_tokens(
+    tokens: &mut HashMap<String, Instant>,
+    now: Instant,
+    token_ttl: Duration,
+) {
+    tokens.retain(|_, created_at| now.duration_since(*created_at) < token_ttl);
 }
 
 /// Generate a 6-digit numeric pairing code using cryptographically secure randomness.
@@ -256,27 +290,27 @@ mod tests {
 
     #[test]
     fn new_guard_generates_code_when_no_tokens() {
-        let guard = PairingGuard::new(true, &[]);
+        let guard = PairingGuard::new(true, &[], None);
         assert!(guard.pairing_code().is_some());
         assert!(!guard.is_paired());
     }
 
     #[test]
     fn new_guard_no_code_when_tokens_exist() {
-        let guard = PairingGuard::new(true, &["zc_existing".into()]);
+        let guard = PairingGuard::new(true, &["zc_existing".into()], None);
         assert!(guard.pairing_code().is_none());
         assert!(guard.is_paired());
     }
 
     #[test]
     fn new_guard_no_code_when_pairing_disabled() {
-        let guard = PairingGuard::new(false, &[]);
+        let guard = PairingGuard::new(false, &[], None);
         assert!(guard.pairing_code().is_none());
     }
 
     #[test]
     fn try_pair_correct_code() {
-        let guard = PairingGuard::new(true, &[]);
+        let guard = PairingGuard::new(true, &[], None);
         let code = guard.pairing_code().unwrap().clone();
         let token = guard.try_pair(&code).unwrap();
         assert!(token.is_some());
@@ -286,7 +320,7 @@ mod tests {
 
     #[test]
     fn try_pair_wrong_code() {
-        let guard = PairingGuard::new(true, &[]);
+        let guard = PairingGuard::new(true, &[], None);
         let result = guard.try_pair("000000").unwrap();
         // Might succeed if code happens to be 000000, but extremely unlikely
         // Just check it returns Ok(None) normally
@@ -295,14 +329,14 @@ mod tests {
 
     #[test]
     fn try_pair_empty_code() {
-        let guard = PairingGuard::new(true, &[]);
+        let guard = PairingGuard::new(true, &[], None);
         assert!(guard.try_pair("").unwrap().is_none());
     }
 
     #[test]
     fn is_authenticated_with_valid_token() {
         // Pass plaintext token — PairingGuard hashes it on load
-        let guard = PairingGuard::new(true, &["zc_valid".into()]);
+        let guard = PairingGuard::new(true, &["zc_valid".into()], None);
         assert!(guard.is_authenticated("zc_valid"));
     }
 
@@ -310,26 +344,26 @@ mod tests {
     fn is_authenticated_with_prehashed_token() {
         // Pass an already-hashed token (64 hex chars)
         let hashed = hash_token("zc_valid");
-        let guard = PairingGuard::new(true, &[hashed]);
+        let guard = PairingGuard::new(true, &[hashed], None);
         assert!(guard.is_authenticated("zc_valid"));
     }
 
     #[test]
     fn is_authenticated_with_invalid_token() {
-        let guard = PairingGuard::new(true, &["zc_valid".into()]);
+        let guard = PairingGuard::new(true, &["zc_valid".into()], None);
         assert!(!guard.is_authenticated("zc_invalid"));
     }
 
     #[test]
     fn is_authenticated_when_pairing_disabled() {
-        let guard = PairingGuard::new(false, &[]);
+        let guard = PairingGuard::new(false, &[], None);
         assert!(guard.is_authenticated("anything"));
         assert!(guard.is_authenticated(""));
     }
 
     #[test]
     fn tokens_returns_hashes() {
-        let guard = PairingGuard::new(true, &["zc_a".into(), "zc_b".into()]);
+        let guard = PairingGuard::new(true, &["zc_a".into(), "zc_b".into()], None);
         let tokens = guard.tokens();
         assert_eq!(tokens.len(), 2);
         // Tokens should be stored as 64-char hex hashes, not plaintext
@@ -342,11 +376,33 @@ mod tests {
 
     #[test]
     fn pair_then_authenticate() {
-        let guard = PairingGuard::new(true, &[]);
+        let guard = PairingGuard::new(true, &[], None);
         let code = guard.pairing_code().unwrap().clone();
         let token = guard.try_pair(&code).unwrap().unwrap();
         assert!(guard.is_authenticated(&token));
         assert!(!guard.is_authenticated("wrong"));
+    }
+
+    #[test]
+    fn is_authenticated_rejects_expired_token_and_cleans_it_up() {
+        let guard = PairingGuard::new(true, &["zc_valid".into()], Some(0));
+        assert!(!guard.is_authenticated("zc_valid"));
+        assert!(guard.tokens().is_empty());
+        assert!(!guard.is_paired());
+    }
+
+    #[test]
+    fn is_authenticated_accepts_non_expired_token() {
+        let guard = PairingGuard::new(true, &["zc_valid".into()], Some(60));
+        assert!(guard.is_authenticated("zc_valid"));
+    }
+
+    #[test]
+    fn revoke_all_clears_all_paired_tokens() {
+        let guard = PairingGuard::new(true, &["zc_a".into(), "zc_b".into()], None);
+        guard.revoke_all();
+        assert!(guard.tokens().is_empty());
+        assert!(!guard.is_paired());
     }
 
     // ── Token hashing ────────────────────────────────────────
@@ -478,7 +534,7 @@ mod tests {
 
     #[test]
     fn brute_force_lockout_after_max_attempts() {
-        let guard = PairingGuard::new(true, &[]);
+        let guard = PairingGuard::new(true, &[], None);
         // Exhaust all attempts with wrong codes
         for i in 0..MAX_PAIR_ATTEMPTS {
             let result = guard.try_pair(&format!("wrong_{i}"));
@@ -500,7 +556,7 @@ mod tests {
 
     #[test]
     fn correct_code_resets_failed_attempts() {
-        let guard = PairingGuard::new(true, &[]);
+        let guard = PairingGuard::new(true, &[], None);
         let code = guard.pairing_code().unwrap().clone();
         // Fail a few times
         for _ in 0..3 {
@@ -513,7 +569,7 @@ mod tests {
 
     #[test]
     fn lockout_returns_remaining_seconds() {
-        let guard = PairingGuard::new(true, &[]);
+        let guard = PairingGuard::new(true, &[], None);
         for _ in 0..MAX_PAIR_ATTEMPTS {
             let _ = guard.try_pair("wrong");
         }

@@ -204,6 +204,7 @@ pub async fn run_gateway_with_listener(
     let pairing = Arc::new(PairingGuard::new(
         config.gateway.require_pairing,
         &config.gateway.paired_tokens,
+        Some(config.gateway.token_ttl_secs),
     ));
 
     let tunnel_url = start_tunnel(&config, host, actual_port)
