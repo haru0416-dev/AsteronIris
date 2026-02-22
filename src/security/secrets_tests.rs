@@ -570,3 +570,9 @@ fn key_file_has_restricted_permissions() {
         "Key file must be owner-only (0600)"
     );
 }
+
+#[test]
+fn key_material_uses_zeroizing_wrapper() {
+    let key: zeroize::Zeroizing<Vec<u8>> = generate_random_key();
+    assert!(!key.is_empty());
+}

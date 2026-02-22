@@ -25,6 +25,7 @@ use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
 use chacha20poly1305::{AeadCore, ChaCha20Poly1305, Key, Nonce};
 use std::fs;
 use std::path::{Path, PathBuf};
+use zeroize::Zeroizing;
 
 /// ChaCha20-Poly1305 nonce length in bytes.
 const NONCE_LEN: usize = 12;
@@ -165,11 +166,13 @@ impl SecretStore {
     }
 
     /// Load the encryption key from disk, or create one if it doesn't exist.
-    fn load_or_create_key(&self) -> Result<Vec<u8>> {
+    fn load_or_create_key(&self) -> Result<Zeroizing<Vec<u8>>> {
         if self.key_path.exists() {
             let hex_key =
                 fs::read_to_string(&self.key_path).context("Failed to read secret key file")?;
-            hex_decode(hex_key.trim()).context("Secret key file is corrupt")
+            Ok(Zeroizing::new(
+                hex_decode(hex_key.trim()).context("Secret key file is corrupt")?,
+            ))
         } else {
             let key = generate_random_key();
             if let Some(parent) = self.key_path.parent() {
@@ -238,8 +241,8 @@ fn xor_cipher(data: &[u8], key: &[u8]) -> Vec<u8> {
 ///
 /// Uses `OsRng` (via `getrandom`) directly, providing full 256-bit entropy
 /// without the fixed version/variant bits that UUID v4 introduces.
-fn generate_random_key() -> Vec<u8> {
-    ChaCha20Poly1305::generate_key(&mut OsRng).to_vec()
+fn generate_random_key() -> Zeroizing<Vec<u8>> {
+    Zeroizing::new(ChaCha20Poly1305::generate_key(&mut OsRng).to_vec())
 }
 
 /// Hex-encode bytes to a lowercase hex string.
