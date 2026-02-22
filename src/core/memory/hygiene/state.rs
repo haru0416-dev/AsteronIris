@@ -9,7 +9,7 @@ use super::filesystem::{
     archive_daily_memory_files, archive_session_files, purge_memory_archives,
     purge_session_archives,
 };
-use super::prune::{prune_conversation_rows, prune_v2_lifecycle_rows};
+use super::prune::{LifecyclePruneReport, prune_conversation_rows, prune_v2_lifecycle_rows};
 
 pub(super) const HYGIENE_INTERVAL_HOURS: i64 = 12;
 const STATE_FILE: &str = "memory_hygiene_state.json";
@@ -21,6 +21,7 @@ pub(super) struct HygieneReport {
     purged_memory_archives: u64,
     purged_session_archives: u64,
     pruned_conversation_rows: u64,
+    lifecycle: LifecyclePruneReport,
 }
 
 impl HygieneReport {
@@ -30,6 +31,7 @@ impl HygieneReport {
             + self.purged_memory_archives
             + self.purged_session_archives
             + self.pruned_conversation_rows
+            + self.lifecycle.total_actions()
     }
 }
 
@@ -51,6 +53,8 @@ pub fn run_if_due(config: &MemoryConfig, workspace_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
+    let lifecycle = prune_v2_lifecycle_rows(workspace_dir, config)?;
+
     let report = HygieneReport {
         archived_memory_files: archive_daily_memory_files(workspace_dir, config.archive_after_days)
             .context("archive daily memory files")?,
@@ -65,20 +69,27 @@ pub fn run_if_due(config: &MemoryConfig, workspace_dir: &Path) -> Result<()> {
             config.conversation_retention_days,
         )
         .context("prune stale conversation rows")?,
+        lifecycle,
     };
-
-    let _ = prune_v2_lifecycle_rows(workspace_dir, config)?;
 
     write_state(workspace_dir, &report).context("save hygiene state")?;
 
     if report.total_actions() > 0 {
         tracing::info!(
-            "memory hygiene complete: archived_memory={} archived_sessions={} purged_memory={} purged_sessions={} pruned_conversation_rows={}",
+            "memory hygiene complete: archived_memory={} archived_sessions={} purged_memory={} purged_sessions={} pruned_conversation_rows={} ttl_slot_hard_deleted={} ttl_unit_purged={} low_confidence_demoted_total={} contradiction_auto_demoted_total={} stale_trend_purge_total={} recency_refresh_total={} layer_cleanup_total={} ledger_purged={}",
             report.archived_memory_files,
             report.archived_session_files,
             report.purged_memory_archives,
             report.purged_session_archives,
             report.pruned_conversation_rows,
+            report.lifecycle.ttl_slot_hard_deleted,
+            report.lifecycle.ttl_unit_purged,
+            report.lifecycle.low_confidence_demoted,
+            report.lifecycle.contradiction_auto_demoted,
+            report.lifecycle.stale_trend_demoted,
+            report.lifecycle.recency_refreshed,
+            report.lifecycle.layer_cleanup_actions,
+            report.lifecycle.ledger_purged,
         );
     }
 
