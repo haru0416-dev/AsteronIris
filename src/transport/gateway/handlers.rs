@@ -1,8 +1,10 @@
 use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
+use crate::core::persona::person_identity::channel_person_entity_id;
 use crate::core::providers;
 use crate::core::tools::middleware::ExecutionContext;
 use crate::security::pairing::constant_time_eq;
 use crate::security::policy::TenantPolicyContext;
+use crate::security::writeback_guard::enforce_external_autosave_write_policy;
 use crate::transport::channels::{Channel, WhatsAppChannel};
 use crate::utils::text::truncate_with_ellipsis;
 use axum::{
@@ -14,7 +16,7 @@ use axum::{
 use std::sync::Arc;
 
 use super::autosave::{
-    GATEWAY_AUTOSAVE_ENTITY_ID, gateway_runtime_policy_context, gateway_webhook_autosave_event,
+    gateway_autosave_entity_id, gateway_runtime_policy_context, gateway_webhook_autosave_event,
     gateway_whatsapp_autosave_event,
 };
 use super::defense::{
@@ -63,7 +65,7 @@ async fn run_gateway_tool_loop(
     let ctx = ExecutionContext {
         security: Arc::clone(&state.security),
         autonomy_level: state.security.autonomy,
-        entity_id: format!("gateway:{source_identifier}"),
+        entity_id: channel_person_entity_id("gateway", source_identifier),
         turn_number: 0,
         workspace_dir: state.security.workspace_dir.clone(),
         allowed_tools: None,
@@ -82,6 +84,7 @@ async fn run_gateway_tool_loop(
             temperature,
             ctx: &ctx,
             stream_sink: None,
+            conversation_history: &[],
         })
         .await?;
     if let LoopStopReason::Error(error) = &result.stop_reason {
@@ -131,21 +134,24 @@ async fn process_whatsapp_message(
     let ingress = apply_external_ingress_policy(source, content);
 
     if state.auto_save {
+        let autosave_entity_id = gateway_autosave_entity_id(sender);
         let policy_context = gateway_runtime_policy_context();
-        if let Err(error) = policy_context.enforce_recall_scope(GATEWAY_AUTOSAVE_ENTITY_ID) {
+        if let Err(error) = policy_context.enforce_recall_scope(&autosave_entity_id) {
             tracing::warn!(
                 error,
                 "gateway whatsapp autosave skipped due to policy context"
             );
-        } else if let Err(error) = state
-            .mem
-            .append_event(gateway_whatsapp_autosave_event(
+        } else {
+            let event = gateway_whatsapp_autosave_event(
+                &autosave_entity_id,
                 sender,
                 ingress.persisted_summary.clone(),
-            ))
-            .await
-        {
-            tracing::warn!(%error, "failed to autosave whatsapp event");
+            );
+            if let Err(error) = enforce_external_autosave_write_policy(&event) {
+                tracing::warn!(%error, "gateway whatsapp autosave rejected by write policy");
+            } else if let Err(error) = state.mem.append_event(event).await {
+                tracing::warn!(%error, "failed to autosave whatsapp event");
+            }
         }
     }
 
@@ -314,20 +320,24 @@ pub(super) async fn handle_webhook(
     let ingress = apply_external_ingress_policy(source, &webhook_body.message);
 
     if state.auto_save {
+        let source_identifier = bearer_token(&headers).unwrap_or("anonymous");
+        let autosave_entity_id = gateway_autosave_entity_id(source_identifier);
         let policy_context = gateway_runtime_policy_context();
-        if let Err(error) = policy_context.enforce_recall_scope(GATEWAY_AUTOSAVE_ENTITY_ID) {
+        if let Err(error) = policy_context.enforce_recall_scope(&autosave_entity_id) {
             tracing::warn!(
                 error,
                 "gateway webhook autosave skipped due to policy context"
             );
-        } else if let Err(error) = state
-            .mem
-            .append_event(gateway_webhook_autosave_event(
+        } else {
+            let event = gateway_webhook_autosave_event(
+                &autosave_entity_id,
                 ingress.persisted_summary.clone(),
-            ))
-            .await
-        {
-            tracing::warn!(%error, "failed to autosave webhook event");
+            );
+            if let Err(error) = enforce_external_autosave_write_policy(&event) {
+                tracing::warn!(%error, "gateway webhook autosave rejected by write policy");
+            } else if let Err(error) = state.mem.append_event(event).await {
+                tracing::warn!(%error, "failed to autosave webhook event");
+            }
         }
     }
 

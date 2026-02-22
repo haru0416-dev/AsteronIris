@@ -40,7 +40,9 @@ use std::sync::Arc;
 #[cfg(test)]
 use axum::http::StatusCode;
 #[cfg(test)]
-use handlers::{handle_health, handle_webhook, handle_whatsapp_message, handle_whatsapp_verify};
+use handlers::{
+    handle_health, handle_pair, handle_webhook, handle_whatsapp_message, handle_whatsapp_verify,
+};
 
 /// Maximum request body size (64KB) — prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;

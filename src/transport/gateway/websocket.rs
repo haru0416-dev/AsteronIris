@@ -94,6 +94,7 @@ async fn handle_client_message(
                     temperature: state.temperature,
                     ctx: &ctx,
                     stream_sink: None,
+                    conversation_history: &[],
                 })
                 .await
             {

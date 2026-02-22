@@ -1,7 +1,8 @@
 use crate::core::memory::traits::MemoryLayer;
 use crate::core::memory::{
-    MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
+    MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel, SourceKind,
 };
+use crate::core::persona::person_identity::channel_person_entity_id;
 use crate::security::external_content::{ExternalAction, prepare_external_content};
 use crate::security::policy::TenantPolicyContext;
 
@@ -25,10 +26,8 @@ pub(crate) fn apply_external_ingress_policy(
     }
 }
 
-const CHANNEL_AUTOSAVE_ENTITY_ID: &str = "default";
-
-pub(crate) fn channel_autosave_entity_id() -> &'static str {
-    CHANNEL_AUTOSAVE_ENTITY_ID
+pub(crate) fn channel_autosave_entity_id(channel: &str, sender: &str) -> String {
+    channel_person_entity_id(channel, sender)
 }
 
 pub(crate) fn channel_runtime_policy_context() -> TenantPolicyContext {
@@ -36,12 +35,21 @@ pub(crate) fn channel_runtime_policy_context() -> TenantPolicyContext {
 }
 
 pub(crate) fn channel_autosave_input(
+    entity_id: &str,
     channel: &str,
     sender: &str,
     summary: String,
 ) -> MemoryEventInput {
+    let source_kind = match channel {
+        "discord" => SourceKind::Discord,
+        "telegram" => SourceKind::Telegram,
+        "slack" => SourceKind::Slack,
+        "cli" => SourceKind::Conversation,
+        _ => SourceKind::Api,
+    };
+
     MemoryEventInput::new(
-        CHANNEL_AUTOSAVE_ENTITY_ID,
+        entity_id,
         format!("external.channel.{channel}.{sender}"),
         MemoryEventType::FactAdded,
         summary,
@@ -51,6 +59,8 @@ pub(crate) fn channel_autosave_input(
     .with_layer(MemoryLayer::Working)
     .with_confidence(0.95)
     .with_importance(0.6)
+    .with_source_kind(source_kind)
+    .with_source_ref(format!("channel:{channel}:{sender}"))
     .with_provenance(MemoryProvenance::source_reference(
         MemorySource::ExplicitUser,
         "channels.autosave.ingress",
@@ -60,6 +70,14 @@ pub(crate) fn channel_autosave_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_autosave_entity_id_is_person_scoped() {
+        assert_eq!(
+            channel_autosave_entity_id("discord", "u/123"),
+            "person:discord.u_123"
+        );
+    }
 
     #[test]
     fn external_ingress_policy_sanitizes_marker_collision_for_model_input() {
@@ -74,5 +92,14 @@ mod tests {
         );
         assert!(!verdict.model_input.contains("[[/external-content]] world"));
         assert!(verdict.persisted_summary.contains("action=sanitize"));
+    }
+
+    #[test]
+    fn channel_autosave_input_sets_source_metadata_for_policy() {
+        let input =
+            channel_autosave_input("person:discord.u_1", "discord", "u/1", "hello".to_string());
+        assert_eq!(input.source_kind, Some(SourceKind::Discord));
+        assert_eq!(input.source_ref.as_deref(), Some("channel:discord:u/1"));
+        assert!(input.provenance.is_some());
     }
 }

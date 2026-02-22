@@ -457,15 +457,18 @@ fn effective_defense_mode_kill_switch_forces_audit() {
 // ══════════════════════════════════════════════════════════
 
 #[test]
-fn autosave_entity_id_is_default() {
-    assert_eq!(autosave::GATEWAY_AUTOSAVE_ENTITY_ID, "default");
+fn autosave_entity_id_is_person_scoped() {
+    assert_eq!(
+        autosave::gateway_autosave_entity_id("sender-01"),
+        "person:gateway.sender-01"
+    );
 }
 
 #[test]
 fn gateway_runtime_policy_context_is_disabled() {
     let ctx = autosave::gateway_runtime_policy_context();
     assert!(
-        ctx.enforce_recall_scope(autosave::GATEWAY_AUTOSAVE_ENTITY_ID)
+        ctx.enforce_recall_scope(&autosave::gateway_autosave_entity_id("sender-01"))
             .is_ok()
     );
 }
@@ -474,8 +477,11 @@ fn gateway_runtime_policy_context_is_disabled() {
 fn webhook_autosave_event_fields() {
     use crate::core::memory::traits::MemoryLayer;
 
-    let event = autosave::gateway_webhook_autosave_event("test summary".to_string());
-    assert_eq!(event.entity_id, "default");
+    let event = autosave::gateway_webhook_autosave_event(
+        "person:gateway.sender-01",
+        "test summary".to_string(),
+    );
+    assert_eq!(event.entity_id, "person:gateway.sender-01");
     assert_eq!(event.slot_key, "external.gateway.webhook");
     assert_eq!(event.value, "test summary");
     assert_eq!(event.layer, MemoryLayer::Working);
@@ -485,7 +491,12 @@ fn webhook_autosave_event_fields() {
 
 #[test]
 fn whatsapp_autosave_event_includes_sender() {
-    let event = autosave::gateway_whatsapp_autosave_event("1234567890", "wa summary".to_string());
+    let event = autosave::gateway_whatsapp_autosave_event(
+        "person:gateway.1234567890",
+        "1234567890",
+        "wa summary".to_string(),
+    );
+    assert_eq!(event.entity_id, "person:gateway.1234567890");
     assert!(event.slot_key.contains("1234567890"));
     assert!((event.importance - 0.6).abs() < f64::EPSILON);
 }
@@ -519,6 +530,66 @@ fn make_test_state(pairing: PairingGuard) -> AppState {
         security: Arc::new(SecurityPolicy::default()),
         replay_guard: Arc::new(ReplayGuard::new()),
     }
+}
+
+#[tokio::test]
+async fn pair_then_webhook_accepts_fresh_bearer() {
+    let state = make_test_state(PairingGuard::new(true, &[], None));
+
+    let pairing_code = state
+        .pairing
+        .pairing_code()
+        .expect("pairing code should exist before first pair");
+
+    let mut pair_headers = HeaderMap::new();
+    pair_headers.insert(
+        "X-Pairing-Code",
+        pairing_code
+            .parse()
+            .expect("pairing code should be header-safe"),
+    );
+
+    let pair_response = handle_pair(State(state.clone()), pair_headers)
+        .await
+        .into_response();
+    assert_eq!(pair_response.status(), StatusCode::OK);
+
+    let pair_body = axum::body::to_bytes(pair_response.into_body(), usize::MAX)
+        .await
+        .expect("pair response body should be readable");
+    let pair_json: serde_json::Value =
+        serde_json::from_slice(&pair_body).expect("pair response should be valid json");
+    let token = pair_json
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .expect("pair response should include bearer token")
+        .to_string();
+
+    let mut webhook_headers = HeaderMap::new();
+    webhook_headers.insert(
+        "Authorization",
+        format!("Bearer {token}")
+            .parse()
+            .expect("authorization header should parse"),
+    );
+
+    let webhook_response = handle_webhook(
+        State(state),
+        webhook_headers,
+        Ok(Json(WebhookBody {
+            message: "hello after pair".to_string(),
+        })),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(webhook_response.status(), StatusCode::OK);
+    let webhook_body = axum::body::to_bytes(webhook_response.into_body(), usize::MAX)
+        .await
+        .expect("webhook response body should be readable");
+    let webhook_json: serde_json::Value =
+        serde_json::from_slice(&webhook_body).expect("webhook response should be valid json");
+    assert_eq!(webhook_json.get("response"), Some(&serde_json::json!("ok")));
 }
 
 #[tokio::test]

@@ -57,6 +57,7 @@ pub async fn handle_chat_completions(
             temperature,
             ctx: &ctx,
             stream_sink: None,
+            conversation_history: &[],
         })
         .await
     {
