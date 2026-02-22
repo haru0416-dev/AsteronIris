@@ -27,7 +27,7 @@ cargo test --test memory -- comparison    # single test by name substring
 cargo test --test memory -- comparison --exact  # exact test name match
 BACKEND=sqlite cargo test --release --test memory -- throughput --nocapture
 
-# Other aliases (defined in .cargo/config.toml)
+# Cargo aliases (defined in .cargo/config.toml)
 cargo build-fast                          # trimmed feature set build
 cargo build-minimal                       # bundled-sqlite only
 cargo test-fast                           # trimmed feature set test
@@ -41,6 +41,8 @@ cargo deny check advisories licenses sources
 
 Pre-push hook (`.githooks/pre-push`) enforces fmt + clippy + test.
 Install: `git config core.hooksPath .githooks`
+
+CI coverage enforces a 40% line threshold and skips `inventory_scope_lock::inventory_scope_lock`.
 
 ## Architecture
 
@@ -60,29 +62,11 @@ Trait + factory dispatch everywhere. Each subsystem defines a trait and a factor
 | `config/` | `Config` | TOML schema + env-var overrides |
 | `plugins/skillforge/` | Skill pipeline | Discovery, evaluation, integration |
 
-### Module Structure
+### Conventions
 
-`mod.rs` is a thin facade with `pub mod` + `pub use` re-exports.
-Extract logic into focused sub-modules: `handlers.rs`, `autosave.rs`, `defense.rs`, `tests.rs`, etc.
-
-### Factory & Ownership Conventions
-
-Factory functions follow the `create_<subsystem>()` naming pattern and return `Box<dyn Trait>`:
-
-| Factory | Returns | Module |
-|---------|---------|--------|
-| `create_memory()` | `Box<dyn Memory>` | `core/memory/factory.rs` |
-| `create_provider()` | `Box<dyn Provider>` | `core/providers/factory.rs` |
-| `create_observer()` | `Box<dyn Observer>` | `runtime/observability/mod.rs` |
-| `create_runtime()` | `Box<dyn RuntimeAdapter>` | `runtime/environment/mod.rs` |
-| `create_tunnel()` | `Option<Box<dyn Tunnel>>` | `runtime/tunnel/factory.rs` |
-| `create_embedding_provider()` | `Box<dyn EmbeddingProvider>` | `core/memory/embeddings.rs` |
-
-**Ownership rules:**
-- `Box<dyn Trait>` — factory return type, single owner.
-- `Arc<dyn Trait>` — shared across async tasks (e.g., `Arc<dyn Memory>` passed to tool loop, consolidation).
-- Callers wrap `Box` → `Arc` at the boundary where sharing begins.
-- Tools are collected as `Vec<Box<dyn Tool>>` from `all_tools()` / `default_tools()`, then registered into `ToolRegistry`.
+- `mod.rs` is a thin facade: `pub mod` + `pub use` re-exports. Logic in focused sub-modules.
+- Factory pattern: `create_<subsystem>()` → `Box<dyn Trait>`. Callers wrap `Box` → `Arc` at sharing boundary.
+- Tools: `Vec<Box<dyn Tool>>` from `all_tools()` / `default_tools()` → registered into `ToolRegistry`.
 
 ## Code Style
 
@@ -101,114 +85,84 @@ Factory functions follow the `create_<subsystem>()` naming pattern and return `B
 
 ### Formatting
 
-No `rustfmt.toml` — default rustfmt settings apply. Run `cargo fmt` before committing.
-Indentation: 4 spaces for `.rs`/`.sh`/`Dockerfile`, 2 spaces for `.toml`/`.yml`/`.yaml`/`.json`.
-LF line endings, UTF-8, trailing newline required (see `.editorconfig`).
+No `rustfmt.toml` — default rustfmt. Run `cargo fmt` before committing.
+Indent: 4 spaces `.rs`/`.sh`/`Dockerfile`, 2 spaces `.toml`/`.yml`/`.yaml`/`.json`.
+LF line endings, UTF-8, trailing newline (see `.editorconfig`).
 
 ### Imports
 
-`cargo fmt` manages ordering. Typical grouping:
-1. `crate::` imports first
-2. External crates alphabetized (`anyhow`, `async_trait`, `serde`, etc.)
-3. `std::` at the end
-
-Use braced imports to merge from the same crate: `use serde::{Deserialize, Serialize};`
+`cargo fmt` manages ordering. Group: `crate::` → external crates (alphabetized) → `std::`.
+Merge from same crate: `use serde::{Deserialize, Serialize};`
 
 ### Types & Naming
 
-- Structs/enums: `PascalCase`. Enum variants: `PascalCase`.
-- Functions/methods: `snake_case`. Constants: `SCREAMING_SNAKE_CASE`.
-- `#[serde(rename_all = "snake_case")]` on all serialized enums.
+- Structs/enums: `PascalCase`. Functions: `snake_case`. Constants: `SCREAMING_SNAKE_CASE`.
+- `#[serde(rename_all = "snake_case")]` on serialized enums.
 - `#[serde(tag = "kind", rename_all = "snake_case")]` for tagged enums.
-- `#[derive(Debug, Clone, Serialize, Deserialize)]` is the standard derive set.
-- `#[derive(..., PartialEq, Eq)]` for enums used in comparisons.
-- `strum::Display` + `#[strum(serialize_all = "snake_case")]` when string representation needed.
+- Standard derives: `#[derive(Debug, Clone, Serialize, Deserialize)]`. Add `PartialEq, Eq` for comparisons.
+- `strum::Display` + `#[strum(serialize_all = "snake_case")]` for string representation.
 
 ### Error Handling
 
-- `anyhow::Result<T>` for all fallible public functions.
-- `anyhow::bail!("message")` for early-exit errors.
-- `thiserror::Error` for structured error enums at library boundaries.
-- **No** `unwrap()` or `expect()` in production code. Tests and setup are OK.
-- Empty catch blocks are forbidden.
+- `anyhow::Result<T>` for fallible public functions. `anyhow::bail!()` for early exits.
+- `thiserror::Error` for structured errors at library boundaries.
+- **No** `unwrap()` / `expect()` in production code (OK in tests). Empty catch blocks forbidden.
 
-### Async Patterns
+### Async & Constructors
 
-- `#[async_trait]` from the `async_trait` crate for async trait methods.
-- `Arc<dyn Trait>` for shared trait objects across async boundaries.
-- Tokio runtime with `rt-multi-thread`.
+- `#[async_trait]` for async trait methods. `Arc<dyn Trait>` across async boundaries. Tokio `rt-multi-thread`.
 - Rust 2024 edition: `if let` chains are used (e.g. `if let Some(x) = opt && cond`).
-
-### Constructor & Builder Patterns
-
-- `fn new(...)` for primary constructors. Accept `impl Into<String>` for string params.
-- Builder methods: `fn with_field(mut self, value: T) -> Self` returning `self`.
-- Named constructors for variants: `fn source_reference(...)`, `fn inferred_claim(...)`.
+- `fn new(...)` with `impl Into<String>` for string params.
+- Builder: `fn with_field(mut self, value: T) -> Self`. Named constructors for variants.
 
 ### Feature Gates
 
-- `#[cfg(feature = "...")]` for optional modules/code.
-- Default features: `discord`, `email`, `vector-search`, `tui`, `bundled-sqlite`, `media`, `link-extraction`.
-- Feature-gated modules: `lancedb` (vector-search), `ratatui`/`crossterm` (tui), `lettre`/`mail-parser` (email), `infer`/`mime` (media), `scraper` (link-extraction), `rmcp` (mcp).
+Default: `discord`, `email`, `vector-search`, `tui`, `bundled-sqlite`, `media`, `link-extraction`.
+Optional: `lancedb` (vector-search), `ratatui`/`crossterm` (tui), `lettre`/`mail-parser` (email),
+`infer`/`mime` (media), `scraper` (link-extraction), `rmcp` (mcp).
 
 ## Test Structure
 
-Six integration test binaries under `tests/`:
+Six integration binaries under `tests/`:
+`memory.rs`, `gateway.rs`, `agent.rs`, `persona.rs`, `runtime.rs`, `project.rs`.
 
-```
-tests/memory.rs    tests/gateway.rs    tests/agent.rs
-tests/persona.rs   tests/runtime.rs    tests/project.rs
-```
-
-**Critical**: Integration test routers use explicit `#[path = "subdir/file.rs"]` attributes.
-Implicit directory-based module resolution does NOT work for integration test crate roots.
+**Critical**: Integration tests use explicit `#[path]` — implicit directory resolution does NOT work:
 
 ```rust
 // tests/memory.rs — correct pattern
 #[path = "support/memory_harness.rs"]
 mod memory_harness;
-
 #[path = "memory/comparison.rs"]
 mod comparison;
 ```
 
-Harness files are referenced via `use super::memory_harness;` inside child modules.
-Shared helpers (e.g., `temp_sqlite()`) live in the root test file (`tests/memory.rs`).
+Child modules: `use super::memory_harness;`. Shared helpers live in root test file.
 
-### Writing Tests
-
-- Unit tests: `#[cfg(test)] mod tests` at bottom of source file.
-- Use `tempfile::TempDir` for filesystem isolation.
-- `unwrap()` / `expect()` are acceptable in tests.
-- `tokio::test` for async test functions.
-
-**Known pre-existing failure**: `inventory_scope_lock::inventory_scope_lock`
-(skillforge data drift — not a regression, do not attempt to fix).
-CI coverage explicitly skips this test.
+- Unit tests: `#[cfg(test)] mod tests` at file bottom. `tokio::test` for async.
+- `tempfile::TempDir` for filesystem isolation. `unwrap()` / `expect()` OK in tests.
+- **Known skip**: `inventory_scope_lock::inventory_scope_lock` (skillforge data drift — not a regression).
+- `BACKEND=<sqlite|lancedb|markdown>` env var selects memory backend in integration tests.
 
 ## Security (Non-Negotiable)
 
-These layers must never be bypassed or weakened:
-
 1. **Deny-by-default** shell/file allowlist (`security/policy/`)
-2. **Public gateway bind** refused unless tunnel or explicit opt-in (`security/pairing.rs`)
-3. **ChaCha20Poly1305** encrypted secret vault (`security/secrets.rs`)
+2. **Public bind refused** unless tunnel or explicit opt-in (`security/pairing.rs`)
+3. **ChaCha20Poly1305** encrypted vault (`security/secrets.rs`)
 4. **Writeback guard** prevents persona self-corruption (`security/writeback_guard/`)
-5. **Secret scrubbing** — `scrub_secret_patterns()` strips tokens/keys from LLM I/O
+5. **Secret scrubbing** strips tokens/keys from LLM I/O
 
 ## Dependencies
 
-Release profile: `opt-level = "z"`, LTO, `codegen-units = 1`, `panic = "abort"`, strip symbols.
-Before adding a dependency: justify it, minimise features, disable default features.
+Release: `opt-level = "z"`, LTO, `codegen-units = 1`, `panic = "abort"`, strip symbols.
+Justify new deps, minimise features, disable defaults.
 Allowed licenses: MIT, Apache-2.0, BSD-2/3-Clause, ISC, MPL-2.0, Zlib, BSL-1.0, 0BSD, CC0-1.0 (see `deny.toml`).
 
 ## Commits
 
-Conventional Commits format: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`.
-Keep changes small and coherent. One logical change per commit.
+Conventional Commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`.
+Small, coherent, one logical change per commit.
 
 ## Adding a Channel
 
-New channel modules go in `src/transport/channels/<channel>.rs`.
-Implement the `Channel` trait, add to the factory, and re-export from `channels/mod.rs`.
-Keep `mod.rs` as a thin facade with re-exports only.
+Implement `Channel` trait in `src/transport/channels/<name>.rs`, add to factory,
+re-export from `channels/mod.rs`. Keep `mod.rs` as thin facade with re-exports only.
