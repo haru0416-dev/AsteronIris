@@ -13,6 +13,20 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+const CRITICAL_BOOTSTRAP_FORBIDDEN_WRITE_TARGETS: [&str; 4] =
+    ["SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md"];
+
+fn is_critical_bootstrap_write_target(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|filename| {
+            CRITICAL_BOOTSTRAP_FORBIDDEN_WRITE_TARGETS
+                .iter()
+                .any(|blocked| filename.eq_ignore_ascii_case(blocked))
+        })
+}
+
 #[derive(Clone)]
 pub struct ExecutionContext {
     pub security: Arc<SecurityPolicy>,
@@ -77,6 +91,7 @@ pub struct SecurityMiddleware;
 
 #[async_trait]
 impl ToolMiddleware for SecurityMiddleware {
+    #[allow(clippy::too_many_lines)]
     async fn before_execute(
         &self,
         tool_name: &str,
@@ -134,6 +149,11 @@ impl ToolMiddleware for SecurityMiddleware {
                 if !ctx.security.is_path_allowed(path) {
                     return Ok(MiddlewareDecision::Block(format!(
                         "blocked by security policy: path not allowed: {path}"
+                    )));
+                }
+                if is_critical_bootstrap_write_target(path) {
+                    return Ok(MiddlewareDecision::Block(format!(
+                        "blocked by security policy: write target is protected bootstrap file: {path}"
                     )));
                 }
 
@@ -484,6 +504,20 @@ mod tests {
                 &serde_json::json!({"path": "../../../etc/passwd"}),
                 &ctx,
             )
+            .await
+            .unwrap();
+
+        assert!(matches!(decision, MiddlewareDecision::Block(_)));
+    }
+
+    #[tokio::test]
+    async fn security_middleware_blocks_critical_bootstrap_file_write_target() {
+        let security = Arc::new(SecurityPolicy::default());
+        let ctx = ExecutionContext::test_default(security);
+        let middleware = SecurityMiddleware;
+
+        let decision = middleware
+            .before_execute("file_write", &serde_json::json!({"path": "SOUL.md"}), &ctx)
             .await
             .unwrap();
 
