@@ -70,6 +70,18 @@ mod tests {
         obs.record_metric(&ObserverMetric::MemoryLifecycle(
             MemoryLifecycleSignal::RevocationApplied,
         ));
+        obs.record_metric(&ObserverMetric::SignalTierSnapshot {
+            tier: "raw".to_string(),
+            count: 3,
+        });
+        obs.record_metric(&ObserverMetric::PromotionStatusSnapshot {
+            status: "promoted".to_string(),
+            count: 2,
+        });
+        obs.record_metric(&ObserverMetric::BeliefPromotionTotal { count: 2 });
+        obs.record_metric(&ObserverMetric::ContradictionMarkTotal { count: 1 });
+        obs.record_metric(&ObserverMetric::StaleTrendPurgeTotal { count: 4 });
+        obs.record_metric(&ObserverMetric::MemorySloViolation);
     }
 
     #[test]

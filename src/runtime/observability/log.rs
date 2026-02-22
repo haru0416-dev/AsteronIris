@@ -60,6 +60,30 @@ impl Observer for LogObserver {
             ObserverMetric::QueueDepth(d) => {
                 info!(depth = d, "metric.queue_depth");
             }
+            ObserverMetric::SignalIngestTotal { source_kind } => {
+                info!(source_kind = %source_kind, "metric.signal_ingest_total");
+            }
+            ObserverMetric::SignalDedupDropTotal { source_kind } => {
+                info!(source_kind = %source_kind, "metric.signal_dedup_drop_total");
+            }
+            ObserverMetric::BeliefPromotionTotal { count } => {
+                info!(count = count, "metric.belief_promotion_total");
+            }
+            ObserverMetric::ContradictionMarkTotal { count } => {
+                info!(count = count, "metric.contradiction_mark_total");
+            }
+            ObserverMetric::StaleTrendPurgeTotal { count } => {
+                info!(count = count, "metric.stale_trend_purge_total");
+            }
+            ObserverMetric::SignalTierSnapshot { tier, count } => {
+                info!(tier = %tier, count = count, "metric.signal_tier_snapshot");
+            }
+            ObserverMetric::PromotionStatusSnapshot { status, count } => {
+                info!(status = %status, count = count, "metric.promotion_status_snapshot");
+            }
+            ObserverMetric::MemorySloViolation => {
+                info!("metric.memory_slo_violation");
+            }
             ObserverMetric::AutonomyLifecycle(signal) => {
                 info!(signal = %autonomy_signal_name(*signal), "metric.autonomy_lifecycle");
             }
@@ -80,6 +104,7 @@ fn autonomy_signal_name(signal: AutonomyLifecycleSignal) -> &'static str {
         AutonomyLifecycleSignal::Deduplicated => "deduplicated",
         AutonomyLifecycleSignal::Promoted => "promoted",
         AutonomyLifecycleSignal::ContradictionDetected => "contradiction_detected",
+        AutonomyLifecycleSignal::ModeTransition => "mode_transition",
         AutonomyLifecycleSignal::IntentCreated => "intent_created",
         AutonomyLifecycleSignal::IntentPolicyAllowed => "intent_policy_allowed",
         AutonomyLifecycleSignal::IntentPolicyDenied => "intent_policy_denied",
@@ -156,5 +181,17 @@ mod tests {
         obs.record_metric(&ObserverMetric::MemoryLifecycle(
             MemoryLifecycleSignal::ConsolidationCompleted,
         ));
+        obs.record_metric(&ObserverMetric::SignalTierSnapshot {
+            tier: "raw".to_string(),
+            count: 3,
+        });
+        obs.record_metric(&ObserverMetric::PromotionStatusSnapshot {
+            status: "promoted".to_string(),
+            count: 2,
+        });
+        obs.record_metric(&ObserverMetric::BeliefPromotionTotal { count: 2 });
+        obs.record_metric(&ObserverMetric::ContradictionMarkTotal { count: 1 });
+        obs.record_metric(&ObserverMetric::StaleTrendPurgeTotal { count: 4 });
+        obs.record_metric(&ObserverMetric::MemorySloViolation);
     }
 }

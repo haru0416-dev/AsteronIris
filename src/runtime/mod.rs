@@ -1,5 +1,6 @@
 pub mod diagnostics;
 pub mod environment;
+pub mod evolution;
 pub mod observability;
 pub mod tunnel;
 pub mod usage;

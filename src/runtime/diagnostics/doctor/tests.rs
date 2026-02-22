@@ -1,5 +1,11 @@
-use super::{autonomy_governance_lines, memory_rollout_lines};
+use super::{autonomy_governance_lines, memory_rollout_lines, memory_signal_stats_lines};
 use crate::config::Config;
+use crate::core::memory::traits::MemoryLayer;
+use crate::core::memory::{
+    Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
+};
+use rusqlite::Connection;
+use tempfile::TempDir;
 
 #[test]
 fn doctor_reports_autonomy_gates() {
@@ -53,6 +59,11 @@ fn doctor_reports_memory_rollout() {
             "conflict": "healthy",
             "revocation": "healthy",
             "governance": "healthy"
+        },
+        "components": {
+            "memory_slo": {
+                "status": "ok"
+            }
         }
     });
 
@@ -70,6 +81,11 @@ fn doctor_reports_memory_rollout() {
     assert!(lines.iter().any(|line| {
         line.contains("daemon lifecycle health") && line.contains("consolidation=healthy")
     }));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("memory_slo component: ok"))
+    );
 }
 
 #[test]
@@ -85,4 +101,156 @@ fn doctor_reports_memory_rollout_missing_config() {
             .any(|line| line.contains("missing config") && line.contains("non-fatal"))
     );
     assert!(lines.iter().any(|line| line.contains("action:")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("memory_slo component: missing"))
+    );
+}
+
+#[tokio::test]
+async fn doctor_reports_memory_signal_stats() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = Config::default();
+    config.workspace_dir = tmp.path().to_path_buf();
+
+    let memory = SqliteMemory::new(tmp.path()).unwrap();
+    memory
+        .append_event(
+            MemoryEventInput::new(
+                "default",
+                "doctor.signal.1",
+                MemoryEventType::FactAdded,
+                "doctor signal payload",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_layer(MemoryLayer::Working),
+        )
+        .await
+        .unwrap();
+
+    let lines = memory_signal_stats_lines(&config);
+    assert!(lines.iter().any(|line| line.contains("total_units=")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("promotion_breakdown") && line.contains("candidate="))
+    );
+    assert!(lines.iter().any(|line| line.contains("ttl_expired_units=")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("source_kind_breakdown="))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("contradiction_ratio="))
+    );
+}
+
+#[tokio::test]
+async fn doctor_reports_memory_signal_ttl_and_promotion_breakdown() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = Config::default();
+    config.workspace_dir = tmp.path().to_path_buf();
+
+    let memory = SqliteMemory::new(tmp.path()).unwrap();
+    memory
+        .append_event(
+            MemoryEventInput::new(
+                "default",
+                "doctor.signal.expired",
+                MemoryEventType::FactAdded,
+                "expired signal payload",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_layer(MemoryLayer::Working),
+        )
+        .await
+        .unwrap();
+
+    let db_path = config.workspace_dir.join("memory").join("brain.db");
+    let conn = Connection::open(db_path).unwrap();
+    conn.execute(
+        "UPDATE retrieval_units SET promotion_status = 'promoted', source_kind = 'discord', retention_expires_at = datetime('now', '-1 day') WHERE slot_key = 'doctor.signal.expired'",
+        [],
+    )
+    .unwrap();
+
+    let lines = memory_signal_stats_lines(&config);
+    assert!(lines.iter().any(|line| {
+        line.contains("promotion_breakdown")
+            && line.contains("promoted=1")
+            && line.contains("demoted=0")
+    }));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("ttl_expired_units=1"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("source_kind_breakdown") && line.contains("discord=1"))
+    );
+}
+
+#[tokio::test]
+async fn doctor_source_kind_breakdown_is_sorted_stably() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = Config::default();
+    config.workspace_dir = tmp.path().to_path_buf();
+
+    let memory = SqliteMemory::new(tmp.path()).unwrap();
+    memory
+        .append_event(
+            MemoryEventInput::new(
+                "default",
+                "doctor.signal.api",
+                MemoryEventType::FactAdded,
+                "api signal",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_layer(MemoryLayer::Working),
+        )
+        .await
+        .unwrap();
+    memory
+        .append_event(
+            MemoryEventInput::new(
+                "default",
+                "doctor.signal.manual",
+                MemoryEventType::FactAdded,
+                "manual signal",
+                MemorySource::ExplicitUser,
+                PrivacyLevel::Private,
+            )
+            .with_layer(MemoryLayer::Working),
+        )
+        .await
+        .unwrap();
+
+    let db_path = config.workspace_dir.join("memory").join("brain.db");
+    let conn = Connection::open(db_path).unwrap();
+    conn.execute(
+        "UPDATE retrieval_units SET source_kind = 'manual' WHERE slot_key = 'doctor.signal.manual'",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE retrieval_units SET source_kind = 'api' WHERE slot_key = 'doctor.signal.api'",
+        [],
+    )
+    .unwrap();
+
+    let lines = memory_signal_stats_lines(&config);
+    let breakdown = lines
+        .iter()
+        .find(|line| line.contains("source_kind_breakdown="))
+        .expect("source_kind_breakdown line should exist");
+    assert!(breakdown.contains("api=1,manual=1"));
 }

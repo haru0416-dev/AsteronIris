@@ -34,6 +34,14 @@ impl OtelObserver {
             ObserverMetric::TokensUsed(_) => "tokens_used",
             ObserverMetric::ActiveSessions(_) => "active_sessions",
             ObserverMetric::QueueDepth(_) => "queue_depth",
+            ObserverMetric::SignalIngestTotal { .. } => "signal_ingest_total",
+            ObserverMetric::SignalDedupDropTotal { .. } => "signal_dedup_drop_total",
+            ObserverMetric::BeliefPromotionTotal { .. } => "belief_promotion_total",
+            ObserverMetric::ContradictionMarkTotal { .. } => "contradiction_mark_total",
+            ObserverMetric::StaleTrendPurgeTotal { .. } => "stale_trend_purge_total",
+            ObserverMetric::SignalTierSnapshot { .. } => "signal_tier_snapshot",
+            ObserverMetric::PromotionStatusSnapshot { .. } => "promotion_status_snapshot",
+            ObserverMetric::MemorySloViolation => "memory_slo_violation",
             ObserverMetric::AutonomyLifecycle(signal) => autonomy_signal_name(*signal),
             ObserverMetric::MemoryLifecycle(signal) => memory_signal_name(*signal),
         }
@@ -54,6 +62,7 @@ fn autonomy_signal_name(signal: AutonomyLifecycleSignal) -> &'static str {
         AutonomyLifecycleSignal::Deduplicated => "autonomy_deduplicated",
         AutonomyLifecycleSignal::Promoted => "autonomy_promoted",
         AutonomyLifecycleSignal::ContradictionDetected => "autonomy_contradiction_detected",
+        AutonomyLifecycleSignal::ModeTransition => "autonomy_mode_transition",
         AutonomyLifecycleSignal::IntentCreated => "autonomy_intent_created",
         AutonomyLifecycleSignal::IntentPolicyAllowed => "autonomy_intent_policy_allowed",
         AutonomyLifecycleSignal::IntentPolicyDenied => "autonomy_intent_policy_denied",
@@ -126,8 +135,20 @@ mod tests {
         obs.record_metric(&ObserverMetric::MemoryLifecycle(
             MemoryLifecycleSignal::GovernanceDelete,
         ));
+        obs.record_metric(&ObserverMetric::SignalTierSnapshot {
+            tier: "raw".to_string(),
+            count: 3,
+        });
+        obs.record_metric(&ObserverMetric::PromotionStatusSnapshot {
+            status: "promoted".to_string(),
+            count: 2,
+        });
+        obs.record_metric(&ObserverMetric::BeliefPromotionTotal { count: 2 });
+        obs.record_metric(&ObserverMetric::ContradictionMarkTotal { count: 1 });
+        obs.record_metric(&ObserverMetric::StaleTrendPurgeTotal { count: 4 });
+        obs.record_metric(&ObserverMetric::MemorySloViolation);
         obs.flush();
 
-        assert_eq!(obs.snapshot_counts(), (2, 4));
+        assert_eq!(obs.snapshot_counts(), (2, 10));
     }
 }

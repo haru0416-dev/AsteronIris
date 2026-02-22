@@ -8,7 +8,9 @@ use crate::config::Config;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
-use report::{autonomy_governance_lines, memory_rollout_lines, parse_rfc3339};
+use report::{
+    autonomy_governance_lines, memory_rollout_lines, memory_signal_stats_lines, parse_rfc3339,
+};
 use setup::run_setup_checks;
 
 const DAEMON_STALE_SECONDS: i64 = 30;
@@ -202,6 +204,11 @@ fn print_governance_and_rollout(config: &Config) {
     };
     let snapshot = snapshot.unwrap_or_else(|| serde_json::json!({}));
     for line in memory_rollout_lines(config, &snapshot) {
+        println!("    {line}");
+    }
+
+    println!("  memory signal stats");
+    for line in memory_signal_stats_lines(config) {
         println!("    {line}");
     }
 }

@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::core::memory::CapabilitySupport;
 use crate::security::ExternalActionExecution;
 use chrono::{DateTime, Utc};
+use rusqlite::{Connection, params};
 
 pub(crate) fn autonomy_governance_lines(config: &Config) -> Vec<String> {
     let mut lines = Vec::with_capacity(6);
@@ -63,7 +64,7 @@ fn backend_supports_autonomy_lifecycle_metrics(backend: &str) -> bool {
 }
 
 pub(crate) fn memory_rollout_lines(config: &Config, snapshot: &serde_json::Value) -> Vec<String> {
-    let mut lines = Vec::with_capacity(5);
+    let mut lines = Vec::with_capacity(6);
     let backend = config.memory.backend.as_str();
     let capability = crate::core::memory::capability_matrix_for_backend(backend);
 
@@ -125,6 +126,19 @@ pub(crate) fn memory_rollout_lines(config: &Config, snapshot: &serde_json::Value
         );
     }
 
+    if let Some(memory_slo_status) = snapshot
+        .get("components")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|components| components.get("memory_slo"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|status| status.get("status"))
+        .and_then(serde_json::Value::as_str)
+    {
+        lines.push(format!("memory_slo component: {memory_slo_status}"));
+    } else {
+        lines.push("memory_slo component: missing".to_string());
+    }
+
     lines
 }
 
@@ -140,4 +154,104 @@ pub(crate) fn parse_rfc3339(raw: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+pub(crate) fn memory_signal_stats_lines(config: &Config) -> Vec<String> {
+    let db_path = config.workspace_dir.join("memory").join("brain.db");
+    if !db_path.exists() {
+        return vec!["signal stats: memory db not found".to_string()];
+    }
+
+    let conn = match Connection::open(db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            return vec![format!("signal stats: failed to open memory db ({error})")];
+        }
+    };
+
+    let total_units: i64 = conn
+        .query_row("SELECT COUNT(*) FROM retrieval_units", [], |row| row.get(0))
+        .unwrap_or(0);
+    let raw_units: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM retrieval_units WHERE signal_tier = 'raw'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let demoted_units: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'demoted'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let candidate_units: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'candidate'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let promoted_units: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'promoted'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let ttl_expired_units: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM retrieval_units WHERE retention_expires_at IS NOT NULL AND julianday(retention_expires_at) <= julianday('now')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let contradicted_units: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM retrieval_units WHERE contradiction_penalty > ?1",
+            params![0.0_f64],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let source_kind_breakdown = conn
+        .prepare("SELECT source_kind, COUNT(*) FROM retrieval_units GROUP BY source_kind")
+        .ok()
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .ok()
+            .map(|rows| {
+                let mut parts = rows
+                    .flatten()
+                    .map(|(kind, count)| format!("{kind}={count}"))
+                    .collect::<Vec<_>>();
+                parts.sort();
+                parts.join(",")
+            })
+        })
+        .unwrap_or_default();
+
+    let ratio = if total_units <= 0 {
+        0.0
+    } else {
+        let total_u32 = u32::try_from(total_units).unwrap_or(u32::MAX).max(1);
+        let contradicted_u32 = u32::try_from(contradicted_units).unwrap_or(u32::MAX);
+        f64::from(contradicted_u32) / f64::from(total_u32)
+    };
+
+    vec![
+        format!(
+            "signal stats: total_units={total_units}, raw_units={raw_units}, demoted_units={demoted_units}"
+        ),
+        format!(
+            "signal stats: promotion_breakdown candidate={candidate_units}, promoted={promoted_units}, demoted={demoted_units}"
+        ),
+        format!("signal stats: ttl_expired_units={ttl_expired_units}"),
+        format!("signal stats: source_kind_breakdown={source_kind_breakdown}"),
+        format!(
+            "signal stats: contradicted_units={contradicted_units}, contradiction_ratio={ratio:.3}"
+        ),
+    ]
 }
