@@ -34,55 +34,7 @@ pub fn extract_host(url_str: &str) -> anyhow::Result<String> {
 }
 
 pub fn is_private_host(host: &str) -> bool {
-    // Strip brackets from IPv6 addresses like [::1]
-    let bare = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-
-    if bare == "localhost" {
-        return true;
-    }
-
-    // Parse as IP address to catch all representations (decimal, hex, octal, mapped)
-    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
-        return match ip {
-            std::net::IpAddr::V4(v4) => {
-                v4.is_loopback()
-                    || v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_unspecified()
-                    || v4.is_broadcast()
-            }
-            std::net::IpAddr::V6(v6) => {
-                let segs = v6.segments();
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    // Unique-local (fc00::/7) — IPv6 equivalent of RFC 1918
-                    || (segs[0] & 0xfe00) == 0xfc00
-                    // Link-local (fe80::/10)
-                    || (segs[0] & 0xffc0) == 0xfe80
-                    // IPv4-mapped addresses (::ffff:127.0.0.1)
-                    || v6.to_ipv4_mapped().is_some_and(|v4| {
-                        v4.is_loopback()
-                            || v4.is_private()
-                            || v4.is_link_local()
-                            || v4.is_unspecified()
-                            || v4.is_broadcast()
-                    })
-            }
-        };
-    }
-
-    // Fallback string patterns for hostnames that look like IPs but don't parse
-    // (e.g., partial addresses used in DNS names).
-    let string_patterns = [
-        "127.", "10.", "192.168.", "0.0.0.0", "172.16.", "172.17.", "172.18.", "172.19.",
-        "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.",
-        "172.28.", "172.29.", "172.30.", "172.31.",
-    ];
-
-    string_patterns.iter().any(|p| bare.starts_with(p))
+    crate::security::url_validation::is_private_host(host)
 }
 
 pub fn host_matches_allowlist(host: &str, allowed: &[String]) -> bool {

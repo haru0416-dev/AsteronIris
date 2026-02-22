@@ -102,6 +102,15 @@ impl McpConfig {
                             server.name
                         ));
                     }
+                    if let Ok(parsed) = url::Url::parse(url)
+                        && let Some(host) = parsed.host_str()
+                        && crate::security::url_validation::is_private_host(host)
+                    {
+                        errors.push(format!(
+                            "MCP server '{}': http URL points to private/internal address",
+                            server.name
+                        ));
+                    }
                 }
             }
             if server.max_call_seconds == 0 {
