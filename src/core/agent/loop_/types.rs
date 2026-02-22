@@ -1,7 +1,9 @@
+use crate::config::Config;
+use crate::core::memory::Memory;
 use crate::core::providers::Provider;
 use crate::core::tools::ToolRegistry;
-use crate::security::PermissionStore;
 use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
+use crate::security::{PermissionStore, SecurityPolicy};
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -70,6 +72,20 @@ pub(super) struct MainSessionTurnParams<'a> {
     pub(super) max_tool_iterations: u32,
     pub(super) rate_limiter: Arc<EntityRateLimiter>,
     pub(super) permission_store: Arc<PermissionStore>,
+}
+
+pub struct IntegrationTurnParams<'a> {
+    pub config: &'a Config,
+    pub security: &'a SecurityPolicy,
+    pub mem: Arc<dyn Memory>,
+    pub answer_provider: &'a dyn Provider,
+    pub reflect_provider: &'a dyn Provider,
+    pub system_prompt: &'a str,
+    pub model_name: &'a str,
+    pub temperature: f64,
+    pub entity_id: &'a str,
+    pub policy_context: TenantPolicyContext,
+    pub user_message: &'a str,
 }
 
 #[derive(Debug, Clone)]

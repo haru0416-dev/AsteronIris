@@ -2,7 +2,8 @@ use super::context::build_context_with_policy;
 use super::inference::run_post_turn_inference_pass;
 use super::reflect::run_persona_reflect_writeback;
 use super::types::{
-    MainSessionTurnParams, RuntimeMemoryWriteContext, TurnCallAccounting, TurnExecutionOutcome,
+    IntegrationTurnParams, MainSessionTurnParams, RuntimeMemoryWriteContext, TurnCallAccounting,
+    TurnExecutionOutcome,
 };
 use super::verify_repair::{
     VerifyRepairCaps, analyze_verify_failure, decide_verify_repair_escalation,
@@ -10,12 +11,12 @@ use super::verify_repair::{
 };
 
 use crate::config::Config;
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop};
+use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
 use crate::core::memory::traits::MemoryLayer;
 use crate::core::memory::{
     self, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
 };
-use crate::core::providers::{CliStreamSink, Provider, StreamSink};
+use crate::core::providers::{CliStreamSink, StreamSink};
 use crate::core::tools;
 use crate::core::tools::middleware::ExecutionContext;
 use crate::runtime::observability::traits::AutonomyLifecycleSignal;
@@ -202,19 +203,21 @@ async fn build_enriched_message(
     enrich_user_message(&context, user_message)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run_main_session_turn_for_integration(
-    config: &Config,
-    security: &SecurityPolicy,
-    mem: Arc<dyn Memory>,
-    answer_provider: &dyn Provider,
-    reflect_provider: &dyn Provider,
-    system_prompt: &str,
-    model_name: &str,
-    temperature: f64,
-    user_message: &str,
+    params: IntegrationTurnParams<'_>,
 ) -> Result<String> {
-    run_main_session_turn_for_integration_with_policy(
+    run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+        entity_id: "default",
+        policy_context: TenantPolicyContext::disabled(),
+        ..params
+    })
+    .await
+}
+
+pub async fn run_main_session_turn_for_integration_with_policy(
+    params: IntegrationTurnParams<'_>,
+) -> Result<String> {
+    let IntegrationTurnParams {
         config,
         security,
         mem,
@@ -223,27 +226,10 @@ pub async fn run_main_session_turn_for_integration(
         system_prompt,
         model_name,
         temperature,
-        "default",
-        TenantPolicyContext::disabled(),
+        entity_id,
+        policy_context,
         user_message,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn run_main_session_turn_for_integration_with_policy(
-    config: &Config,
-    security: &SecurityPolicy,
-    mem: Arc<dyn Memory>,
-    answer_provider: &dyn Provider,
-    reflect_provider: &dyn Provider,
-    system_prompt: &str,
-    model_name: &str,
-    temperature: f64,
-    entity_id: &str,
-    policy_context: TenantPolicyContext,
-    user_message: &str,
-) -> Result<String> {
+    } = params;
     let observer: Arc<dyn Observer> = Arc::new(NoopObserver);
     let security_arc = Arc::new(security.clone());
     let composio_key = if config.composio.enabled {
@@ -338,16 +324,16 @@ pub(super) async fn execute_main_session_turn_with_accounting(
     let ctx =
         build_main_session_execution_context(config, security, params, effective_autonomy_level);
     let tool_result = tool_loop
-        .run(
-            params.answer_provider,
-            params.system_prompt,
-            &enriched,
-            &[],
-            params.model_name,
-            clamped_temperature,
-            &ctx,
-            Some(Arc::new(CliStreamSink::new()) as Arc<dyn StreamSink>),
-        )
+        .run(ToolLoopRunParams {
+            provider: params.answer_provider,
+            system_prompt: params.system_prompt,
+            user_message: &enriched,
+            image_content: &[],
+            model: params.model_name,
+            temperature: clamped_temperature,
+            ctx: &ctx,
+            stream_sink: Some(Arc::new(CliStreamSink::new()) as Arc<dyn StreamSink>),
+        })
         .await
         .context("run agent tool loop")?;
     tracing::debug!(

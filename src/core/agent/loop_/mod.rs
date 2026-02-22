@@ -12,6 +12,7 @@ pub use context::build_context_for_integration;
 pub use session::{
     run_main_session_turn_for_integration, run_main_session_turn_for_integration_with_policy,
 };
+pub use types::IntegrationTurnParams;
 pub(super) use types::RuntimeMemoryWriteContext;
 
 // ── Internal re-exports (used by run() and/or tests) ─────────────
