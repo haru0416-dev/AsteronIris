@@ -1,6 +1,6 @@
 use super::SqliteMemory;
 use crate::core::memory::traits::MemoryLayer;
-use crate::core::memory::{MemoryCategory, MemorySource, PrivacyLevel};
+use crate::core::memory::{MemoryCategory, MemorySource, PrivacyLevel, SignalTier, SourceKind};
 
 impl SqliteMemory {
     // Used by projection layer methods (upsert/list_projection_entry) — currently dormant
@@ -29,6 +29,53 @@ impl SqliteMemory {
             MemorySource::ToolVerified => "tool_verified",
             MemorySource::System => "system",
             MemorySource::Inferred => "inferred",
+            MemorySource::ExternalPrimary => "external_primary",
+            MemorySource::ExternalSecondary => "external_secondary",
+        }
+    }
+
+    pub(super) fn signal_tier_to_str(tier: SignalTier) -> &'static str {
+        match tier {
+            SignalTier::Raw => "raw",
+            SignalTier::Belief => "belief",
+            SignalTier::Inferred => "inferred",
+            SignalTier::Governance => "governance",
+        }
+    }
+
+    pub(super) fn str_to_signal_tier(s: &str) -> SignalTier {
+        match s {
+            "belief" => SignalTier::Belief,
+            "inferred" => SignalTier::Inferred,
+            "governance" => SignalTier::Governance,
+            _ => SignalTier::Raw,
+        }
+    }
+
+    pub(super) fn source_kind_to_str(kind: SourceKind) -> &'static str {
+        match kind {
+            SourceKind::Conversation => "conversation",
+            SourceKind::Discord => "discord",
+            SourceKind::Telegram => "telegram",
+            SourceKind::Slack => "slack",
+            SourceKind::Api => "api",
+            SourceKind::News => "news",
+            SourceKind::Document => "document",
+            SourceKind::Manual => "manual",
+        }
+    }
+
+    pub(super) fn str_to_source_kind(s: &str) -> Option<SourceKind> {
+        match s {
+            "conversation" => Some(SourceKind::Conversation),
+            "discord" => Some(SourceKind::Discord),
+            "telegram" => Some(SourceKind::Telegram),
+            "slack" => Some(SourceKind::Slack),
+            "api" => Some(SourceKind::Api),
+            "news" => Some(SourceKind::News),
+            "document" => Some(SourceKind::Document),
+            "manual" => Some(SourceKind::Manual),
+            _ => None,
         }
     }
 
@@ -72,6 +119,8 @@ impl SqliteMemory {
             "explicit_user" => MemorySource::ExplicitUser,
             "tool_verified" => MemorySource::ToolVerified,
             "inferred" => MemorySource::Inferred,
+            "external_primary" => MemorySource::ExternalPrimary,
+            "external_secondary" => MemorySource::ExternalSecondary,
             _ => MemorySource::System,
         }
     }
@@ -130,6 +179,8 @@ mod tests {
             MemorySource::ToolVerified,
             MemorySource::System,
             MemorySource::Inferred,
+            MemorySource::ExternalPrimary,
+            MemorySource::ExternalSecondary,
         ];
 
         for source in sources {
@@ -229,6 +280,49 @@ mod tests {
             SqliteMemory::str_to_source("unknown-source"),
             MemorySource::System
         );
+    }
+
+    #[test]
+    fn signal_tier_round_trip_and_default() {
+        let tiers = [
+            SignalTier::Raw,
+            SignalTier::Belief,
+            SignalTier::Inferred,
+            SignalTier::Governance,
+        ];
+
+        for tier in tiers {
+            let encoded = SqliteMemory::signal_tier_to_str(tier);
+            let decoded = SqliteMemory::str_to_signal_tier(encoded);
+            assert_eq!(decoded, tier);
+        }
+
+        assert_eq!(
+            SqliteMemory::str_to_signal_tier("unknown-tier"),
+            SignalTier::Raw
+        );
+    }
+
+    #[test]
+    fn source_kind_round_trip_and_unknown() {
+        let kinds = [
+            SourceKind::Conversation,
+            SourceKind::Discord,
+            SourceKind::Telegram,
+            SourceKind::Slack,
+            SourceKind::Api,
+            SourceKind::News,
+            SourceKind::Document,
+            SourceKind::Manual,
+        ];
+
+        for kind in kinds {
+            let encoded = SqliteMemory::source_kind_to_str(kind);
+            let decoded = SqliteMemory::str_to_source_kind(encoded);
+            assert_eq!(decoded, Some(kind));
+        }
+
+        assert_eq!(SqliteMemory::str_to_source_kind("unknown-kind"), None);
     }
 
     #[test]

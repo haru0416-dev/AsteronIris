@@ -3,7 +3,7 @@ use crate::core::memory::traits::MemoryLayer;
 use crate::core::memory::vector;
 use crate::core::memory::{
     MemoryCategory, MemoryEntry, MemoryEvent, MemoryEventInput, MemoryEventType, MemoryRecallItem,
-    MemorySource, RecallQuery,
+    MemorySource, RecallQuery, SignalTier,
 };
 use anyhow::Context;
 use chrono::Local;
@@ -19,6 +19,23 @@ const REVOKED_PROVENANCE_MARKERS: [&str; 2] = [
 
 struct RecallCandidate {
     item: MemoryRecallItem,
+    provenance_source_class: Option<String>,
+    provenance_reference: Option<String>,
+    slot_status: Option<String>,
+    denylisted_by_ledger: bool,
+}
+
+struct RecallMetadata {
+    entity_id: String,
+    slot_key: String,
+    content: String,
+    reliability: f64,
+    importance: f64,
+    visibility: String,
+    updated_at: String,
+    recency_score: f64,
+    contradiction_penalty: f64,
+    signal_tier: SignalTier,
     provenance_source_class: Option<String>,
     provenance_reference: Option<String>,
     slot_status: Option<String>,
@@ -58,6 +75,7 @@ impl SqliteMemory {
         input: MemoryEventInput,
     ) -> anyhow::Result<MemoryEvent> {
         let input = input.normalize_for_ingress()?;
+        let embedding = self.get_or_compute_embedding(&input.value).await?;
         let conn = self.conn.lock_anyhow()?;
 
         let event_id = Uuid::new_v4().to_string();
@@ -66,6 +84,19 @@ impl SqliteMemory {
         let layer = Self::layer_to_str(input.layer);
         let privacy = Self::privacy_to_str(&input.privacy_level);
         let event_type = input.event_type.to_string();
+        let signal_tier = match input.event_type {
+            MemoryEventType::InferredClaim => SignalTier::Inferred,
+            MemoryEventType::ContradictionMarked => SignalTier::Governance,
+            _ => input.signal_tier.unwrap_or(SignalTier::Belief),
+        };
+        let signal_tier_str = Self::signal_tier_to_str(Self::str_to_signal_tier(
+            Self::signal_tier_to_str(signal_tier),
+        ));
+        let source_kind = input.source_kind.map(|kind| {
+            let encoded = Self::source_kind_to_str(kind);
+            Self::str_to_source_kind(encoded).map_or(encoded, Self::source_kind_to_str)
+        });
+        let source_uri = input.source_ref.clone();
         let provenance_source_class = input
             .provenance
             .as_ref()
@@ -81,12 +112,33 @@ impl SqliteMemory {
         let retention_tier = Self::retention_tier_for_layer(input.layer);
         let retention_expires_at =
             Self::retention_expiry_for_layer(input.layer, &input.occurred_at);
+        let content_type = match input.event_type {
+            MemoryEventType::FactAdded
+            | MemoryEventType::FactUpdated
+            | MemoryEventType::PreferenceSet
+            | MemoryEventType::PreferenceUnset
+            | MemoryEventType::SoftDeleted
+            | MemoryEventType::HardDeleted
+            | MemoryEventType::TombstoneWritten => "belief",
+            MemoryEventType::InferredClaim => "inference",
+            MemoryEventType::ContradictionMarked => "contradiction",
+            MemoryEventType::SummaryCompacted => "summary",
+        };
         let contradiction_penalty =
             if matches!(input.event_type, MemoryEventType::ContradictionMarked) {
                 Self::contradiction_penalty(input.confidence, input.importance)
             } else {
                 0.0
             };
+        let promotion_status = if matches!(signal_tier, SignalTier::Raw) {
+            "raw"
+        } else {
+            "promoted"
+        };
+
+        #[allow(clippy::cast_possible_wrap)]
+        let embedding_dim = embedding.as_ref().map(|entry| entry.len() as i64);
+        let embedding_blob = embedding.map(|entry| vector::vec_to_bytes(&entry));
 
         let mut incumbent_stmt = conn.prepare_cached(
             "SELECT winner_event_id, source, confidence, updated_at FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
@@ -135,8 +187,9 @@ impl SqliteMemory {
                 event_id, entity_id, slot_key, layer, event_type, value, source,
                 confidence, importance, provenance_source_class, provenance_reference,
                 provenance_evidence_uri, retention_tier, retention_expires_at,
+                signal_tier, source_kind,
                 privacy_level, occurred_at, ingested_at, supersedes_event_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 event_id,
                 input.entity_id,
@@ -152,68 +205,26 @@ impl SqliteMemory {
                 provenance_evidence_uri,
                 retention_tier,
                 retention_expires_at,
+                signal_tier_str,
+                source_kind,
                 privacy,
                 input.occurred_at,
                 ingested_at,
                 supersedes_event_id,
             ],
-        ).context("insert memory event")?;
+        )
+        .context("insert memory event")?;
 
         if contradiction_penalty > 0.0 {
-            let doc_id = format!("{}:{}", input.entity_id, input.slot_key);
+            let unit_id = format!("{}:{}", input.entity_id, input.slot_key);
             conn.execute(
-                "UPDATE retrieval_docs
+                "UPDATE retrieval_units
                  SET contradiction_penalty = MIN(1.0, contradiction_penalty + ?2)
-                 WHERE doc_id = ?1",
-                params![doc_id, contradiction_penalty],
+                 WHERE unit_id = ?1",
+                params![unit_id, contradiction_penalty],
             )
             .context("update contradiction penalty")?;
         }
-
-        let shadow_id = Uuid::new_v4().to_string();
-        let shadow_category = if input.slot_key.starts_with("persona/") {
-            "persona"
-        } else {
-            match input.source {
-                MemorySource::ExplicitUser | MemorySource::ToolVerified => "core",
-                MemorySource::System => "daily",
-                MemorySource::Inferred => "conversation",
-            }
-        };
-
-        conn.execute(
-            "INSERT INTO memories (
-                id, key, content, category, layer,
-                provenance_source_class, provenance_reference, provenance_evidence_uri,
-                retention_tier, retention_expires_at,
-                embedding, created_at, updated_at
-            )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?11)
-             ON CONFLICT(key) DO UPDATE SET
-                content = excluded.content,
-                category = excluded.category,
-                layer = excluded.layer,
-                provenance_source_class = excluded.provenance_source_class,
-                provenance_reference = excluded.provenance_reference,
-                provenance_evidence_uri = excluded.provenance_evidence_uri,
-                retention_tier = excluded.retention_tier,
-                retention_expires_at = excluded.retention_expires_at,
-                updated_at = excluded.updated_at",
-            params![
-                shadow_id,
-                input.slot_key,
-                input.value,
-                shadow_category,
-                layer,
-                provenance_source_class,
-                provenance_reference,
-                provenance_evidence_uri,
-                retention_tier,
-                retention_expires_at,
-                input.occurred_at,
-            ],
-        )
-        .context("upsert memory shadow entry")?;
 
         if should_replace {
             conn.execute(
@@ -244,46 +255,68 @@ impl SqliteMemory {
             )
             .context("upsert belief slot")?;
 
-            let doc_id = format!("{}:{}", input.entity_id, input.slot_key);
+            let unit_id = format!("{}:{}", input.entity_id, input.slot_key);
             conn.execute(
-                "INSERT INTO retrieval_docs (
-                    doc_id, entity_id, slot_key, text_body, layer,
-                    provenance_source_class, provenance_reference, provenance_evidence_uri,
+                "INSERT INTO retrieval_units (
+                    unit_id, entity_id, slot_key, content, content_type, signal_tier,
+                    promotion_status, chunk_index, source_uri, source_kind,
+                    recency_score, importance, reliability, contradiction_penalty, visibility,
+                    embedding, embedding_model, embedding_dim,
+                    layer, provenance_source_class, provenance_reference, provenance_evidence_uri,
                     retention_tier, retention_expires_at,
-                    recency_score, importance, reliability, contradiction_penalty, visibility, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1.0, ?11, ?12, ?13, ?14, ?15)
-                ON CONFLICT(doc_id) DO UPDATE SET
-                    text_body = excluded.text_body,
+                    created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, 1.0, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?22)
+                ON CONFLICT(unit_id) DO UPDATE SET
+                    content = excluded.content,
+                    content_type = excluded.content_type,
+                    signal_tier = excluded.signal_tier,
+                    promotion_status = excluded.promotion_status,
+                    source_uri = excluded.source_uri,
+                    source_kind = excluded.source_kind,
+                    recency_score = excluded.recency_score,
+                    importance = excluded.importance,
+                    reliability = excluded.reliability,
+                    contradiction_penalty = excluded.contradiction_penalty,
+                    visibility = excluded.visibility,
+                    embedding = excluded.embedding,
+                    embedding_model = excluded.embedding_model,
+                    embedding_dim = excluded.embedding_dim,
                     layer = excluded.layer,
                     provenance_source_class = excluded.provenance_source_class,
                     provenance_reference = excluded.provenance_reference,
                     provenance_evidence_uri = excluded.provenance_evidence_uri,
                     retention_tier = excluded.retention_tier,
                     retention_expires_at = excluded.retention_expires_at,
-                    recency_score = excluded.recency_score,
-                    importance = excluded.importance,
-                    reliability = excluded.reliability,
-                    contradiction_penalty = excluded.contradiction_penalty,
-                    visibility = excluded.visibility,
                     updated_at = excluded.updated_at",
                 params![
-                    doc_id,
+                    unit_id,
                     input.entity_id,
                     input.slot_key,
                     input.value,
+                    content_type,
+                    signal_tier_str,
+                    promotion_status,
+                    source_uri,
+                    source_kind,
+                    input.importance,
+                    input.confidence,
+                    contradiction_penalty,
+                    privacy,
+                    embedding_blob,
+                    embedding_dim,
                     layer,
                     provenance_source_class,
                     provenance_reference,
                     provenance_evidence_uri,
                     retention_tier,
                     retention_expires_at,
-                    input.importance,
-                    input.confidence,
-                    contradiction_penalty,
-                    privacy,
                     input.occurred_at,
                 ],
-            ).context("upsert retrieval doc")?;
+            )
+            .context("upsert retrieval unit")?;
+
+            Self::try_promote_raw_to_candidate(&conn, &input.entity_id, &input.slot_key)
+                .context("promote corroborated raw signal")?;
         }
 
         Ok(MemoryEvent {
@@ -308,111 +341,232 @@ impl SqliteMemory {
         query: RecallQuery,
     ) -> anyhow::Result<Vec<MemoryRecallItem>> {
         query.enforce_policy()?;
-
         if query.query.trim().is_empty() || query.limit == 0 {
             return Ok(Vec::new());
         }
 
+        let search_limit = query.limit.saturating_mul(3);
+        let query_embedding = self.get_or_compute_embedding(&query.query).await?;
+
+        let (fts_results, vector_results) = {
+            let conn = self.conn.lock_anyhow()?;
+            let fts =
+                Self::fts5_search_scoped(&conn, &query.entity_id, &query.query, search_limit)?;
+            let vec = if let Some(ref embedding) = query_embedding {
+                Self::vector_search_scoped(&conn, &query.entity_id, embedding, search_limit)?
+            } else {
+                Vec::new()
+            };
+            (fts, vec)
+        };
+
+        let merged = if vector_results.is_empty() && fts_results.is_empty() {
+            return Ok(Vec::new());
+        } else if vector_results.is_empty() {
+            fts_results
+                .iter()
+                .map(|(id, score)| vector::ScoredResult {
+                    id: id.clone(),
+                    vector_score: None,
+                    keyword_score: Some(*score),
+                    final_score: *score,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vector::rrf_merge(&vector_results, &fts_results, search_limit)
+        };
+
+        let candidate_ids = merged
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect::<Vec<_>>();
         let conn = self.conn.lock_anyhow()?;
-
-        let like_query = format!("%{}%", query.query);
-        #[allow(clippy::cast_possible_wrap)]
-        let limit_i64 = query.limit as i64;
-        let mut stmt = conn.prepare_cached(
-            "SELECT rd.entity_id, rd.slot_key, rd.text_body, rd.reliability, rd.importance, rd.visibility, rd.updated_at,
-                    rd.provenance_source_class, rd.provenance_reference, bs.status,
-                    EXISTS(
-                        SELECT 1
-                        FROM deletion_ledger dl
-                        WHERE dl.entity_id = rd.entity_id
-                          AND dl.target_slot_key = rd.slot_key
-                          AND dl.phase IN ('soft', 'hard', 'tombstone')
-                    ) AS denylisted_by_ledger,
-                    (
-                        0.45 * ((0.60 * rd.importance) + (0.40 * rd.reliability))
-                      + 0.35 * (
-                            rd.recency_score *
-                            CASE
-                                WHEN rd.slot_key LIKE 'trend.%'
-                                  OR rd.slot_key LIKE 'trend/%'
-                                  OR rd.slot_key LIKE '%.trend.%'
-                                  OR rd.slot_key LIKE '%/trend/%'
-                                THEN
-                                    CASE
-                                        WHEN COALESCE(julianday('now') - julianday(rd.updated_at), 0.0) <= ?3
-                                        THEN 1.0
-                                        ELSE MAX(
-                                            0.0,
-                                            1.0 - (
-                                                (COALESCE(julianday('now') - julianday(rd.updated_at), 0.0) - ?3) / ?4
-                                            )
-                                        )
-                                    END
-                                ELSE
-                                    MAX(
-                                        0.20,
-                                        1.0 - (COALESCE(julianday('now') - julianday(rd.updated_at), 0.0) / 90.0)
-                                    )
-                            END
-                        )
-                      + 0.20 * CASE WHEN rd.text_body LIKE ?2 THEN 1.0 ELSE 0.0 END
-                      - rd.contradiction_penalty
-                    ) AS final_score
-             FROM retrieval_docs rd
-             LEFT JOIN belief_slots bs
-               ON bs.entity_id = rd.entity_id
-              AND bs.slot_key = rd.slot_key
-             WHERE rd.entity_id = ?1
-                AND rd.visibility != 'secret'
-                AND rd.text_body LIKE ?2
-              ORDER BY final_score DESC, rd.updated_at DESC, rd.doc_id ASC
-              LIMIT ?5",
-        ).context("prepare recall query")?;
-
-        let rows = stmt
-            .query_map(
-                params![
-                    query.entity_id,
-                    like_query,
-                    Self::TREND_TTL_DAYS,
-                    Self::TREND_DECAY_WINDOW_DAYS,
-                    limit_i64
-                ],
-                |row| {
-                    let visibility: String = row.get(5)?;
-                    Ok(RecallCandidate {
-                        item: MemoryRecallItem {
-                            entity_id: row.get(0)?,
-                            slot_key: row.get(1)?,
-                            value: row.get(2)?,
-                            source: MemorySource::System,
-                            confidence: row.get(3)?,
-                            importance: row.get(4)?,
-                            privacy_level: Self::str_to_privacy(&visibility),
-                            score: row.get(11)?,
-                            occurred_at: row.get(6)?,
-                        },
-                        provenance_source_class: row.get(7)?,
-                        provenance_reference: row.get(8)?,
-                        slot_status: row.get(9)?,
-                        denylisted_by_ledger: row.get::<_, i64>(10)? != 0,
-                    })
-                },
-            )
-            .context("execute recall query")?;
-
-        let mut out = Vec::with_capacity(query.limit);
-        for row in rows {
-            let candidate = row.context("read recall candidate row")?;
-            if candidate.allowed_for_replay() {
-                out.push(candidate.item);
-            }
-        }
-        Ok(out)
+        Self::multi_phase_score(&conn, &query, &merged, &candidate_ids)
     }
 
-    // Projection layer — prepared API for direct key/value memory operations, not yet wired to Memory trait
-    #[allow(dead_code)] // Projection API kept for planned Memory-trait wiring
+    fn try_promote_raw_to_candidate(
+        conn: &rusqlite::Connection,
+        entity_id: &str,
+        slot_key: &str,
+    ) -> anyhow::Result<()> {
+        let distinct_sources: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT source) FROM memory_events WHERE entity_id = ?1 AND slot_key = ?2",
+            params![entity_id, slot_key],
+            |row| row.get(0),
+        )?;
+
+        if distinct_sources >= 2 {
+            let unit_id = format!("{entity_id}:{slot_key}");
+            conn.execute(
+                "UPDATE retrieval_units
+                 SET promotion_status = 'candidate'
+                 WHERE unit_id = ?1 AND promotion_status = 'raw'",
+                params![unit_id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn multi_phase_score(
+        conn: &std::sync::MutexGuard<'_, rusqlite::Connection>,
+        query: &RecallQuery,
+        rrf_candidates: &[vector::ScoredResult],
+        candidate_ids: &[String],
+    ) -> anyhow::Result<Vec<MemoryRecallItem>> {
+        if candidate_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = std::iter::repeat_n("?", candidate_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT ru.unit_id, ru.entity_id, ru.slot_key, ru.content,
+                    ru.reliability, ru.importance, ru.visibility, ru.updated_at,
+                    ru.recency_score, ru.contradiction_penalty, ru.signal_tier,
+                    ru.provenance_source_class, ru.provenance_reference,
+                    bs.status,
+                    EXISTS(
+                        SELECT 1 FROM deletion_ledger dl
+                        WHERE dl.entity_id = ru.entity_id
+                          AND dl.target_slot_key = ru.slot_key
+                          AND dl.phase IN ('soft', 'hard', 'tombstone')
+                    ) AS denylisted_by_ledger
+             FROM retrieval_units ru
+             LEFT JOIN belief_slots bs ON bs.entity_id = ru.entity_id AND bs.slot_key = ru.slot_key
+             WHERE ru.unit_id IN ({placeholders})"
+        );
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .context("prepare multi-phase metadata query")?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(candidate_ids.iter()), |row| {
+                let signal_tier_raw: String = row.get(10)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    RecallMetadata {
+                        entity_id: row.get(1)?,
+                        slot_key: row.get(2)?,
+                        content: row.get(3)?,
+                        reliability: row.get(4)?,
+                        importance: row.get(5)?,
+                        visibility: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        recency_score: row.get(8)?,
+                        contradiction_penalty: row.get(9)?,
+                        signal_tier: Self::str_to_signal_tier(&signal_tier_raw),
+                        provenance_source_class: row.get(11)?,
+                        provenance_reference: row.get(12)?,
+                        slot_status: row.get(13)?,
+                        denylisted_by_ledger: row.get::<_, i64>(14)? != 0,
+                    },
+                ))
+            })
+            .context("execute multi-phase metadata query")?;
+
+        let mut metadata_by_id = HashMap::with_capacity(candidate_ids.len());
+        for row in rows {
+            let (unit_id, metadata) = row.context("read multi-phase metadata row")?;
+            metadata_by_id.insert(unit_id, metadata);
+        }
+
+        let mut results = Vec::with_capacity(query.limit);
+        for scored in rrf_candidates {
+            let Some(metadata) = metadata_by_id.get(&scored.id) else {
+                continue;
+            };
+
+            let base_candidate = RecallCandidate {
+                item: MemoryRecallItem {
+                    entity_id: metadata.entity_id.clone(),
+                    slot_key: metadata.slot_key.clone(),
+                    value: metadata.content.clone(),
+                    source: MemorySource::System,
+                    confidence: metadata.reliability.clamp(0.0, 1.0),
+                    importance: metadata.importance.clamp(0.0, 1.0),
+                    privacy_level: Self::str_to_privacy(&metadata.visibility),
+                    score: 0.0,
+                    occurred_at: metadata.updated_at.clone(),
+                },
+                provenance_source_class: metadata.provenance_source_class.clone(),
+                provenance_reference: metadata.provenance_reference.clone(),
+                slot_status: metadata.slot_status.clone(),
+                denylisted_by_ledger: metadata.denylisted_by_ledger,
+            };
+            if !base_candidate.allowed_for_replay() {
+                continue;
+            }
+
+            let days_since_update = Self::days_since_now(&metadata.updated_at);
+            let recency_decay = Self::recency_decay_for_slot(&metadata.slot_key, days_since_update)
+                * metadata.recency_score;
+            let contradiction_penalty = metadata.contradiction_penalty.clamp(0.0, 1.0);
+            let reliability = metadata.reliability.clamp(0.0, 1.0);
+            let importance = metadata.importance.clamp(0.0, 1.0);
+
+            let trend_boost = if metadata.signal_tier == SignalTier::Raw
+                && Self::is_trend_slot(&metadata.slot_key)
+                && days_since_update <= Self::TREND_TTL_DAYS
+            {
+                0.05
+            } else {
+                0.0
+            };
+
+            let phase_score =
+                (f64::from(scored.final_score) + trend_boost - contradiction_penalty).max(0.0);
+            let metadata_score = (0.40 * recency_decay + 0.30 * importance + 0.30 * reliability)
+                * (1.0 - contradiction_penalty);
+            let final_score = 0.80 * phase_score + 0.20 * metadata_score;
+
+            results.push(MemoryRecallItem {
+                score: final_score,
+                ..base_candidate.item
+            });
+        }
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+        results.truncate(query.limit);
+        Ok(results)
+    }
+
+    fn is_trend_slot(slot_key: &str) -> bool {
+        slot_key.starts_with("trend.")
+            || slot_key.starts_with("trend/")
+            || slot_key.contains(".trend.")
+            || slot_key.contains("/trend/")
+    }
+
+    fn days_since_now(updated_at: &str) -> f64 {
+        chrono::DateTime::parse_from_rfc3339(updated_at)
+            .map(|ts| {
+                let now = chrono::Utc::now();
+                let then = ts.with_timezone(&chrono::Utc);
+                (now - then)
+                    .to_std()
+                    .map_or(0.0, |duration| duration.as_secs_f64() / 86_400.0)
+            })
+            .unwrap_or(0.0)
+    }
+
+    fn recency_decay_for_slot(slot_key: &str, days_since_update: f64) -> f64 {
+        if Self::is_trend_slot(slot_key) {
+            if days_since_update <= Self::TREND_TTL_DAYS {
+                1.0
+            } else {
+                (1.0 - ((days_since_update - Self::TREND_TTL_DAYS) / Self::TREND_DECAY_WINDOW_DAYS))
+                    .max(0.0)
+            }
+        } else {
+            (1.0 - (days_since_update / 90.0)).max(0.20)
+        }
+    }
+
+    // Deprecated projection API — scheduled for removal in V5.
+    #[allow(dead_code)] // Deprecated projection API — scheduled for removal in V5.
     pub(super) async fn upsert_projection_entry(
         &self,
         key: &str,
@@ -429,35 +583,39 @@ impl SqliteMemory {
         let cat = Self::category_to_str(&category);
         let layer = Self::layer_to_str(MemoryLayer::Working);
         let retention_tier = Self::retention_tier_for_layer(MemoryLayer::Working);
-        let id = Uuid::new_v4().to_string();
+        let unit_id = Self::projection_unit_id(key);
 
         conn.execute(
-            "INSERT INTO memories (
-                id, key, content, category, layer,
-                provenance_source_class, provenance_reference, provenance_evidence_uri,
+            "INSERT INTO retrieval_units (
+                unit_id, entity_id, slot_key, content, content_type, signal_tier,
+                promotion_status, chunk_index, source_uri, source_kind,
+                recency_score, importance, reliability, contradiction_penalty, visibility,
+                embedding, embedding_model, embedding_dim,
+                layer, provenance_source_class, provenance_reference, provenance_evidence_uri,
                 retention_tier, retention_expires_at,
-                embedding, created_at, updated_at
+                created_at, updated_at
             )
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, ?6, NULL, ?7, ?8, ?9)
-             ON CONFLICT(key) DO UPDATE SET
+             VALUES (?1, ?2, ?3, ?4, 'projection', 'belief', 'promoted', 0, NULL, NULL,
+                     1.0, 0.5, 0.8, 0.0, 'private', ?5, NULL, NULL,
+                     ?6, 'system', ?7, NULL,
+                     ?8, NULL, ?9, ?10)
+             ON CONFLICT(unit_id) DO UPDATE SET
                 content = excluded.content,
-                category = excluded.category,
+                embedding = excluded.embedding,
                 layer = excluded.layer,
                 provenance_source_class = excluded.provenance_source_class,
                 provenance_reference = excluded.provenance_reference,
-                provenance_evidence_uri = excluded.provenance_evidence_uri,
                 retention_tier = excluded.retention_tier,
-                retention_expires_at = excluded.retention_expires_at,
-                embedding = excluded.embedding,
                 updated_at = excluded.updated_at",
             params![
-                id,
+                unit_id,
+                Self::PROJECTION_ENTITY_ID,
                 key,
                 content,
-                cat,
-                layer,
-                retention_tier,
                 embedding_bytes,
+                layer,
+                cat,
+                retention_tier,
                 now,
                 now
             ],
@@ -466,8 +624,8 @@ impl SqliteMemory {
         Ok(())
     }
 
-    // Projection layer — hybrid vector+keyword search, not yet wired to Memory trait
-    #[allow(dead_code)] // Projection API kept for planned Memory-trait wiring
+    // Deprecated projection API — scheduled for removal in V5.
+    #[allow(clippy::unused_async, dead_code)] // Deprecated projection API — scheduled for removal in V5.
     pub(super) async fn search_projection(
         &self,
         query: &str,
@@ -477,69 +635,14 @@ impl SqliteMemory {
             return Ok(Vec::new());
         }
 
-        let query_embedding = self.get_or_compute_embedding(query).await?;
-
-        let search_limit = limit.saturating_mul(2);
-        let (keyword_results, vector_results) = {
-            let conn = self.conn.lock_anyhow()?;
-
-            let keyword_results = Self::fts5_search(&conn, query, search_limit).unwrap_or_default();
-            let vector_results = if let Some(ref qe) = query_embedding {
-                Self::vector_search(&conn, qe, search_limit).unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-
-            (keyword_results, vector_results)
-        };
-
-        let merged = if vector_results.is_empty() {
-            keyword_results
-                .iter()
-                .map(|(id, score)| vector::ScoredResult {
-                    id: id.clone(),
-                    vector_score: None,
-                    keyword_score: Some(*score),
-                    final_score: *score,
-                })
-                .collect::<Vec<_>>()
-        } else {
-            vector::hybrid_merge(
-                &vector_results,
-                &keyword_results,
-                self.vector_weight,
-                self.keyword_weight,
-                limit,
-            )
-        };
-
-        let mut results = Vec::with_capacity(limit);
-        let merged_ids = merged
-            .iter()
-            .map(|scored| scored.id.clone())
-            .collect::<Vec<_>>();
-        let mut entries_by_id = {
-            let conn = self.conn.lock_anyhow()?;
-            Self::fetch_entries_by_ids(&conn, &merged_ids)?
-        };
-
-        for scored in &merged {
-            if let Some(mut entry) = entries_by_id.remove(&scored.id) {
-                entry.score = Some(f64::from(scored.final_score));
-                results.push(entry);
-            }
-        }
-
-        if results.is_empty() {
-            let conn = self.conn.lock_anyhow()?;
-            results.extend(Self::keyword_fallback_search(&conn, query, limit)?);
-        }
-
+        let conn = self.conn.lock_anyhow()?;
+        let mut results = Self::keyword_fallback_search(&conn, query, limit)?;
         results.truncate(limit);
         Ok(results)
     }
 
-    // Called by search_projection — projection layer currently dormant
+    // Deprecated projection API — scheduled for removal in V5.
+    #[allow(dead_code)]
     fn fetch_entries_by_ids(
         conn: &rusqlite::Connection,
         ids: &[String],
@@ -552,15 +655,27 @@ impl SqliteMemory {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT id, key, content, category, created_at FROM memories WHERE id IN ({placeholders})"
+            "SELECT unit_id, slot_key, content, provenance_reference, created_at
+             FROM retrieval_units
+             WHERE unit_id IN ({placeholders}) AND entity_id = ?{}",
+            ids.len() + 1
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+        let mut params: Vec<&dyn ToSql> = Vec::with_capacity(ids.len() + 1);
+        for id in ids {
+            params.push(id);
+        }
+        params.push(&Self::PROJECTION_ENTITY_ID);
+
+        let rows = stmt.query_map(params.as_slice(), |row| {
             Ok(MemoryEntry {
                 id: row.get(0)?,
                 key: row.get(1)?,
                 content: row.get(2)?,
-                category: Self::str_to_category(&row.get::<_, String>(3)?),
+                category: Self::str_to_category(
+                    &row.get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| "core".to_string()),
+                ),
                 timestamp: row.get(4)?,
                 session_id: None,
                 score: None,
@@ -575,7 +690,7 @@ impl SqliteMemory {
         Ok(out)
     }
 
-    // Called by search_projection — projection layer currently dormant
+    // Deprecated projection API — scheduled for removal in V5.
     fn keyword_fallback_search(
         conn: &rusqlite::Connection,
         query: &str,
@@ -594,7 +709,7 @@ impl SqliteMemory {
             .enumerate()
             .map(|(index, _)| {
                 format!(
-                    "(content LIKE ?{} OR key LIKE ?{})",
+                    "(content LIKE ?{} OR slot_key LIKE ?{})",
                     index * 2 + 1,
                     index * 2 + 2
                 )
@@ -602,15 +717,16 @@ impl SqliteMemory {
             .collect::<Vec<_>>();
         let where_clause = conditions.join(" OR ");
         let sql = format!(
-            "SELECT id, key, content, category, created_at FROM memories
-             WHERE {where_clause}
+            "SELECT unit_id, slot_key, content, provenance_reference, created_at FROM retrieval_units
+             WHERE entity_id = ?1 AND chunk_index = 0 AND ({where_clause})
              ORDER BY updated_at DESC
              LIMIT ?{}",
-            keywords.len() * 2 + 1
+            keywords.len() * 2 + 2
         );
 
         let mut stmt = conn.prepare(&sql)?;
-        let mut param_values: Vec<&dyn ToSql> = Vec::with_capacity(keywords.len() * 2 + 1);
+        let mut param_values: Vec<&dyn ToSql> = Vec::with_capacity(keywords.len() * 2 + 2);
+        param_values.push(&Self::PROJECTION_ENTITY_ID);
         for keyword in &keywords {
             param_values.push(keyword);
             param_values.push(keyword);
@@ -624,7 +740,10 @@ impl SqliteMemory {
                 id: row.get(0)?,
                 key: row.get(1)?,
                 content: row.get(2)?,
-                category: Self::str_to_category(&row.get::<_, String>(3)?),
+                category: Self::str_to_category(
+                    &row.get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| "core".to_string()),
+                ),
                 timestamp: row.get(4)?,
                 session_id: None,
                 score: Some(1.0),
@@ -638,7 +757,7 @@ impl SqliteMemory {
         Ok(out)
     }
 
-    // Projection layer — not yet wired to Memory trait
+    // Deprecated projection API — scheduled for removal in V5.
     #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn fetch_projection_entry(
         &self,
@@ -647,15 +766,20 @@ impl SqliteMemory {
         let conn = self.conn.lock_anyhow()?;
 
         let mut stmt = conn.prepare_cached(
-            "SELECT id, key, content, category, created_at FROM memories WHERE key = ?1",
+            "SELECT unit_id, slot_key, content, provenance_reference, created_at
+             FROM retrieval_units
+             WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0",
         )?;
 
-        let mut rows = stmt.query_map(params![key], |row| {
+        let mut rows = stmt.query_map(params![Self::PROJECTION_ENTITY_ID, key], |row| {
             Ok(MemoryEntry {
                 id: row.get(0)?,
                 key: row.get(1)?,
                 content: row.get(2)?,
-                category: Self::str_to_category(&row.get::<_, String>(3)?),
+                category: Self::str_to_category(
+                    &row.get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| "core".to_string()),
+                ),
                 timestamp: row.get(4)?,
                 session_id: None,
                 score: None,
@@ -668,7 +792,7 @@ impl SqliteMemory {
         }
     }
 
-    // Projection layer — not yet wired to Memory trait
+    // Deprecated projection API — scheduled for removal in V5.
     #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn list_projection_entries(
         &self,
@@ -683,7 +807,10 @@ impl SqliteMemory {
                 id: row.get(0)?,
                 key: row.get(1)?,
                 content: row.get(2)?,
-                category: Self::str_to_category(&row.get::<_, String>(3)?),
+                category: Self::str_to_category(
+                    &row.get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| "core".to_string()),
+                ),
                 timestamp: row.get(4)?,
                 session_id: None,
                 score: None,
@@ -693,19 +820,21 @@ impl SqliteMemory {
         if let Some(cat) = category {
             let cat_str = Self::category_to_str(cat);
             let mut stmt = conn.prepare_cached(
-                "SELECT id, key, content, category, created_at FROM memories
-                 WHERE category = ?1 ORDER BY updated_at DESC",
+                "SELECT unit_id, slot_key, content, provenance_reference, created_at FROM retrieval_units
+                 WHERE entity_id = ?1 AND provenance_reference = ?2 AND chunk_index = 0
+                 ORDER BY updated_at DESC",
             )?;
-            let rows = stmt.query_map(params![cat_str], row_mapper)?;
+            let rows = stmt.query_map(params![Self::PROJECTION_ENTITY_ID, cat_str], row_mapper)?;
             for row in rows {
                 results.push(row?);
             }
         } else {
             let mut stmt = conn.prepare_cached(
-                "SELECT id, key, content, category, created_at FROM memories
+                "SELECT unit_id, slot_key, content, provenance_reference, created_at FROM retrieval_units
+                 WHERE entity_id = ?1 AND chunk_index = 0
                  ORDER BY updated_at DESC",
             )?;
-            let rows = stmt.query_map([], row_mapper)?;
+            let rows = stmt.query_map(params![Self::PROJECTION_ENTITY_ID], row_mapper)?;
             for row in rows {
                 results.push(row?);
             }
@@ -714,19 +843,27 @@ impl SqliteMemory {
         Ok(results)
     }
 
-    // Projection layer — not yet wired to Memory trait
+    // Deprecated projection API — scheduled for removal in V5.
     #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn delete_projection_entry(&self, key: &str) -> anyhow::Result<bool> {
         let conn = self.conn.lock_anyhow()?;
-        let affected = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
+        let affected = conn.execute(
+            "DELETE FROM retrieval_units
+             WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0",
+            params![Self::PROJECTION_ENTITY_ID, key],
+        )?;
         Ok(affected > 0)
     }
 
-    // Projection layer — not yet wired to Memory trait
+    // Deprecated projection API — scheduled for removal in V5.
     #[allow(clippy::unused_async, dead_code)]
     pub(super) async fn count_projection_entries(&self) -> anyhow::Result<usize> {
         let conn = self.conn.lock_anyhow()?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM retrieval_units WHERE entity_id = ?1 AND chunk_index = 0",
+            params![Self::PROJECTION_ENTITY_ID],
+            |row| row.get(0),
+        )?;
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Ok(count as usize)
     }

@@ -72,11 +72,12 @@ impl SqliteMemory {
         )
         .context("insert deletion ledger entry")?;
 
-        let doc_id = format!("{entity_id}:{slot_key}");
+        let unit_id = format!("{entity_id}:{slot_key}");
         let projection_content: Option<String> = conn
             .query_row(
-                "SELECT content FROM memories WHERE key = ?1",
-                params![slot_key],
+                "SELECT content FROM retrieval_units
+                 WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0",
+                params![Self::PROJECTION_ENTITY_ID, slot_key],
                 |row| row.get(0),
             )
             .ok();
@@ -91,8 +92,8 @@ impl SqliteMemory {
                     )
                     .context("soft delete belief slot")?;
                 let _ = conn.execute(
-                    "UPDATE retrieval_docs SET visibility = 'secret', updated_at = ?2 WHERE doc_id = ?1",
-                    params![doc_id, now],
+                    "UPDATE retrieval_units SET visibility = 'secret', updated_at = ?2 WHERE unit_id = ?1",
+                    params![unit_id, now],
                 )?;
                 affected_slot > 0
             }
@@ -104,10 +105,14 @@ impl SqliteMemory {
                     )
                     .context("delete belief slot")?;
                 let _ = conn.execute(
-                    "DELETE FROM retrieval_docs WHERE doc_id = ?1",
-                    params![doc_id],
+                    "DELETE FROM retrieval_units WHERE unit_id = ?1",
+                    params![unit_id],
                 )?;
-                let _ = conn.execute("DELETE FROM memories WHERE key = ?1", params![slot_key])?;
+                let _ = conn.execute(
+                    "DELETE FROM retrieval_units
+                     WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0",
+                    params![Self::PROJECTION_ENTITY_ID, slot_key],
+                )?;
                 if let Some(cache_hash) = &projection_cache_hash {
                     let _ = conn.execute(
                         "DELETE FROM embedding_cache WHERE content_hash = ?1",
@@ -135,10 +140,14 @@ impl SqliteMemory {
                 )
                 .context("tombstone belief slot")?;
                 let _ = conn.execute(
-                    "DELETE FROM retrieval_docs WHERE doc_id = ?1",
-                    params![doc_id],
+                    "DELETE FROM retrieval_units WHERE unit_id = ?1",
+                    params![unit_id],
                 )?;
-                let _ = conn.execute("DELETE FROM memories WHERE key = ?1", params![slot_key])?;
+                let _ = conn.execute(
+                    "DELETE FROM retrieval_units
+                     WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0",
+                    params![Self::PROJECTION_ENTITY_ID, slot_key],
+                )?;
                 if let Some(cache_hash) = &projection_cache_hash {
                     let _ = conn.execute(
                         "DELETE FROM embedding_cache WHERE content_hash = ?1",
@@ -150,7 +159,7 @@ impl SqliteMemory {
         };
 
         let slot_observed = Self::observe_slot_artifact(&conn, entity_id, slot_key);
-        let retrieval_observed = Self::observe_retrieval_artifact(&conn, &doc_id);
+        let retrieval_observed = Self::observe_retrieval_artifact(&conn, &unit_id);
         let projection_observed = Self::observe_projection_artifact(&conn, slot_key)?;
         let cache_observed = Self::observe_cache_artifact(&conn, projection_cache_hash.as_deref())?;
         let ledger_observed =
@@ -163,8 +172,8 @@ impl SqliteMemory {
                 slot_observed,
             ),
             ForgetArtifactCheck::new(
-                ForgetArtifact::RetrievalDocs,
-                mode.artifact_requirement(ForgetArtifact::RetrievalDocs),
+                ForgetArtifact::RetrievalUnits,
+                mode.artifact_requirement(ForgetArtifact::RetrievalUnits),
                 retrieval_observed,
             ),
             ForgetArtifactCheck::new(
@@ -216,12 +225,12 @@ impl SqliteMemory {
 
     fn observe_retrieval_artifact(
         conn: &rusqlite::Connection,
-        doc_id: &str,
+        unit_id: &str,
     ) -> ForgetArtifactObservation {
         let visibility: Option<String> = conn
             .query_row(
-                "SELECT visibility FROM retrieval_docs WHERE doc_id = ?1",
-                params![doc_id],
+                "SELECT visibility FROM retrieval_units WHERE unit_id = ?1",
+                params![unit_id],
                 |row| row.get(0),
             )
             .ok();
@@ -239,8 +248,12 @@ impl SqliteMemory {
     ) -> anyhow::Result<ForgetArtifactObservation> {
         let exists = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM memories WHERE key = ?1)",
-                params![slot_key],
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM retrieval_units
+                    WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0
+                )",
+                params![Self::PROJECTION_ENTITY_ID, slot_key],
                 |row| row.get::<_, i64>(0),
             )
             .context("check projection entry existence")?

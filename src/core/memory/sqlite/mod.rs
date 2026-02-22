@@ -43,9 +43,11 @@ pub struct SqliteMemory {
     #[allow(dead_code)] // Retained for diagnostics and future reconnection workflows
     db_path: PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
-    // Used by the projection search layer (search_projection) — currently dormant
+    // Projection API — deprecated, scheduled for removal in V5.
+    #[allow(dead_code)]
     vector_weight: f32,
-    // Used by the projection search layer (search_projection) — currently dormant
+    // Projection API — deprecated, scheduled for removal in V5.
+    #[allow(dead_code)]
     keyword_weight: f32,
     cache_max: usize,
 }
@@ -55,6 +57,8 @@ impl SqliteMemory {
     const MEMORY_SCHEMA_V1: i64 = 1;
     const MEMORY_SCHEMA_V2: i64 = 2;
     const MEMORY_SCHEMA_V3: i64 = 3;
+    const MEMORY_SCHEMA_V4: i64 = 4;
+    const MEMORY_SCHEMA_V5: i64 = 5;
     const MEMORY_EVENTS_V2_COLUMNS: [&'static str; 4] = [
         "layer",
         "provenance_source_class",
@@ -78,8 +82,15 @@ impl SqliteMemory {
         "retention_tier",
         "retention_expires_at",
     ];
+    const MEMORY_EVENTS_V4_COLUMNS: [&'static str; 2] = ["signal_tier", "source_kind"];
+    const RETRIEVAL_UNITS_V4_COLUMNS: [&'static str; 0] = [];
     const TREND_TTL_DAYS: f64 = 30.0;
     const TREND_DECAY_WINDOW_DAYS: f64 = 45.0;
+    const PROJECTION_ENTITY_ID: &'static str = "__projection__";
+
+    fn projection_unit_id(slot_key: &str) -> String {
+        format!("projection:{slot_key}")
+    }
 
     pub fn new(workspace_dir: &Path) -> anyhow::Result<Self> {
         Self::with_embedder(
@@ -128,10 +139,12 @@ impl SqliteMemory {
 
     fn source_priority(source: &MemorySource) -> u8 {
         match source {
-            MemorySource::ExplicitUser => 4,
-            MemorySource::ToolVerified => 3,
+            MemorySource::ExplicitUser => 5,
+            MemorySource::ToolVerified => 4,
+            MemorySource::ExternalPrimary => 3,
             MemorySource::System => 2,
-            MemorySource::Inferred => 1,
+            MemorySource::ExternalSecondary => 1,
+            MemorySource::Inferred => 0,
         }
     }
 
@@ -239,7 +252,7 @@ impl SqliteMemory {
         {
             let conn = self.conn.lock_anyhow()?;
 
-            conn.execute_batch("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")?;
+            conn.execute_batch("INSERT INTO retrieval_fts(retrieval_fts) VALUES('rebuild');")?;
         }
 
         // Step 2: Re-embed all memories that lack embeddings
@@ -250,8 +263,9 @@ impl SqliteMemory {
         let entries: Vec<(String, String)> = {
             let conn = self.conn.lock_anyhow()?;
 
-            let mut stmt =
-                conn.prepare_cached("SELECT id, content FROM memories WHERE embedding IS NULL")?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT unit_id, content FROM retrieval_units WHERE embedding IS NULL",
+            )?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
@@ -264,7 +278,7 @@ impl SqliteMemory {
                 let bytes = vector::vec_to_bytes(&emb);
                 let conn = self.conn.lock_anyhow()?;
                 conn.execute(
-                    "UPDATE memories SET embedding = ?1 WHERE id = ?2",
+                    "UPDATE retrieval_units SET embedding = ?1 WHERE unit_id = ?2",
                     params![bytes, id],
                 )?;
                 count += 1;

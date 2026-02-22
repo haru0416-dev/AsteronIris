@@ -3,7 +3,8 @@ use crate::core::memory::vector;
 use rusqlite::{Connection, params};
 
 impl SqliteMemory {
-    // Used by search_projection for FTS5/BM25 keyword search — projection layer currently dormant
+    // Projection API — deprecated, scheduled for removal in V5.
+    #[allow(dead_code)]
     pub(super) fn fts5_search(
         conn: &Connection,
         query: &str,
@@ -24,10 +25,10 @@ impl SqliteMemory {
             return Ok(Vec::new());
         }
 
-        let sql = "SELECT m.id, bm25(memories_fts) as score
-                   FROM memories_fts f
-                   JOIN memories m ON m.rowid = f.rowid
-                   WHERE memories_fts MATCH ?1
+        let sql = "SELECT ru.unit_id, bm25(retrieval_fts) as score
+                   FROM retrieval_fts f
+                   JOIN retrieval_units ru ON ru.rowid = f.rowid
+                   WHERE retrieval_fts MATCH ?1
                    ORDER BY score
                    LIMIT ?2";
 
@@ -50,16 +51,103 @@ impl SqliteMemory {
         Ok(results)
     }
 
-    // Used by search_projection for cosine-similarity vector search — projection layer currently dormant
+    /// FTS5 search scoped to a specific `entity_id`.
+    pub(super) fn fts5_search_scoped(
+        conn: &Connection,
+        entity_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(String, f32)>> {
+        let words: Vec<&str> = query.split_whitespace().collect();
+        let mut fts_query = String::with_capacity(words.len() * 20);
+        for (i, w) in words.iter().enumerate() {
+            if i > 0 {
+                fts_query.push_str(" OR ");
+            }
+            fts_query.push('"');
+            fts_query.push_str(w);
+            fts_query.push('"');
+        }
+
+        if fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let sql = "SELECT ru.unit_id, bm25(retrieval_fts) as score
+                   FROM retrieval_fts f
+                   JOIN retrieval_units ru ON ru.rowid = f.rowid
+                   WHERE retrieval_fts MATCH ?1
+                     AND ru.entity_id = ?2
+                     AND ru.visibility != 'secret'
+                     AND ru.promotion_status IN ('promoted', 'candidate')
+                   ORDER BY score
+                   LIMIT ?3";
+
+        let mut stmt = conn.prepare_cached(sql)?;
+        #[allow(clippy::cast_possible_wrap)]
+        let limit_i64 = limit as i64;
+
+        let rows = stmt.query_map(params![fts_query, entity_id, limit_i64], |row| {
+            let id: String = row.get(0)?;
+            let score: f64 = row.get(1)?;
+            #[allow(clippy::cast_possible_truncation)]
+            Ok((id, (-score) as f32))
+        })?;
+
+        let mut results = Vec::with_capacity(limit);
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    // Projection API — deprecated, scheduled for removal in V5.
+    #[allow(dead_code)]
     pub(super) fn vector_search(
         conn: &Connection,
         query_embedding: &[f32],
         limit: usize,
     ) -> anyhow::Result<Vec<(String, f32)>> {
-        let mut stmt =
-            conn.prepare_cached("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL")?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT unit_id, embedding FROM retrieval_units WHERE embedding IS NOT NULL",
+        )?;
 
         let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((id, blob))
+        })?;
+
+        let mut scored: Vec<(String, f32)> = Vec::with_capacity(limit);
+        for row in rows {
+            let (id, blob) = row?;
+            let emb = vector::bytes_to_vec(&blob);
+            let sim = vector::cosine_similarity(query_embedding, &emb);
+            if sim > 0.0 {
+                scored.push((id, sim));
+            }
+        }
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        Ok(scored)
+    }
+
+    /// Vector search scoped to a specific `entity_id`.
+    pub(super) fn vector_search_scoped(
+        conn: &Connection,
+        entity_id: &str,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> anyhow::Result<Vec<(String, f32)>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT unit_id, embedding FROM retrieval_units
+             WHERE embedding IS NOT NULL AND entity_id = ?1
+               AND visibility != 'secret'
+               AND promotion_status IN ('promoted', 'candidate')",
+        )?;
+
+        let rows = stmt.query_map(params![entity_id], |row| {
             let id: String = row.get(0)?;
             let blob: Vec<u8> = row.get(1)?;
             Ok((id, blob))
@@ -91,18 +179,34 @@ mod tests {
         conn
     }
 
-    fn insert_test_memory(
+    fn insert_test_retrieval_unit(
         conn: &Connection,
         id: &str,
+        entity_id: &str,
         key: &str,
         content: &str,
+        visibility: &str,
+        promotion_status: &str,
         embedding: Option<&[f32]>,
     ) {
         let now = chrono::Utc::now().to_rfc3339();
         let emb_blob = embedding.map(crate::core::memory::vector::vec_to_bytes);
         conn.execute(
-            "INSERT INTO memories (id, key, content, created_at, updated_at, embedding) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![id, key, content, now, now, emb_blob],
+            "INSERT INTO retrieval_units (
+                unit_id, entity_id, slot_key, content, visibility,
+                promotion_status, created_at, updated_at, embedding
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                id,
+                entity_id,
+                key,
+                content,
+                visibility,
+                promotion_status,
+                now,
+                now,
+                emb_blob
+            ],
         )
         .unwrap();
     }
@@ -110,18 +214,24 @@ mod tests {
     #[test]
     fn fts5_search_matching_query_returns_positive_scores() {
         let conn = fresh_db();
-        insert_test_memory(
+        insert_test_retrieval_unit(
             &conn,
             "m1",
+            "person:test",
             "astronomy_note",
             "The galaxy has many bright stars",
+            "public",
+            "promoted",
             None,
         );
-        insert_test_memory(
+        insert_test_retrieval_unit(
             &conn,
             "m2",
+            "person:test",
             "science_note",
             "A galaxy can contain black holes",
+            "public",
+            "promoted",
             None,
         );
 
@@ -133,7 +243,16 @@ mod tests {
     #[test]
     fn fts5_search_empty_query_returns_empty_results() {
         let conn = fresh_db();
-        insert_test_memory(&conn, "m1", "key", "content", None);
+        insert_test_retrieval_unit(
+            &conn,
+            "m1",
+            "person:test",
+            "key",
+            "content",
+            "public",
+            "promoted",
+            None,
+        );
 
         let results = SqliteMemory::fts5_search(&conn, "", 10).unwrap();
         assert!(results.is_empty());
@@ -142,7 +261,16 @@ mod tests {
     #[test]
     fn fts5_search_no_matches_returns_empty_results() {
         let conn = fresh_db();
-        insert_test_memory(&conn, "m1", "alpha", "rust language", None);
+        insert_test_retrieval_unit(
+            &conn,
+            "m1",
+            "person:test",
+            "alpha",
+            "rust language",
+            "public",
+            "promoted",
+            None,
+        );
 
         let results = SqliteMemory::fts5_search(&conn, "nonexistent_term", 10).unwrap();
         assert!(results.is_empty());
@@ -151,13 +279,34 @@ mod tests {
     #[test]
     fn vector_search_matching_embeddings_are_sorted_by_similarity() {
         let conn = fresh_db();
-        insert_test_memory(&conn, "closest", "k1", "high similarity", Some(&[1.0, 0.0]));
-        insert_test_memory(&conn, "near", "k2", "medium similarity", Some(&[0.8, 0.2]));
-        insert_test_memory(
+        insert_test_retrieval_unit(
+            &conn,
+            "closest",
+            "person:test",
+            "k1",
+            "high similarity",
+            "public",
+            "promoted",
+            Some(&[1.0, 0.0]),
+        );
+        insert_test_retrieval_unit(
+            &conn,
+            "near",
+            "person:test",
+            "k2",
+            "medium similarity",
+            "public",
+            "promoted",
+            Some(&[0.8, 0.2]),
+        );
+        insert_test_retrieval_unit(
             &conn,
             "orthogonal",
+            "person:test",
             "k3",
             "zero similarity",
+            "public",
+            "promoted",
             Some(&[0.0, 1.0]),
         );
 
@@ -173,5 +322,108 @@ mod tests {
         let conn = fresh_db();
         let results = SqliteMemory::vector_search(&conn, &[1.0, 0.0], 10).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn fts5_search_scoped_returns_only_target_entity() {
+        let conn = fresh_db();
+        insert_test_retrieval_unit(
+            &conn,
+            "e1",
+            "entity:one",
+            "slot.one",
+            "galaxy report",
+            "public",
+            "promoted",
+            None,
+        );
+        insert_test_retrieval_unit(
+            &conn,
+            "e2",
+            "entity:two",
+            "slot.two",
+            "galaxy report",
+            "public",
+            "promoted",
+            None,
+        );
+
+        let results = SqliteMemory::fts5_search_scoped(&conn, "entity:one", "galaxy", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "e1");
+    }
+
+    #[test]
+    fn vector_search_scoped_returns_only_target_entity() {
+        let conn = fresh_db();
+        insert_test_retrieval_unit(
+            &conn,
+            "e1",
+            "entity:one",
+            "slot.one",
+            "same",
+            "public",
+            "promoted",
+            Some(&[1.0, 0.0]),
+        );
+        insert_test_retrieval_unit(
+            &conn,
+            "e2",
+            "entity:two",
+            "slot.two",
+            "same",
+            "public",
+            "promoted",
+            Some(&[1.0, 0.0]),
+        );
+
+        let results =
+            SqliteMemory::vector_search_scoped(&conn, "entity:one", &[1.0, 0.0], 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "e1");
+    }
+
+    #[test]
+    fn scoped_search_respects_visibility_and_promotion_status() {
+        let conn = fresh_db();
+        insert_test_retrieval_unit(
+            &conn,
+            "eligible",
+            "entity:scope",
+            "slot.ok",
+            "trend signal spike",
+            "public",
+            "candidate",
+            Some(&[1.0, 0.0]),
+        );
+        insert_test_retrieval_unit(
+            &conn,
+            "secret",
+            "entity:scope",
+            "slot.secret",
+            "trend signal spike",
+            "secret",
+            "promoted",
+            Some(&[1.0, 0.0]),
+        );
+        insert_test_retrieval_unit(
+            &conn,
+            "raw",
+            "entity:scope",
+            "slot.raw",
+            "trend signal spike",
+            "public",
+            "raw",
+            Some(&[1.0, 0.0]),
+        );
+
+        let fts = SqliteMemory::fts5_search_scoped(&conn, "entity:scope", "trend", 10).unwrap();
+        assert_eq!(fts.len(), 1);
+        assert_eq!(fts[0].0, "eligible");
+
+        let vec =
+            SqliteMemory::vector_search_scoped(&conn, "entity:scope", &[1.0, 0.0], 10).unwrap();
+        assert_eq!(vec.len(), 1);
+        assert_eq!(vec[0].0, "eligible");
     }
 }
