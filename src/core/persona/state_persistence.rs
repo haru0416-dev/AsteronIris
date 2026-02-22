@@ -1,6 +1,11 @@
 use crate::config::PersonaConfig;
-use crate::core::memory::{Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel};
+use crate::core::memory::{
+    Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
+    SourceKind,
+};
+use crate::core::persona::person_identity::{person_entity_id, sanitize_person_id};
 use crate::core::persona::state_header::{STATE_HEADER_SCHEMA_VERSION, StateHeaderV1};
+use crate::security::writeback_guard::enforce_persona_long_term_write_policy;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::fs;
@@ -8,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const CANONICAL_STATE_HEADER_KEY: &str = "persona/state_header/v1";
+const LEGACY_CANONICAL_STATE_HEADER_ENTITY_ID: &str = "default";
 
 const STATE_HEADER_MIRROR_HEADER: &str = "# Persona State Header\n\nbackend_canonical: true\n\n";
 
@@ -15,22 +21,58 @@ pub struct BackendCanonicalStateHeaderPersistence {
     memory: Arc<dyn Memory>,
     workspace_dir: PathBuf,
     persona: PersonaConfig,
+    person_id: String,
 }
 
 impl BackendCanonicalStateHeaderPersistence {
-    pub fn new(memory: Arc<dyn Memory>, workspace_dir: PathBuf, persona: PersonaConfig) -> Self {
+    pub fn new(
+        memory: Arc<dyn Memory>,
+        workspace_dir: PathBuf,
+        persona: PersonaConfig,
+        person_id: impl Into<String>,
+    ) -> Self {
         Self {
             memory,
             workspace_dir,
             persona,
+            person_id: sanitize_person_id(&person_id.into()),
+        }
+    }
+
+    fn person_entity_id(&self) -> String {
+        person_entity_id(self.person_id_or_default())
+    }
+
+    fn person_canonical_key(&self) -> String {
+        format!(
+            "persona/{}/state_header/v1",
+            self.person_id_or_default().replace(':', "_")
+        )
+    }
+
+    fn person_id_or_default(&self) -> &str {
+        if self.person_id.is_empty() {
+            "local-default"
+        } else {
+            &self.person_id
         }
     }
 
     pub async fn load_backend_canonical(&self) -> Result<Option<StateHeaderV1>> {
+        let person_entity_id = self.person_entity_id();
+        let person_slot_key = self.person_canonical_key();
+
         let Some(entry) = self
             .memory
-            .resolve_slot("default", CANONICAL_STATE_HEADER_KEY)
+            .resolve_slot(&person_entity_id, &person_slot_key)
             .await?
+            .or(self
+                .memory
+                .resolve_slot(
+                    LEGACY_CANONICAL_STATE_HEADER_ENTITY_ID,
+                    CANONICAL_STATE_HEADER_KEY,
+                )
+                .await?)
         else {
             return Ok(None);
         };
@@ -65,21 +107,29 @@ impl BackendCanonicalStateHeaderPersistence {
     ) -> Result<()> {
         state.validate(&self.persona)?;
 
+        let person_entity_id = self.person_entity_id();
+        let person_slot_key = self.person_canonical_key();
+
         let serialized = serde_json::to_string(state)?;
-        self.memory
-            .append_event(
-                MemoryEventInput::new(
-                    "default",
-                    CANONICAL_STATE_HEADER_KEY,
-                    MemoryEventType::FactUpdated,
-                    serialized,
-                    MemorySource::System,
-                    PrivacyLevel::Private,
-                )
-                .with_confidence(0.95)
-                .with_importance(1.0),
-            )
-            .await?;
+        let input = MemoryEventInput::new(
+            person_entity_id,
+            person_slot_key,
+            MemoryEventType::FactUpdated,
+            serialized,
+            MemorySource::System,
+            PrivacyLevel::Private,
+        )
+        .with_confidence(0.95)
+        .with_importance(1.0)
+        .with_source_kind(SourceKind::Manual)
+        .with_source_ref(format!("persona-state-writeback:{}", state.last_updated_at))
+        .with_provenance(MemoryProvenance::source_reference(
+            MemorySource::System,
+            "persona.state_header.writeback",
+        ));
+        enforce_persona_long_term_write_policy(&input, self.person_id_or_default())
+            .context("enforce persona canonical write policy")?;
+        self.memory.append_event(input).await?;
 
         self.sync_mirror_from_backend_canonical(state)
     }
@@ -203,7 +253,72 @@ mod tests {
             ..PersonaConfig::default()
         };
 
-        BackendCanonicalStateHeaderPersistence::new(memory, tmp.path().to_path_buf(), persona)
+        BackendCanonicalStateHeaderPersistence::new(
+            memory,
+            tmp.path().to_path_buf(),
+            persona,
+            "person-test",
+        )
+    }
+
+    #[tokio::test]
+    async fn state_header_person_namespace_falls_back_to_legacy_key() {
+        let tmp = TempDir::new().unwrap();
+        let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(tmp.path()).unwrap());
+        let persona = PersonaConfig::default();
+        let service = BackendCanonicalStateHeaderPersistence::new(
+            Arc::clone(&memory),
+            tmp.path().to_path_buf(),
+            persona,
+            "alice",
+        );
+
+        let legacy_state = sample_state("Legacy objective", "Legacy summary");
+        memory
+            .append_event(
+                MemoryEventInput::new(
+                    "default",
+                    CANONICAL_STATE_HEADER_KEY,
+                    MemoryEventType::FactUpdated,
+                    serde_json::to_string(&legacy_state).unwrap(),
+                    MemorySource::System,
+                    PrivacyLevel::Private,
+                )
+                .with_confidence(0.95)
+                .with_importance(1.0),
+            )
+            .await
+            .unwrap();
+
+        let loaded = service.load_backend_canonical().await.unwrap().unwrap();
+        assert_eq!(loaded, legacy_state);
+    }
+
+    #[tokio::test]
+    async fn state_header_person_namespace_persists_under_person_slot() {
+        let tmp = TempDir::new().unwrap();
+        let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(tmp.path()).unwrap());
+        let persona = PersonaConfig::default();
+        let service = BackendCanonicalStateHeaderPersistence::new(
+            Arc::clone(&memory),
+            tmp.path().to_path_buf(),
+            persona,
+            "alice",
+        );
+
+        let state = sample_state("Person objective", "Person summary");
+        service
+            .persist_backend_canonical_and_sync_mirror(&state)
+            .await
+            .unwrap();
+
+        let slot = memory
+            .resolve_slot("person:alice", "persona/alice/state_header/v1")
+            .await
+            .unwrap()
+            .unwrap();
+        let parsed: StateHeaderV1 = serde_json::from_str(&slot.value).unwrap();
+        assert_eq!(parsed, state);
     }
 
     #[tokio::test]
