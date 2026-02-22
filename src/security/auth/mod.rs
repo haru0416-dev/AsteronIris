@@ -16,6 +16,9 @@ pub(super) use helpers::{canonical_provider_name, has_secret};
 
 use serde::{Deserialize, Serialize};
 
+use anyhow::Result;
+use oauth::{import_claude_oauth_cached, import_codex_oauth_cached};
+
 const AUTH_PROFILES_FILENAME: &str = "auth-profiles.json";
 const AUTH_PROFILES_VERSION: u32 = 1;
 
@@ -35,4 +38,15 @@ pub struct AuthProfile {
     pub oauth_source: Option<String>,
     #[serde(default)]
     pub disabled: bool,
+}
+
+pub fn import_oauth_access_token_for_provider(provider: &str) -> Result<Option<(String, String)>> {
+    let normalized = provider.trim().to_ascii_lowercase();
+    let imported = match normalized.as_str() {
+        "openai" => import_codex_oauth_cached(),
+        "anthropic" => import_claude_oauth_cached()?,
+        _ => None,
+    };
+
+    Ok(imported.map(|cred| (cred.access_token, cred.source_name.to_string())))
 }

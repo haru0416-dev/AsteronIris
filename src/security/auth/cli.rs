@@ -10,6 +10,15 @@ use crate::config::Config;
 use anyhow::{Context, Result, bail};
 use dialoguer::Password;
 use std::io::IsTerminal;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+        .unwrap_or(0)
+}
 
 #[allow(clippy::needless_pass_by_value)]
 pub fn handle_command(command: crate::AuthCommands, config: &Config) -> Result<()> {
@@ -85,6 +94,7 @@ fn handle_list(config: &Config) -> Result<()> {
     });
 
     println!();
+    let now_ts = unix_now();
     for profile in profiles {
         let provider = canonical_provider_name(&profile.provider);
         let is_default = store
@@ -107,12 +117,32 @@ fn handle_list(config: &Config) -> Result<()> {
             .as_deref()
             .filter(|l| !l.trim().is_empty())
             .unwrap_or("-");
+        let usage = store.usage_stats.get(&profile.id);
+        let cooldown_state = usage
+            .and_then(|value| value.cooldown_until)
+            .filter(|until| *until > now_ts)
+            .map_or_else(
+                || "ready".to_string(),
+                |until| format!("cooldown-until-{until}"),
+            );
+        let last_used = usage
+            .and_then(|value| value.last_used_at)
+            .map_or_else(|| "-".to_string(), |value| value.to_string());
+        let error_count = usage.map_or(0, |value| value.error_count);
 
         let auth_scheme = profile.auth_scheme.as_deref().unwrap_or("api_key");
 
         println!(
-            "{default_marker} {} | provider={} | auth={} | status={} | key={} | label={}",
-            profile.id, provider, auth_scheme, status, key_state, label
+            "{default_marker} {} | provider={} | auth={} | status={} | key={} | label={} | cooldown={} | errors={} | last_used={}",
+            profile.id,
+            provider,
+            auth_scheme,
+            status,
+            key_state,
+            label,
+            cooldown_state,
+            error_count,
+            last_used
         );
     }
 
@@ -277,6 +307,8 @@ fn handle_login(
         !no_default,
     )?;
 
+    store.mark_profile_used(&canonical_provider, &profile_id);
+
     store.save_for_config(config)?;
 
     println!(
@@ -346,6 +378,8 @@ fn handle_oauth_login(
         },
         !no_default,
     )?;
+
+    store.mark_profile_used(imported.target_provider, &profile_id);
 
     store.save_for_config(config)?;
 
@@ -458,7 +492,7 @@ fn handle_oauth_status(config: &Config, provider: Option<&str>) -> Result<()> {
             if has_profile { "yes" } else { "no" }
         );
         println!(
-            "Note: anthropic OAuth requires setup token (sk-ant-oat01-...). Use `asteroniris auth oauth-login --provider claude` to import it."
+            "Note: anthropic OAuth uses setup token (sk-ant-oat01-...). Import via `asteroniris auth oauth-login --provider claude`, set ANTHROPIC_OAUTH_TOKEN, or run `claude setup-token`."
         );
     }
 

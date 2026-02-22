@@ -279,3 +279,119 @@ fn recover_oauth_profile_returns_false_for_unknown_oauth_source() {
     let recovered = recover_oauth_profile_for_provider(&config, "openai").unwrap();
     assert!(!recovered);
 }
+
+#[test]
+fn active_profile_prefers_configured_order_when_default_missing() {
+    let mut store = AuthProfileStore::default();
+    store
+        .upsert_profile(
+            AuthProfile {
+                id: "openai-a".into(),
+                provider: "openai".into(),
+                label: None,
+                api_key: Some("sk-a".into()),
+                refresh_token: None,
+                auth_scheme: Some("api_key".into()),
+                oauth_source: None,
+                disabled: false,
+            },
+            false,
+        )
+        .unwrap();
+    store
+        .upsert_profile(
+            AuthProfile {
+                id: "openai-b".into(),
+                provider: "openai".into(),
+                label: None,
+                api_key: Some("sk-b".into()),
+                refresh_token: None,
+                auth_scheme: Some("api_key".into()),
+                oauth_source: None,
+                disabled: false,
+            },
+            false,
+        )
+        .unwrap();
+
+    store.defaults.insert("openai".into(), "missing-id".into());
+    let order = vec!["openai-b".to_string(), "openai-a".to_string()];
+    store.set_profile_order("openai", &order);
+
+    let active = store.active_profile_for_provider("openai").unwrap();
+    assert_eq!(active.id, "openai-b");
+}
+
+#[test]
+fn active_profile_skips_cooldown_and_falls_back_to_ready_profile() {
+    let mut store = AuthProfileStore::default();
+    store
+        .upsert_profile(
+            AuthProfile {
+                id: "openai-a".into(),
+                provider: "openai".into(),
+                label: None,
+                api_key: Some("sk-a".into()),
+                refresh_token: None,
+                auth_scheme: Some("api_key".into()),
+                oauth_source: None,
+                disabled: false,
+            },
+            false,
+        )
+        .unwrap();
+    store
+        .upsert_profile(
+            AuthProfile {
+                id: "openai-b".into(),
+                provider: "openai".into(),
+                label: None,
+                api_key: Some("sk-b".into()),
+                refresh_token: None,
+                auth_scheme: Some("api_key".into()),
+                oauth_source: None,
+                disabled: false,
+            },
+            false,
+        )
+        .unwrap();
+
+    let order = vec!["openai-a".to_string(), "openai-b".to_string()];
+    store.set_profile_order("openai", &order);
+    store.mark_profile_failed("openai-a", Some(600));
+
+    let active = store.active_profile_for_provider("openai").unwrap();
+    assert_eq!(active.id, "openai-b");
+}
+
+#[test]
+fn mark_profile_used_updates_last_good_and_usage_stats() {
+    let mut store = AuthProfileStore::default();
+    store
+        .upsert_profile(
+            AuthProfile {
+                id: "anthropic-main".into(),
+                provider: "anthropic".into(),
+                label: None,
+                api_key: Some("sk-ant".into()),
+                refresh_token: None,
+                auth_scheme: Some("api_key".into()),
+                oauth_source: None,
+                disabled: false,
+            },
+            false,
+        )
+        .unwrap();
+
+    store.mark_profile_failed("anthropic-main", Some(60));
+    store.mark_profile_used("anthropic", "anthropic-main");
+
+    assert_eq!(
+        store.last_good.get("anthropic").map(String::as_str),
+        Some("anthropic-main")
+    );
+    let stats = store.usage_stats.get("anthropic-main").unwrap();
+    assert_eq!(stats.error_count, 0);
+    assert!(stats.last_used_at.is_some());
+    assert!(stats.cooldown_until.is_none());
+}

@@ -46,6 +46,7 @@ pub(crate) fn canonical_provider_name(name: &str) -> String {
         "fireworks" | "fireworks-ai" => "fireworks".to_string(),
         "opencode" | "opencode-zen" => "opencode".to_string(),
         "copilot" | "github-copilot" => "copilot".to_string(),
+        "openai-codex" => "openai".to_string(),
         _ if normalized.starts_with("custom:") => "custom".to_string(),
         _ if normalized.starts_with("anthropic-custom:") => "anthropic-custom".to_string(),
         _ => normalized,

@@ -101,9 +101,9 @@ pub fn recover_oauth_profile_for_provider(config: &Config, provider: &str) -> Re
         }
     }
 
-    if changed {
-        store.save_for_config(config)?;
-    }
+    let profile_id = store.profiles[index].id.clone();
+    store.mark_profile_used(&canonical, &profile_id);
+    store.save_for_config(config)?;
 
     Ok(changed)
 }

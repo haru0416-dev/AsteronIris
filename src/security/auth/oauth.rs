@@ -69,6 +69,37 @@ pub(super) fn import_codex_oauth(skip_cli_login: bool) -> Result<ImportedOAuthCr
     })
 }
 
+pub(super) fn import_codex_oauth_cached() -> Option<ImportedOAuthCredential> {
+    let Ok(auth_file) = load_codex_auth_file() else {
+        return None;
+    };
+
+    let tokens = auth_file.tokens?;
+
+    let access_token = tokens
+        .access_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)?;
+
+    let refresh_token = tokens
+        .refresh_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned);
+
+    Some(ImportedOAuthCredential {
+        target_provider: "openai",
+        default_profile_id: "openai-codex-oauth-default",
+        default_label: "OAuth (codex login)",
+        source_name: "codex",
+        access_token,
+        refresh_token,
+    })
+}
+
 pub(super) fn import_claude_oauth(
     skip_cli_login: bool,
     setup_token: Option<String>,
@@ -108,6 +139,32 @@ pub(super) fn import_claude_oauth(
         access_token,
         refresh_token: None,
     })
+}
+
+pub(super) fn import_claude_oauth_cached() -> Result<Option<ImportedOAuthCredential>> {
+    let setup_token = std::env::var("ASTERONIRIS_CLAUDE_SETUP_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("ANTHROPIC_OAUTH_TOKEN").ok())
+        .and_then(|value| {
+            let trimmed = value.trim().to_string();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+        .or_else(|| try_capture_claude_setup_token().ok().flatten());
+
+    let Some(token) = setup_token else {
+        return Ok(None);
+    };
+
+    let access_token = normalize_claude_setup_token(&token)?;
+
+    Ok(Some(ImportedOAuthCredential {
+        target_provider: "anthropic",
+        default_profile_id: "anthropic-claude-oauth-default",
+        default_label: "OAuth (claude login)",
+        source_name: "claude",
+        access_token,
+        refresh_token: None,
+    }))
 }
 
 fn normalize_claude_setup_token(token: &str) -> Result<String> {
