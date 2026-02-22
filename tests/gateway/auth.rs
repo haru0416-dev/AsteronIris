@@ -25,6 +25,26 @@ impl GatewayTestServer {
         defense_mode: GatewayDefenseMode,
         defense_kill_switch: bool,
     ) -> Self {
+        Self::start_with_ttl(
+            require_pairing,
+            paired_tokens,
+            webhook_secret,
+            defense_mode,
+            defense_kill_switch,
+            2_592_000,
+        )
+        .await
+    }
+
+    #[allow(clippy::field_reassign_with_default)]
+    async fn start_with_ttl(
+        require_pairing: bool,
+        paired_tokens: Vec<String>,
+        webhook_secret: &str,
+        defense_mode: GatewayDefenseMode,
+        defense_kill_switch: bool,
+        token_ttl_secs: u64,
+    ) -> Self {
         let workspace = TempDir::new().expect("temp workspace should be created");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -43,6 +63,7 @@ impl GatewayTestServer {
         config.memory.auto_save = false;
         config.gateway.require_pairing = require_pairing;
         config.gateway.paired_tokens = paired_tokens;
+        config.gateway.token_ttl_secs = token_ttl_secs;
         config.gateway.defense_mode = defense_mode;
         config.gateway.defense_kill_switch = defense_kill_switch;
         config.channels_config.webhook = Some(WebhookConfig {
@@ -165,7 +186,7 @@ async fn gateway_auth_enforces_deny_and_allows_authorized_path() {
 }
 
 #[tokio::test]
-async fn gateway_audit_mode_records_violations_without_blocking() {
+async fn gateway_audit_mode_blocks_missing_bearer_token() {
     let server = GatewayTestServer::start(
         true,
         vec!["token-abc".to_string()],
@@ -178,11 +199,12 @@ async fn gateway_audit_mode_records_violations_without_blocking() {
 
     let response = client
         .post(server.url("/webhook"))
-        .json(&serde_json::json!({"persona_state": "missing message"}))
+        .header("Authorization", "Bearer token-abc")
+        .json(&serde_json::json!({"message": "hello"}))
         .send()
         .await
         .expect("audit mode request should complete");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body: Value = response
         .json()
         .await
@@ -190,12 +212,12 @@ async fn gateway_audit_mode_records_violations_without_blocking() {
     assert!(
         body.get("error")
             .and_then(Value::as_str)
-            .is_some_and(|msg| msg.contains("Invalid JSON"))
+            .is_some_and(|msg| msg.contains("X-Webhook-Secret"))
     );
 }
 
 #[tokio::test]
-async fn gateway_warn_mode_returns_warning_path_without_deny() {
+async fn gateway_warn_mode_still_blocks_missing_bearer_token() {
     let server = GatewayTestServer::start(
         true,
         vec!["token-abc".to_string()],
@@ -208,25 +230,25 @@ async fn gateway_warn_mode_returns_warning_path_without_deny() {
 
     let response = client
         .post(server.url("/webhook"))
+        .header("Authorization", "Bearer token-abc")
         .json(&serde_json::json!({"message": "hello"}))
         .send()
         .await
         .expect("warn mode request should complete");
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body: Value = response
         .json()
         .await
         .expect("warn mode response should be json");
-    assert_eq!(body.get("mode"), Some(&Value::String("warn".to_string())));
-    assert_eq!(
-        body.get("warning"),
-        Some(&Value::String("missing_or_invalid_bearer".to_string()))
+    assert!(
+        body.get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("X-Webhook-Secret"))
     );
-    assert_eq!(body.get("blocked"), Some(&Value::Bool(false)));
 }
 
 #[tokio::test]
-async fn gateway_kill_switch_forces_non_blocking_path() {
+async fn gateway_kill_switch_does_not_bypass_authentication() {
     let server = GatewayTestServer::start(
         true,
         vec!["token-abc".to_string()],
@@ -239,11 +261,12 @@ async fn gateway_kill_switch_forces_non_blocking_path() {
 
     let response = client
         .post(server.url("/webhook"))
-        .json(&serde_json::json!({"persona_state": "missing message"}))
+        .header("Authorization", "Bearer token-abc")
+        .json(&serde_json::json!({"message": "hello"}))
         .send()
         .await
         .expect("kill-switch mode request should complete");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body: Value = response
         .json()
         .await
@@ -251,13 +274,13 @@ async fn gateway_kill_switch_forces_non_blocking_path() {
     assert!(
         body.get("error")
             .and_then(Value::as_str)
-            .is_some_and(|msg| msg.contains("Invalid JSON"))
+            .is_some_and(|msg| msg.contains("X-Webhook-Secret"))
     );
 }
 
 #[test]
 fn pairing_lifecycle_covers_success_failure_and_token_authentication() {
-    let guard = PairingGuard::new(true, &[]);
+    let guard = PairingGuard::new(true, &[], None);
     let code = guard
         .pairing_code()
         .expect("pairing code should exist with pairing enabled and no tokens");
@@ -450,6 +473,32 @@ async fn gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths() {
             .and_then(Value::as_str)
             .is_some_and(|msg| msg.contains("Invalid JSON"))
     );
+}
+
+#[tokio::test]
+async fn gateway_rejects_expired_persisted_token_from_config_ttl() {
+    let server = GatewayTestServer::start_with_ttl(
+        true,
+        vec!["token-abc".to_string()],
+        "gateway-shared-secret",
+        GatewayDefenseMode::Enforce,
+        false,
+        0,
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .get(server.url("/health"))
+        .send()
+        .await
+        .expect("health request should complete");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response
+        .json()
+        .await
+        .expect("health response should be json");
+    assert_eq!(body.get("paired"), Some(&Value::Bool(false)));
 }
 
 struct CountingObserver {

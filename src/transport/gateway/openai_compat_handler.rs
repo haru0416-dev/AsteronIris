@@ -17,8 +17,9 @@ pub async fn handle_chat_completions(
     headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse {
+    let auth_disabled = state.openai_compat_api_keys.is_none();
     let api_keys = state.openai_compat_api_keys.as_deref().unwrap_or(&[]);
-    if !validate_api_key(&headers, api_keys) {
+    if !validate_api_key(&headers, api_keys, auth_disabled) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({

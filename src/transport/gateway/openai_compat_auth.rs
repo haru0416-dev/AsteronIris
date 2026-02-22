@@ -1,8 +1,12 @@
 use axum::http::HeaderMap;
 
-pub fn validate_api_key(headers: &HeaderMap, valid_keys: &[String]) -> bool {
-    if valid_keys.is_empty() {
+pub fn validate_api_key(headers: &HeaderMap, valid_keys: &[String], auth_disabled: bool) -> bool {
+    if auth_disabled {
         return true;
+    }
+
+    if valid_keys.is_empty() {
+        return false;
     }
 
     let auth_header = headers
@@ -20,9 +24,15 @@ mod tests {
     use axum::http::HeaderMap;
 
     #[test]
-    fn empty_keys_allow_access() {
+    fn empty_keys_deny_access() {
         let headers = HeaderMap::new();
-        assert!(validate_api_key(&headers, &[]));
+        assert!(!validate_api_key(&headers, &[], false));
+    }
+
+    #[test]
+    fn auth_disabled_explicitly_allows_access() {
+        let headers = HeaderMap::new();
+        assert!(validate_api_key(&headers, &[], true));
     }
 
     #[test]
@@ -31,7 +41,7 @@ mod tests {
         headers.insert("authorization", "Bearer test-key".parse().unwrap());
         let valid_keys = vec!["test-key".to_string()];
 
-        assert!(validate_api_key(&headers, &valid_keys));
+        assert!(validate_api_key(&headers, &valid_keys, false));
     }
 
     #[test]
@@ -40,7 +50,7 @@ mod tests {
         headers.insert("authorization", "Bearer wrong-key".parse().unwrap());
         let valid_keys = vec!["test-key".to_string()];
 
-        assert!(!validate_api_key(&headers, &valid_keys));
+        assert!(!validate_api_key(&headers, &valid_keys, false));
     }
 
     #[test]
@@ -48,7 +58,7 @@ mod tests {
         let headers = HeaderMap::new();
         let valid_keys = vec!["test-key".to_string()];
 
-        assert!(!validate_api_key(&headers, &valid_keys));
+        assert!(!validate_api_key(&headers, &valid_keys, false));
     }
 
     #[test]
@@ -57,6 +67,6 @@ mod tests {
         headers.insert("authorization", "Token test-key".parse().unwrap());
         let valid_keys = vec!["test-key".to_string()];
 
-        assert!(!validate_api_key(&headers, &valid_keys));
+        assert!(!validate_api_key(&headers, &valid_keys, false));
     }
 }

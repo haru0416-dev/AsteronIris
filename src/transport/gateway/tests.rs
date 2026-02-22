@@ -304,7 +304,7 @@ async fn webhook_policy_blocks_when_action_limit_is_exhausted() {
         mem,
         auto_save: false,
         webhook_secret: Some(Arc::from("test-secret")),
-        pairing: Arc::new(PairingGuard::new(false, &[])),
+        pairing: Arc::new(PairingGuard::new(false, &[], None)),
         whatsapp: None,
         whatsapp_app_secret: None,
         defense_mode: GatewayDefenseMode::Enforce,
@@ -330,6 +330,50 @@ async fn webhook_policy_blocks_when_action_limit_is_exhausted() {
     .into_response();
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn webhook_audit_mode_still_blocks_missing_bearer_when_paired() {
+    let tmp = TempDir::new().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn Provider> = Arc::new(CountingProvider {
+        calls: calls.clone(),
+    });
+    let mem: Arc<dyn Memory> = Arc::new(crate::core::memory::MarkdownMemory::new(tmp.path()));
+
+    let state = AppState {
+        provider,
+        registry: test_registry(),
+        rate_limiter: test_rate_limiter(),
+        max_tool_loop_iterations: 10,
+        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
+        model: "test-model".to_string(),
+        temperature: 0.0,
+        openai_compat_api_keys: None,
+        mem,
+        auto_save: false,
+        webhook_secret: None,
+        pairing: Arc::new(PairingGuard::new(true, &["valid-token".to_string()], None)),
+        whatsapp: None,
+        whatsapp_app_secret: None,
+        defense_mode: GatewayDefenseMode::Audit,
+        defense_kill_switch: false,
+        security: Arc::new(SecurityPolicy::default()),
+        replay_guard: Arc::new(ReplayGuard::new()),
+    };
+
+    let response = handle_webhook(
+        State(state),
+        HeaderMap::new(),
+        Ok(Json(WebhookBody {
+            message: "hello".to_string(),
+        })),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -394,7 +438,7 @@ fn effective_defense_mode_kill_switch_forces_audit() {
         mem,
         auto_save: false,
         webhook_secret: None,
-        pairing: Arc::new(PairingGuard::new(false, &[])),
+        pairing: Arc::new(PairingGuard::new(false, &[], None)),
         whatsapp: None,
         whatsapp_app_secret: None,
         defense_mode: GatewayDefenseMode::Enforce,
@@ -479,7 +523,7 @@ fn make_test_state(pairing: PairingGuard) -> AppState {
 
 #[tokio::test]
 async fn handle_health_returns_ok_with_unpaired_state() {
-    let state = make_test_state(PairingGuard::new(false, &[]));
+    let state = make_test_state(PairingGuard::new(false, &[], None));
     let response = handle_health(State(state)).await.into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -492,7 +536,7 @@ async fn handle_health_returns_ok_with_unpaired_state() {
 
 #[tokio::test]
 async fn handle_health_reflects_paired_when_tokens_exist() {
-    let state = make_test_state(PairingGuard::new(true, &["tok".to_string()]));
+    let state = make_test_state(PairingGuard::new(true, &["tok".to_string()], None));
     let response = handle_health(State(state)).await.into_response();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -522,7 +566,7 @@ fn make_whatsapp_state() -> AppState {
         mem: Arc::new(crate::core::memory::MarkdownMemory::new(tmp.path())),
         auto_save: false,
         webhook_secret: None,
-        pairing: Arc::new(PairingGuard::new(false, &[])),
+        pairing: Arc::new(PairingGuard::new(false, &[], None)),
         whatsapp: Some(Arc::new(WhatsAppChannel::new(
             "access-token".to_string(),
             "phone-id".to_string(),
@@ -607,7 +651,7 @@ async fn whatsapp_verify_rejects_missing_challenge() {
 
 #[tokio::test]
 async fn whatsapp_verify_returns_404_when_not_configured() {
-    let state = make_test_state(PairingGuard::new(false, &[]));
+    let state = make_test_state(PairingGuard::new(false, &[], None));
     let response = handle_whatsapp_verify(
         State(state),
         Query(WhatsAppVerifyQuery {
@@ -627,7 +671,7 @@ async fn whatsapp_verify_returns_404_when_not_configured() {
 
 #[tokio::test]
 async fn whatsapp_message_404_when_not_configured() {
-    let state = make_test_state(PairingGuard::new(false, &[]));
+    let state = make_test_state(PairingGuard::new(false, &[], None));
     let response = handle_whatsapp_message(State(state), HeaderMap::new(), Bytes::new())
         .await
         .into_response();

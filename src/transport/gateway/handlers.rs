@@ -18,8 +18,8 @@ use super::autosave::{
     gateway_whatsapp_autosave_event,
 };
 use super::defense::{
-    PolicyViolation, apply_external_ingress_policy, policy_accounting_response,
-    policy_violation_response,
+    PolicyViolation, apply_external_ingress_policy, must_enforce_auth_violation,
+    policy_accounting_response, policy_violation_response,
 };
 use super::signature::verify_whatsapp_signature;
 use super::{AppState, WebhookBody, WhatsAppVerifyQuery};
@@ -265,11 +265,11 @@ pub(super) async fn handle_webhook(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         let token = auth.strip_prefix("Bearer ").unwrap_or("");
-        if !state.pairing.is_authenticated(token)
-            && let Some(response) =
-                policy_violation_response(&state, PolicyViolation::MissingOrInvalidBearer)
-        {
-            return response;
+        if !state.pairing.is_authenticated(token) {
+            let violation = PolicyViolation::MissingOrInvalidBearer;
+            if must_enforce_auth_violation(&state, violation) {
+                return violation.enforce_response();
+            }
         }
     }
 
@@ -281,11 +281,9 @@ pub(super) async fn handle_webhook(
         match header_val {
             Some(val) if constant_time_eq(val, secret.as_ref()) => {}
             _ => {
-                if let Some(response) = policy_violation_response(
-                    &state,
-                    PolicyViolation::MissingOrInvalidWebhookSecret,
-                ) {
-                    return response;
+                let violation = PolicyViolation::MissingOrInvalidWebhookSecret;
+                if must_enforce_auth_violation(&state, violation) {
+                    return violation.enforce_response();
                 }
             }
         }

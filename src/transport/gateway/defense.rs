@@ -32,6 +32,13 @@ pub(super) enum PolicyViolation {
 }
 
 impl PolicyViolation {
+    pub(super) fn is_auth_violation(self) -> bool {
+        matches!(
+            self,
+            Self::MissingOrInvalidBearer | Self::MissingOrInvalidWebhookSecret
+        )
+    }
+
     pub(super) fn reason(self) -> &'static str {
         match self {
             Self::MissingOrInvalidBearer => "missing_or_invalid_bearer",
@@ -74,6 +81,11 @@ pub(super) fn policy_violation_response(
     state: &AppState,
     violation: PolicyViolation,
 ) -> Option<(StatusCode, Json<serde_json::Value>)> {
+    debug_assert!(
+        !violation.is_auth_violation(),
+        "auth violations must be handled by must_enforce_auth_violation"
+    );
+
     let mode = effective_defense_mode(state);
     let reason = violation.reason();
     match mode {
@@ -109,6 +121,39 @@ pub(super) fn policy_violation_response(
             Some(violation.enforce_response())
         }
     }
+}
+
+pub(super) fn must_enforce_auth_violation(state: &AppState, violation: PolicyViolation) -> bool {
+    debug_assert!(violation.is_auth_violation());
+
+    let mode = effective_defense_mode(state);
+    let reason = violation.reason();
+
+    match mode {
+        GatewayDefenseMode::Audit => {
+            tracing::warn!(
+                mode = "audit",
+                violation = reason,
+                "Authentication violation blocked (audit mode logging)"
+            );
+        }
+        GatewayDefenseMode::Warn => {
+            tracing::warn!(
+                mode = "warn",
+                violation = reason,
+                "Authentication violation blocked (warn mode logging)"
+            );
+        }
+        GatewayDefenseMode::Enforce => {
+            tracing::warn!(
+                mode = "enforce",
+                violation = reason,
+                "Authentication violation blocked"
+            );
+        }
+    }
+
+    true
 }
 
 pub(super) fn policy_accounting_response(
