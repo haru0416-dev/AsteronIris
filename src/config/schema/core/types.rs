@@ -85,6 +85,8 @@ pub struct IdentityConfig {
     #[serde(default = "default_identity_format")]
     pub format: String,
     #[serde(default)]
+    pub person_id: Option<String>,
+    #[serde(default)]
     pub aieos_path: Option<String>,
     #[serde(default)]
     pub aieos_inline: Option<String>,
@@ -98,6 +100,7 @@ impl Default for IdentityConfig {
     fn default() -> Self {
         Self {
             format: default_identity_format(),
+            person_id: None,
             aieos_path: None,
             aieos_inline: None,
         }

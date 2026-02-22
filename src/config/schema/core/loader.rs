@@ -31,14 +31,16 @@ impl Config {
                 config.save()?;
             }
 
+            config.apply_env_overrides();
             config.validate_autonomy_controls()?;
             Ok(config)
         } else {
-            let config = Self {
+            let mut config = Self {
                 config_path: config_path.clone(),
                 workspace_dir: asteroniris_dir.join("workspace"),
                 ..Self::default()
             };
+            config.apply_env_overrides();
             config.validate_autonomy_controls()?;
             config.save()?;
             Ok(config)
