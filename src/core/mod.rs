@@ -5,4 +5,5 @@ pub mod persona;
 pub mod planner;
 pub mod providers;
 pub mod sessions;
+pub mod subagents;
 pub mod tools;

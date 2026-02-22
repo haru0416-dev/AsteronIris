@@ -5,7 +5,7 @@ pub use super::memory_types::{
     ForgetArtifactRequirement, ForgetMode, ForgetOutcome, ForgetStatus, MemoryCapabilityMatrix,
     MemoryCategory, MemoryEntry, MemoryEvent, MemoryEventInput, MemoryEventType,
     MemoryInferenceEvent, MemoryLayer, MemoryProvenance, MemoryRecallItem, MemorySource,
-    PrivacyLevel, RecallQuery,
+    PrivacyLevel, RecallQuery, SignalTier, SourceKind,
 };
 
 #[async_trait]
@@ -30,6 +30,9 @@ pub trait Memory: Send + Sync {
         Ok(persisted)
     }
     async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>>;
+    async fn recall_phased(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
+        self.recall_scoped(query).await
+    }
     async fn resolve_slot(
         &self,
         entity_id: &str,

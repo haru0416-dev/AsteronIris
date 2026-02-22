@@ -20,6 +20,8 @@ pub enum MemorySource {
     ToolVerified,
     System,
     Inferred,
+    ExternalPrimary,
+    ExternalSecondary,
 }
 
 impl MemorySource {
@@ -30,6 +32,8 @@ impl MemorySource {
             Self::ToolVerified => 0.9,
             Self::System => 0.8,
             Self::Inferred => 0.7,
+            Self::ExternalPrimary => 0.75,
+            Self::ExternalSecondary => 0.5,
         }
     }
 }
@@ -81,6 +85,30 @@ pub enum MemoryLayer {
     Semantic,
     Procedural,
     Identity,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, strum::Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum SignalTier {
+    Raw,
+    Belief,
+    Inferred,
+    Governance,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, strum::Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum SourceKind {
+    Conversation,
+    Discord,
+    Telegram,
+    Slack,
+    Api,
+    News,
+    Document,
+    Manual,
 }
 
 const fn default_memory_event_input_layer() -> MemoryLayer {
@@ -146,6 +174,12 @@ pub struct MemoryEventInput {
     pub importance: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<MemoryProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal_tier: Option<SignalTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<SourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ref: Option<String>,
     pub privacy_level: PrivacyLevel,
     pub occurred_at: String,
 }
@@ -169,6 +203,9 @@ impl MemoryEventInput {
             confidence: source.default_confidence(),
             importance: 0.5,
             provenance: None,
+            signal_tier: None,
+            source_kind: None,
+            source_ref: None,
             privacy_level,
             occurred_at: chrono::Utc::now().to_rfc3339(),
         }
@@ -199,7 +236,24 @@ impl MemoryEventInput {
         self
     }
 
+    pub fn with_signal_tier(mut self, signal_tier: SignalTier) -> Self {
+        self.signal_tier = Some(signal_tier);
+        self
+    }
+
+    pub fn with_source_kind(mut self, source_kind: SourceKind) -> Self {
+        self.source_kind = Some(source_kind);
+        self
+    }
+
+    pub fn with_source_ref(mut self, source_ref: impl Into<String>) -> Self {
+        self.source_ref = Some(source_ref.into());
+        self
+    }
+
     pub fn normalize_for_ingress(mut self) -> anyhow::Result<Self> {
+        self.entity_id = normalize_entity_id(&self.entity_id)?;
+        self.slot_key = normalize_slot_key(&self.slot_key)?;
         self.confidence = normalize_score(self.confidence, "memory_event_input.confidence")?;
         self.importance = normalize_score(self.importance, "memory_event_input.importance")?;
         if let Some(provenance) = &self.provenance {
@@ -231,6 +285,63 @@ fn normalize_score(score: f64, field: &str) -> anyhow::Result<f64> {
         anyhow::bail!("{field} must be finite");
     }
     Ok(score.clamp(0.0, 1.0))
+}
+
+fn normalize_entity_id(raw: &str) -> anyhow::Result<String> {
+    let normalized = normalize_identifier(raw, false);
+    if normalized.is_empty() {
+        anyhow::bail!("memory_event_input.entity_id must not be empty");
+    }
+    if normalized.len() > 128 {
+        anyhow::bail!("memory_event_input.entity_id must be <= 128 chars");
+    }
+    Ok(normalized)
+}
+
+fn normalize_slot_key(raw: &str) -> anyhow::Result<String> {
+    let normalized = normalize_identifier(raw, true);
+    if normalized.is_empty() {
+        anyhow::bail!("memory_event_input.slot_key must not be empty");
+    }
+    if normalized.len() > 256 {
+        anyhow::bail!("memory_event_input.slot_key must be <= 256 chars");
+    }
+    if !is_valid_slot_key_pattern(&normalized) {
+        anyhow::bail!("memory_event_input.slot_key must match taxonomy pattern");
+    }
+    Ok(normalized)
+}
+
+fn is_valid_slot_key_pattern(slot_key: &str) -> bool {
+    let mut chars = slot_key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() {
+        return false;
+    }
+
+    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | ':' | '/'))
+}
+
+fn normalize_identifier(raw: &str, allow_slash: bool) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut last_underscore = false;
+
+    for ch in raw.trim().chars() {
+        let allowed = ch.is_ascii_alphanumeric()
+            || matches!(ch, '.' | '_' | '-' | ':')
+            || (allow_slash && ch == '/');
+        if allowed {
+            out.push(ch);
+            last_underscore = false;
+        } else if !last_underscore {
+            out.push('_');
+            last_underscore = true;
+        }
+    }
+
+    out.trim_matches('_').to_string()
 }
 
 fn validate_provenance(source: MemorySource, provenance: &MemoryProvenance) -> anyhow::Result<()> {
@@ -415,6 +526,9 @@ impl MemoryInferenceEvent {
                 confidence,
                 importance,
                 provenance: None,
+                signal_tier: None,
+                source_kind: None,
+                source_ref: None,
                 privacy_level,
                 occurred_at,
             },
@@ -437,6 +551,9 @@ impl MemoryInferenceEvent {
                 confidence,
                 importance,
                 provenance: None,
+                signal_tier: None,
+                source_kind: None,
+                source_ref: None,
                 privacy_level,
                 occurred_at,
             },
@@ -525,6 +642,7 @@ pub enum ForgetStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ForgetArtifact {
     Slot,
+    RetrievalUnits,
     RetrievalDocs,
     ProjectionDocs,
     Caches,
@@ -590,7 +708,12 @@ impl ForgetMode {
     #[must_use]
     pub const fn artifact_requirement(self, artifact: ForgetArtifact) -> ForgetArtifactRequirement {
         match (self, artifact) {
-            (Self::Soft, ForgetArtifact::Slot | ForgetArtifact::RetrievalDocs)
+            (
+                Self::Soft,
+                ForgetArtifact::Slot
+                | ForgetArtifact::RetrievalUnits
+                | ForgetArtifact::RetrievalDocs,
+            )
             | (Self::Tombstone, ForgetArtifact::Slot) => {
                 ForgetArtifactRequirement::MustBeNonRetrievable
             }
@@ -603,13 +726,15 @@ impl ForgetMode {
             (
                 Self::Hard,
                 ForgetArtifact::Slot
+                | ForgetArtifact::RetrievalUnits
                 | ForgetArtifact::RetrievalDocs
                 | ForgetArtifact::ProjectionDocs
                 | ForgetArtifact::Caches,
             )
             | (
                 Self::Tombstone,
-                ForgetArtifact::RetrievalDocs
+                ForgetArtifact::RetrievalUnits
+                | ForgetArtifact::RetrievalDocs
                 | ForgetArtifact::ProjectionDocs
                 | ForgetArtifact::Caches,
             ) => ForgetArtifactRequirement::MustBeAbsent,
@@ -764,5 +889,60 @@ mod tests {
             }
             _ => panic!("Expected Custom variant"),
         }
+    }
+
+    #[test]
+    fn normalize_for_ingress_sanitizes_entity_and_slot() {
+        let input = MemoryEventInput::new(
+            " person:User / A ",
+            "external.channel.discord.user/1?x",
+            MemoryEventType::FactAdded,
+            "v",
+            MemorySource::ExplicitUser,
+            PrivacyLevel::Private,
+        );
+
+        let normalized = input.normalize_for_ingress().unwrap();
+        assert_eq!(normalized.entity_id, "person:User_A");
+        assert_eq!(normalized.slot_key, "external.channel.discord.user/1_x");
+    }
+
+    #[test]
+    fn normalize_for_ingress_rejects_empty_identifiers() {
+        let input = MemoryEventInput::new(
+            "   ",
+            "slot",
+            MemoryEventType::FactAdded,
+            "v",
+            MemorySource::ExplicitUser,
+            PrivacyLevel::Private,
+        );
+        let err = input.normalize_for_ingress().unwrap_err().to_string();
+        assert!(err.contains("entity_id"));
+
+        let input = MemoryEventInput::new(
+            "entity",
+            "   ",
+            MemoryEventType::FactAdded,
+            "v",
+            MemorySource::ExplicitUser,
+            PrivacyLevel::Private,
+        );
+        let err = input.normalize_for_ingress().unwrap_err().to_string();
+        assert!(err.contains("slot_key"));
+    }
+
+    #[test]
+    fn normalize_for_ingress_rejects_invalid_slot_key_pattern() {
+        let input = MemoryEventInput::new(
+            "entity",
+            ".invalid-slot",
+            MemoryEventType::FactAdded,
+            "v",
+            MemorySource::ExplicitUser,
+            PrivacyLevel::Private,
+        );
+        let err = input.normalize_for_ingress().unwrap_err().to_string();
+        assert!(err.contains("slot_key must match taxonomy pattern"));
     }
 }

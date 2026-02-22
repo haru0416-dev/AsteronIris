@@ -4,6 +4,7 @@ pub mod consolidation;
 pub mod embeddings;
 mod factory;
 pub mod hygiene;
+pub mod ingestion;
 #[cfg(feature = "vector-search")]
 pub mod lancedb;
 pub mod markdown;
@@ -24,6 +25,7 @@ pub use consolidation::{
 };
 #[allow(unused_imports)]
 pub use factory::{create_memory, persist_inference_events};
+pub use ingestion::{IngestionPipeline, IngestionResult, SignalEnvelope, SqliteIngestionPipeline};
 #[cfg(feature = "vector-search")]
 pub use lancedb::LanceDbMemory;
 pub use markdown::MarkdownMemory;
@@ -33,7 +35,7 @@ pub use memory_types::{
     ForgetArtifactRequirement, ForgetMode, ForgetOutcome, ForgetStatus, MemoryCapabilityMatrix,
     MemoryCategory, MemoryEntry, MemoryEvent, MemoryEventInput, MemoryEventType,
     MemoryInferenceEvent, MemoryProvenance, MemoryRecallItem, MemorySource, PrivacyLevel,
-    RecallQuery,
+    RecallQuery, SignalTier, SourceKind,
 };
 pub use sqlite::SqliteMemory;
 pub use traits::Memory;
