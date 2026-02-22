@@ -172,6 +172,7 @@ async fn tool_loop_single_call() {
             temperature: 0.0,
             ctx: &ctx,
             stream_sink: None,
+            conversation_history: &[],
         })
         .await
         .expect("tool loop should run");
@@ -214,6 +215,7 @@ async fn tool_loop_chain() {
             temperature: 0.0,
             ctx: &ctx,
             stream_sink: None,
+            conversation_history: &[],
         })
         .await
         .expect("tool loop should run");
@@ -248,6 +250,7 @@ async fn tool_loop_max_iterations() {
             temperature: 0.0,
             ctx: &ctx,
             stream_sink: None,
+            conversation_history: &[],
         })
         .await
         .expect("tool loop should run");
@@ -282,6 +285,7 @@ async fn tool_loop_hard_cap() {
             temperature: 0.0,
             ctx: &ctx,
             stream_sink: None,
+            conversation_history: &[],
         })
         .await
         .expect("tool loop should run");
@@ -311,6 +315,7 @@ async fn tool_loop_error_recovery() {
             temperature: 0.0,
             ctx: &ctx,
             stream_sink: None,
+            conversation_history: &[],
         })
         .await
         .expect("tool loop should run");
@@ -351,6 +356,7 @@ async fn tool_loop_no_tools() {
             temperature: 0.0,
             ctx: &ctx,
             stream_sink: None,
+            conversation_history: &[],
         })
         .await
         .expect("tool loop should run");

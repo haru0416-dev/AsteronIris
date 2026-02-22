@@ -28,7 +28,12 @@ fn persistence_for_workspace(workspace_dir: &Path) -> BackendCanonicalStateHeade
         state_mirror_filename: "STATE.md".to_string(),
         ..PersonaConfig::default()
     };
-    BackendCanonicalStateHeaderPersistence::new(memory, workspace_dir.to_path_buf(), persona)
+    BackendCanonicalStateHeaderPersistence::new(
+        memory,
+        workspace_dir.to_path_buf(),
+        persona,
+        "person-test",
+    )
 }
 
 #[tokio::test]

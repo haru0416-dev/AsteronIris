@@ -4,3 +4,5 @@ mod injection_guard;
 mod loop_continuity;
 #[path = "persona/scope_regression.rs"]
 mod scope_regression;
+#[path = "persona/self_task_flow.rs"]
+mod self_task_flow;

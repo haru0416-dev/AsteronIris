@@ -130,3 +130,99 @@ fn eval_gate_rejects_extra_columns() {
     assert!(message.contains("unexpected report columns"));
     assert!(message.contains("notes"));
 }
+
+#[test]
+fn eval_harness_includes_planner_memory_ingestion_suite() {
+    let suites = default_baseline_suites();
+    let report = EvalHarness::new(0xA57E_0024).run(&suites);
+
+    let suite = report
+        .suites
+        .iter()
+        .find(|suite| suite.suite == "planner-memory-ingestion")
+        .expect("planner-memory-ingestion suite should exist in baseline report");
+    assert_eq!(suite.case_count, 3);
+}
+
+#[test]
+fn eval_harness_summaries_are_sorted_by_suite_name() {
+    let suites = default_baseline_suites();
+    let report = EvalHarness::new(0xA57E_0025).run(&suites);
+
+    let mut sorted = report
+        .suites
+        .iter()
+        .map(|suite| suite.suite.clone())
+        .collect::<Vec<_>>();
+    let observed = sorted.clone();
+    sorted.sort();
+
+    assert_eq!(observed, sorted);
+}
+
+#[test]
+fn eval_harness_baseline_contains_all_required_suite_names() {
+    let suites = default_baseline_suites();
+    let planner_suite = suites
+        .iter()
+        .find(|suite| suite.name == "planner-memory-ingestion")
+        .expect("planner-memory-ingestion suite should exist");
+
+    let ids = planner_suite
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.id.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert!(ids.contains("planner-success-rate"));
+    assert!(ids.contains("memory-recall-precision"));
+    assert!(ids.contains("ingestion-throughput"));
+
+    let report = EvalHarness::new(0xA57E_0026).run(&suites);
+    assert!(
+        report
+            .suites
+            .iter()
+            .any(|suite| suite.suite == "planner-memory-ingestion")
+    );
+}
+
+#[test]
+fn default_baseline_suite_inventory_is_stable() {
+    let suites = default_baseline_suites();
+    let names = suites
+        .iter()
+        .map(|suite| suite.name)
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert_eq!(suites.len(), 3);
+    assert!(names.contains("autonomy-regression"));
+    assert!(names.contains("injection-defense-regression"));
+    assert!(names.contains("planner-memory-ingestion"));
+}
+
+#[test]
+fn eval_harness_is_deterministic_even_when_suite_input_order_changes() {
+    let suites = default_baseline_suites();
+    let mut reversed = suites.clone();
+    reversed.reverse();
+
+    let first = EvalHarness::new(0xA57E_0030).run(&suites);
+    let second = EvalHarness::new(0xA57E_0030).run(&reversed);
+
+    assert_eq!(first, second);
+    assert_eq!(first.summary_fingerprint, second.summary_fingerprint);
+}
+
+#[test]
+fn detect_seed_change_warning_reports_unchanged_fingerprint_branch() {
+    let suites = default_baseline_suites();
+    let previous = EvalHarness::new(0xA57E_0031).run(&suites);
+    let mut current = previous.clone();
+    current.seed = 0xA57E_0032;
+
+    let warning = detect_seed_change_warning(&previous, &current)
+        .expect("seed change should still return a warning message");
+    assert!(warning.contains("seed changed"));
+    assert!(warning.contains("summary fingerprint unchanged"));
+}

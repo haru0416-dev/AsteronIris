@@ -8,3 +8,5 @@ mod eval_harness;
 mod inventory_scope_lock;
 #[path = "project/planner_dag.rs"]
 mod planner_dag;
+#[path = "project/planner_integration.rs"]
+mod planner_integration;

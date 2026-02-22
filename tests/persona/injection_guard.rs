@@ -3,9 +3,7 @@ use std::sync::Arc;
 use asteroniris::config::PersonaConfig;
 use asteroniris::core::memory::{Memory, RecallQuery, SqliteMemory};
 use asteroniris::core::persona::state_header::StateHeaderV1;
-use asteroniris::core::persona::state_persistence::{
-    BackendCanonicalStateHeaderPersistence, CANONICAL_STATE_HEADER_KEY,
-};
+use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use asteroniris::security::writeback_guard::{
     ImmutableStateHeader, WritebackGuardVerdict, validate_writeback_payload,
 };
@@ -42,6 +40,7 @@ async fn prompt_injection_payload_is_rejected_and_writeback_is_not_persisted() {
         memory.clone(),
         workspace.path().to_path_buf(),
         PersonaConfig::default(),
+        "person-test",
     );
 
     let initial = seeded_state();
@@ -80,16 +79,19 @@ async fn prompt_injection_payload_is_rejected_and_writeback_is_not_persisted() {
     assert_eq!(canonical, initial);
 
     let writeback_entries = memory
-        .recall_scoped(RecallQuery::new("default", "persona.writeback.", 16))
+        .recall_scoped(RecallQuery::new(
+            "person:person-test",
+            "persona.writeback.",
+            16,
+        ))
         .await
         .unwrap();
     assert!(
-        memory
-            .resolve_slot("default", CANONICAL_STATE_HEADER_KEY)
+        persistence
+            .load_backend_canonical()
             .await
             .unwrap()
-            .is_some(),
-        "canonical state header entry should remain"
+            .is_some()
     );
     assert!(
         writeback_entries.is_empty(),

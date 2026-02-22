@@ -105,6 +105,7 @@ fn test_config(workspace_dir: &std::path::Path) -> Config {
     config.workspace_dir = workspace_dir.to_path_buf();
     config.memory.backend = "sqlite".to_string();
     config.memory.auto_save = false;
+    config.identity.person_id = Some("person-test".to_string());
     config.persona = PersonaConfig {
         enabled_main_session: true,
         ..PersonaConfig::default()
@@ -124,6 +125,7 @@ async fn autonomy_cycle_reflect_queue_verify_and_intent_seam_stays_bounded() {
         mem.clone(),
         config.workspace_dir.clone(),
         config.persona.clone(),
+        "person-test",
     );
     let initial = seeded_state();
     persistence
@@ -188,11 +190,10 @@ async fn autonomy_cycle_reflect_queue_verify_and_intent_seam_stays_bounded() {
             &config, &security, &queued[0],
         )
         .await;
-    assert!(!executed);
-    assert_eq!(
-        output,
-        "route=agent-no-direct-shell\nblocked by security policy: agent jobs cannot execute direct shell path"
-    );
+    assert!(executed, "{output}");
+    assert!(output.contains("route=agent-planner"), "{output}");
+    assert!(output.contains("success=true"), "{output}");
+    assert!(output.contains("retry_limit_reached=false"), "{output}");
 
     let lifecycle_count = Arc::new(AtomicUsize::new(0));
     let observer = LifecycleCounter {
