@@ -61,7 +61,7 @@ impl SkillForge {
         let mut candidates: Vec<ScoutResult> = Vec::new();
 
         for src in &self.config.sources {
-            let source: ScoutSource = src.parse().unwrap(); // Infallible
+            let source: ScoutSource = src.parse().unwrap_or(ScoutSource::GitHub); // ScoutSource::from_str is infallible
             match source {
                 ScoutSource::GitHub => {
                     let scout = GitHubScout::new(self.config.github_token.as_deref());

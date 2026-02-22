@@ -57,14 +57,15 @@ pub struct IntegrationCapabilityDrift {
 
 impl ScopeLockInventory {
     pub fn to_json_pretty(&self) -> String {
-        serde_json::to_string_pretty(self).expect("ScopeLockInventory serialization is infallible")
+        // Derive(Serialize) structs with only primitive/string fields cannot fail.
+        serde_json::to_string_pretty(self).unwrap_or_default()
     }
 }
 
 impl IntegrationCapabilityMatrix {
     pub fn to_json_pretty(&self) -> String {
-        serde_json::to_string_pretty(self)
-            .expect("IntegrationCapabilityMatrix serialization is infallible")
+        // Derive(Serialize) structs with only primitive/string fields cannot fail.
+        serde_json::to_string_pretty(self).unwrap_or_default()
     }
 }
 

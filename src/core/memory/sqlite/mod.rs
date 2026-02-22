@@ -167,9 +167,7 @@ impl SqliteMemory {
         format!(
             "{:016x}",
             u64::from_be_bytes(
-                hash[..8]
-                    .try_into()
-                    .expect("SHA-256 always produces >= 8 bytes")
+                hash[..8].try_into().unwrap_or([0u8; 8]) // SHA-256 always yields ≥8 bytes; fallback is unreachable
             )
         )
     }
