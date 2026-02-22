@@ -97,6 +97,30 @@ pub enum Commands {
     /// Show system status (full details)
     Status,
 
+    /// Run deterministic evaluation harness baseline suites
+    Eval {
+        /// Deterministic RNG seed
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+
+        /// Optional evidence slug (writes .sisyphus/evidence files when set)
+        #[arg(long)]
+        evidence_slug: Option<String>,
+    },
+
+    Evolve {
+        #[arg(long)]
+        apply: bool,
+    },
+
+    Model {
+        #[arg(long)]
+        set: String,
+
+        #[arg(long)]
+        provider: Option<String>,
+    },
+
     /// Configure and manage scheduled tasks
     Cron {
         #[command(subcommand)]
@@ -130,11 +154,35 @@ pub enum Commands {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, Commands};
     use clap::CommandFactory;
+    use clap::Parser;
 
     #[test]
     fn cli_definition_has_no_flag_conflicts() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn parse_eval_command_with_seed_and_slug() {
+        let cli = Cli::parse_from([
+            "asteroniris",
+            "eval",
+            "--seed",
+            "99",
+            "--evidence-slug",
+            "baseline",
+        ]);
+
+        match cli.command {
+            Commands::Eval {
+                seed,
+                evidence_slug,
+            } => {
+                assert_eq!(seed, 99);
+                assert_eq!(evidence_slug.as_deref(), Some("baseline"));
+            }
+            other => panic!("expected eval command, got {other:?}"),
+        }
     }
 }
