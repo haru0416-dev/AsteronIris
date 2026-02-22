@@ -2,8 +2,10 @@ use super::traits::{Tool, ToolResult};
 use crate::core::memory::traits::MemoryLayer;
 use crate::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
+    SourceKind,
 };
 use crate::core::tools::middleware::ExecutionContext;
+use crate::security::writeback_guard::enforce_tool_memory_write_policy;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -115,7 +117,7 @@ impl Tool for MemoryStoreTool {
             "properties": {
                 "entity_id": {
                     "type": "string",
-                    "description": "Entity identifier"
+                    "description": "Entity identifier (defaults to current session entity)"
                 },
                 "slot_key": {
                     "type": "string",
@@ -166,25 +168,29 @@ impl Tool for MemoryStoreTool {
                     },
                     "required": ["source_class", "reference"]
                 },
+                "source_ref": {
+                    "type": "string",
+                    "description": "Optional write reference for policy traceability"
+                },
                 "privacy_level": {
                     "type": "string",
                     "enum": ["public", "private", "secret"],
                     "description": "Privacy label"
                 }
             },
-            "required": ["entity_id", "slot_key", "value"]
+            "required": ["slot_key", "value"]
         })
     }
 
     async fn execute(
         &self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
+        ctx: &ExecutionContext,
     ) -> anyhow::Result<ToolResult> {
         let entity_id = args
             .get("entity_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'entity_id' parameter"))?;
+            .unwrap_or(&ctx.entity_id);
 
         let value = args
             .get("value")
@@ -246,9 +252,25 @@ impl Tool for MemoryStoreTool {
             input = input.with_confidence(confidence);
         }
 
+        let source_ref = args
+            .get("source_ref")
+            .and_then(|v| v.as_str())
+            .map_or_else(|| "tool.memory_store".to_string(), ToString::to_string);
+
+        input = input
+            .with_source_kind(SourceKind::Manual)
+            .with_source_ref(source_ref);
+
         if let Some(provenance) = provenance {
             input = input.with_provenance(provenance);
+        } else {
+            input = input.with_provenance(MemoryProvenance::source_reference(
+                source,
+                "tool.memory_store",
+            ));
         }
+
+        enforce_tool_memory_write_policy(&input)?;
 
         match self.memory.append_event(input).await {
             Ok(event) => Ok(ToolResult {
@@ -331,15 +353,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_missing_key() {
+    async fn store_missing_entity_id_falls_back_to_ctx() {
         let (_tmp, mem) = test_mem();
         let tool = MemoryStoreTool::new(mem);
         let ctx =
             ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
             .execute(json!({"slot_key": "x", "value": "no key"}), &ctx)
-            .await;
-        assert!(result.is_err());
+            .await
+            .expect("should succeed with ctx.entity_id fallback");
+        assert!(result.success);
     }
 
     #[tokio::test]
@@ -350,6 +373,26 @@ mod tests {
             ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
         let result = tool
             .execute(json!({"entity_id": "no_content", "slot_key": "x"}), &ctx)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn store_rejects_secret_privacy_by_policy() {
+        let (_tmp, mem) = test_mem();
+        let tool = MemoryStoreTool::new(mem);
+        let ctx =
+            ExecutionContext::test_default(Arc::new(crate::security::SecurityPolicy::default()));
+        let result = tool
+            .execute(
+                json!({
+                    "entity_id": "policy",
+                    "slot_key": "note",
+                    "value": "x",
+                    "privacy_level": "secret"
+                }),
+                &ctx,
+            )
             .await;
         assert!(result.is_err());
     }

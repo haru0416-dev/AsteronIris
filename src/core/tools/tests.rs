@@ -336,7 +336,7 @@ fn all_tools_includes_memory_forget_when_enabled() {
 }
 
 #[test]
-fn all_tools_with_all_disabled_yields_empty() {
+fn all_tools_with_all_disabled_yields_only_always_on_tools() {
     let tmp = TempDir::new().unwrap();
     let security = Arc::new(SecurityPolicy::default());
     let mem_cfg = MemoryConfig {
@@ -356,9 +356,18 @@ fn all_tools_with_all_disabled_yields_empty() {
         memory_forget: ToolEntry { enabled: false },
         memory_governance: ToolEntry { enabled: false },
     };
-
     let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
-    assert_eq!(tools.len(), 0);
+    // Always-on tools: delegate, subagent_spawn, subagent_output, subagent_cancel
+    let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+    assert!(!names.contains(&"shell"));
+    assert!(!names.contains(&"file_read"));
+    assert!(!names.contains(&"memory_store"));
+    assert!(names.contains(&"delegate"));
+    assert_eq!(
+        tools.len(),
+        4,
+        "only always-on tools should remain: {names:?}"
+    );
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use super::{
-    ActionOperator, BrowserOpenTool, BrowserTool, ComposioTool, FileReadTool, FileWriteTool,
-    MemoryForgetTool, MemoryGovernanceTool, MemoryRecallTool, MemoryStoreTool, NoopOperator,
-    ShellTool, Tool,
+    ActionOperator, BrowserOpenTool, BrowserTool, ComposioTool, DelegateTool, FileReadTool,
+    FileWriteTool, MemoryForgetTool, MemoryGovernanceTool, MemoryRecallTool, MemoryStoreTool,
+    NoopOperator, ShellTool, SubagentCancelTool, SubagentOutputTool, SubagentSpawnTool, Tool,
 };
 use crate::config::schema::{McpConfig, ToolsConfig};
 use crate::core::memory::Memory;
@@ -55,6 +55,22 @@ pub fn tool_descriptions(
         (
             "memory_forget".to_string(),
             "Delete a memory entry. Use when: memory is incorrect/stale or explicitly requested for removal. Don't use when: impact is uncertain.".to_string(),
+        ),
+        (
+            "delegate".to_string(),
+            "Simple delegation interface with actions: run, status, list, cancel.".to_string(),
+        ),
+        (
+            "subagent_spawn".to_string(),
+            "Spawn an isolated sub-agent run for delegated work. Supports background and inline execution.".to_string(),
+        ),
+        (
+            "subagent_output".to_string(),
+            "Retrieve status and output for a delegated sub-agent run by run_id.".to_string(),
+        ),
+        (
+            "subagent_cancel".to_string(),
+            "Cancel a running delegated sub-agent by run_id.".to_string(),
         ),
     ];
 
@@ -166,6 +182,11 @@ pub fn all_tools(
     }
 
     append_mcp_tools(&mut tools, mcp_config);
+
+    tools.push(Box::new(DelegateTool::new()));
+    tools.push(Box::new(SubagentSpawnTool::new()));
+    tools.push(Box::new(SubagentOutputTool::new()));
+    tools.push(Box::new(SubagentCancelTool::new()));
 
     tools
 }

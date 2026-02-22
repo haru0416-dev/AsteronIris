@@ -34,7 +34,7 @@ impl MemoryRecallTool {
         let entity_id = args
             .get("entity_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'entity_id' parameter"))?;
+            .unwrap_or(&ctx.entity_id);
 
         let request = RecallQuery::new(entity_id, query, limit)
             .with_policy_context(ctx.tenant_context.clone());
@@ -63,7 +63,7 @@ impl Tool for MemoryRecallTool {
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "Entity id to scope recall"
+                    "description": "Entity id to scope recall (defaults to current session entity)"
                 },
                 "limit": {
                     "type": "integer",
@@ -83,7 +83,7 @@ impl Tool for MemoryRecallTool {
                     "additionalProperties": false
                 }
             },
-            "required": ["entity_id", "query"]
+            "required": ["query"]
         })
     }
 
