@@ -2,7 +2,9 @@ use super::memory_harness::append_test_event;
 use super::memory_harness::sqlite_fixture;
 use asteroniris::config::Config;
 use asteroniris::core::agent::loop_::build_context_for_integration;
-use asteroniris::core::agent::loop_::run_main_session_turn_for_integration_with_policy;
+use asteroniris::core::agent::loop_::{
+    IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
+};
 use asteroniris::core::memory::{Memory, MemoryCategory, RecallQuery};
 use asteroniris::core::providers::Provider;
 use asteroniris::core::tools::memory_recall::MemoryRecallTool;
@@ -301,19 +303,19 @@ async fn tenant_recall_e2e_same_tenant_paths() {
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
     let provider = CaptureProvider::new("ok");
 
-    let answer = run_main_session_turn_for_integration_with_policy(
-        &config,
-        &security,
-        memory,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.0,
-        "tenant-alpha:user-005",
+    let answer = run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+        config: &config,
+        security: &security,
+        mem: memory,
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.0,
+        entity_id: "tenant-alpha:user-005",
         policy_context,
-        "language",
-    )
+        user_message: "language",
+    })
     .await
     .unwrap();
 
@@ -422,21 +424,22 @@ async fn tenant_recall_e2e_cross_tenant_block() {
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
     let provider = CaptureProvider::new("ok");
 
-    let runtime_cross_err = run_main_session_turn_for_integration_with_policy(
-        &config,
-        &security,
-        memory.clone(),
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.0,
-        "tenant-beta:user-006",
-        tenant_alpha_context.clone(),
-        "timezone",
-    )
-    .await
-    .unwrap_err();
+    let runtime_cross_err =
+        run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+            config: &config,
+            security: &security,
+            mem: memory.clone(),
+            answer_provider: &provider,
+            reflect_provider: &provider,
+            system_prompt: "system",
+            model_name: "test-model",
+            temperature: 0.0,
+            entity_id: "tenant-beta:user-006",
+            policy_context: tenant_alpha_context.clone(),
+            user_message: "timezone",
+        })
+        .await
+        .unwrap_err();
     assert_eq!(
         runtime_cross_err.to_string(),
         format!(
@@ -444,21 +447,22 @@ async fn tenant_recall_e2e_cross_tenant_block() {
         )
     );
 
-    let runtime_default_err = run_main_session_turn_for_integration_with_policy(
-        &config,
-        &security,
-        memory,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.0,
-        "default",
-        tenant_alpha_context,
-        "timezone",
-    )
-    .await
-    .unwrap_err();
+    let runtime_default_err =
+        run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+            config: &config,
+            security: &security,
+            mem: memory,
+            answer_provider: &provider,
+            reflect_provider: &provider,
+            system_prompt: "system",
+            model_name: "test-model",
+            temperature: 0.0,
+            entity_id: "default",
+            policy_context: tenant_alpha_context,
+            user_message: "timezone",
+        })
+        .await
+        .unwrap_err();
     assert_eq!(
         runtime_default_err.to_string(),
         format!(

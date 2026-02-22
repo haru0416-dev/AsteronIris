@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use asteroniris::config::{Config, PersonaConfig};
 use asteroniris::core::agent::loop_::{
-    run_main_session_turn_for_integration, run_main_session_turn_for_integration_with_policy,
+    IntegrationTurnParams, run_main_session_turn_for_integration,
+    run_main_session_turn_for_integration_with_policy,
 };
 use asteroniris::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
@@ -155,17 +156,19 @@ async fn autonomy_cycle_reflect_queue_verify_and_intent_seam_stays_bounded() {
     .to_string())]);
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-    let response = run_main_session_turn_for_integration(
-        &config,
-        &security,
-        mem.clone(),
-        &answer_provider,
-        &reflect_provider,
-        "system",
-        "test-model",
-        0.4,
-        "run full bounded autonomy cycle",
-    )
+    let response = run_main_session_turn_for_integration(IntegrationTurnParams {
+        config: &config,
+        security: &security,
+        mem: mem.clone(),
+        answer_provider: &answer_provider,
+        reflect_provider: &reflect_provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.4,
+        entity_id: "default",
+        policy_context: TenantPolicyContext::disabled(),
+        user_message: "run full bounded autonomy cycle",
+    })
     .await
     .unwrap();
 
@@ -243,17 +246,19 @@ async fn verify_repair_escalates_with_policy_governance_under_retry_pressure() {
     ]);
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-    let err = run_main_session_turn_for_integration(
-        &config,
-        &security,
-        mem.clone(),
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.3,
-        "force bounded retries",
-    )
+    let err = run_main_session_turn_for_integration(IntegrationTurnParams {
+        config: &config,
+        security: &security,
+        mem: mem.clone(),
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.3,
+        entity_id: "default",
+        policy_context: TenantPolicyContext::disabled(),
+        user_message: "force bounded retries",
+    })
     .await
     .unwrap_err();
 
@@ -327,17 +332,19 @@ async fn external_content_injection_is_blocked_and_raw_payload_not_replayed_from
     let provider = SequenceProvider::new(vec![Ok("safe-response".to_string())]);
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-    let _ = run_main_session_turn_for_integration(
-        &config,
-        &security,
+    let _ = run_main_session_turn_for_integration(IntegrationTurnParams {
+        config: &config,
+        security: &security,
         mem,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.2,
-        attack,
-    )
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.2,
+        entity_id: "default",
+        policy_context: TenantPolicyContext::disabled(),
+        user_message: attack,
+    })
     .await
     .unwrap();
 
@@ -372,17 +379,19 @@ async fn public_integration_turn_happy_path() {
     let provider = SequenceProvider::new(vec![Ok("hello-response".to_string())]);
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-    let response = run_main_session_turn_for_integration(
-        &config,
-        &security,
+    let response = run_main_session_turn_for_integration(IntegrationTurnParams {
+        config: &config,
+        security: &security,
         mem,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.5,
-        "hello",
-    )
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.5,
+        entity_id: "default",
+        policy_context: TenantPolicyContext::disabled(),
+        user_message: "hello",
+    })
     .await
     .unwrap();
 
@@ -406,17 +415,19 @@ async fn public_integration_turn_propagates_error() {
     ]);
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-    let err = run_main_session_turn_for_integration(
-        &config,
-        &security,
+    let err = run_main_session_turn_for_integration(IntegrationTurnParams {
+        config: &config,
+        security: &security,
         mem,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.5,
-        "fail-me",
-    )
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.5,
+        entity_id: "default",
+        policy_context: TenantPolicyContext::disabled(),
+        user_message: "fail-me",
+    })
     .await
     .unwrap_err();
 
@@ -440,19 +451,19 @@ async fn public_integration_turn_with_policy_happy_path() {
     let provider = SequenceProvider::new(vec![Ok("policy-ok".to_string())]);
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-    let response = run_main_session_turn_for_integration_with_policy(
-        &config,
-        &security,
+    let response = run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+        config: &config,
+        security: &security,
         mem,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.5,
-        "tenant-a",
-        TenantPolicyContext::enabled("tenant-a"),
-        "hello with policy",
-    )
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.5,
+        entity_id: "tenant-a",
+        policy_context: TenantPolicyContext::enabled("tenant-a"),
+        user_message: "hello with policy",
+    })
     .await
     .unwrap();
 
@@ -473,19 +484,19 @@ async fn public_integration_turn_with_policy_scope_mismatch() {
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
     // entity_id "other-tenant" does not match tenant_id "tenant-a"
-    let result = run_main_session_turn_for_integration_with_policy(
-        &config,
-        &security,
+    let result = run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+        config: &config,
+        security: &security,
         mem,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.5,
-        "other-tenant",
-        TenantPolicyContext::enabled("tenant-a"),
-        "cross-tenant attempt",
-    )
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.5,
+        entity_id: "other-tenant",
+        policy_context: TenantPolicyContext::enabled("tenant-a"),
+        user_message: "cross-tenant attempt",
+    })
     .await;
 
     assert!(result.is_err(), "scope mismatch should produce an error");

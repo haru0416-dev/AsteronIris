@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use asteroniris::config::Config;
-use asteroniris::core::agent::loop_::run_main_session_turn_for_integration_with_policy;
+use asteroniris::core::agent::loop_::{
+    IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
+};
 use asteroniris::core::memory::traits::MemoryLayer;
 use asteroniris::core::memory::{
     CONSOLIDATION_SLOT_KEY, ConsolidationDisposition, ConsolidationInput, Memory, MemoryEventInput,
@@ -164,19 +166,19 @@ async fn memory_consolidation_runs_async_nonblocking() {
     let entity_id = "tenant-alpha:user-42";
 
     let start = Instant::now();
-    let response = run_main_session_turn_for_integration_with_policy(
-        &config,
-        &security,
+    let response = run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+        config: &config,
+        security: &security,
         mem,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.3,
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.3,
         entity_id,
-        TenantPolicyContext::enabled("tenant-alpha"),
-        "run turn quickly",
-    )
+        policy_context: TenantPolicyContext::enabled("tenant-alpha"),
+        user_message: "run turn quickly",
+    })
     .await
     .unwrap();
     let elapsed = start.elapsed();
@@ -219,19 +221,19 @@ async fn memory_consolidation_failure_isolated() {
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
     let entity_id = "tenant-alpha:user-99";
 
-    let response = run_main_session_turn_for_integration_with_policy(
-        &config,
-        &security,
-        mem.clone(),
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.3,
+    let response = run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+        config: &config,
+        security: &security,
+        mem: mem.clone(),
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.3,
         entity_id,
-        TenantPolicyContext::enabled("tenant-alpha"),
-        "keep answer path alive",
-    )
+        policy_context: TenantPolicyContext::enabled("tenant-alpha"),
+        user_message: "keep answer path alive",
+    })
     .await
     .unwrap();
 

@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use asteroniris::config::Config;
-use asteroniris::core::agent::loop_::run_main_session_turn_for_integration_with_policy;
+use asteroniris::core::agent::loop_::{
+    IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
+};
 use asteroniris::core::memory::{Memory, SqliteMemory};
 use asteroniris::core::providers::Provider;
 use asteroniris::security::SecurityPolicy;
@@ -62,19 +64,19 @@ async fn memory_autosave_includes_layer_provenance() {
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
     let entity_id = "tenant-alpha:user-42";
 
-    let response = run_main_session_turn_for_integration_with_policy(
-        &config,
-        &security,
+    let response = run_main_session_turn_for_integration_with_policy(IntegrationTurnParams {
+        config: &config,
+        security: &security,
         mem,
-        &provider,
-        &provider,
-        "system",
-        "test-model",
-        0.3,
+        answer_provider: &provider,
+        reflect_provider: &provider,
+        system_prompt: "system",
+        model_name: "test-model",
+        temperature: 0.3,
         entity_id,
-        TenantPolicyContext::enabled("tenant-alpha"),
-        "capture autosave metadata",
-    )
+        policy_context: TenantPolicyContext::enabled("tenant-alpha"),
+        user_message: "capture autosave metadata",
+    })
     .await
     .unwrap();
     assert!(response.contains("INFERRED_CLAIM"));
