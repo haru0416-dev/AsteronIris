@@ -30,6 +30,9 @@ pub struct GatewayConfig {
     pub defense_mode: GatewayDefenseMode,
     #[serde(default)]
     pub defense_kill_switch: bool,
+    /// Allowed CORS origins. Empty = deny all cross-origin requests (default).
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 fn default_gateway_port() -> u16 {
@@ -54,6 +57,7 @@ impl Default for GatewayConfig {
             paired_tokens: Vec::new(),
             defense_mode: GatewayDefenseMode::default(),
             defense_kill_switch: false,
+            cors_origins: Vec::new(),
         }
     }
 }
@@ -71,6 +75,7 @@ mod tests {
         assert!(config.require_pairing);
         assert!(!config.allow_public_bind);
         assert_eq!(config.defense_mode, GatewayDefenseMode::Enforce);
+        assert!(config.cors_origins.is_empty());
     }
 
     #[test]
@@ -100,6 +105,10 @@ mod tests {
             paired_tokens: vec!["alpha".into(), "beta".into()],
             defense_mode: GatewayDefenseMode::Warn,
             defense_kill_switch: true,
+            cors_origins: vec![
+                "https://example.com".into(),
+                "https://app.example.com".into(),
+            ],
         };
 
         let toml = toml::to_string(&original).unwrap();
@@ -112,5 +121,6 @@ mod tests {
         assert_eq!(decoded.paired_tokens, original.paired_tokens);
         assert_eq!(decoded.defense_mode, original.defense_mode);
         assert_eq!(decoded.defense_kill_switch, original.defense_kill_switch);
+        assert_eq!(decoded.cors_origins, original.cors_origins);
     }
 }

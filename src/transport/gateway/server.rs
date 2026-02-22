@@ -24,6 +24,7 @@ use axum::{
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
@@ -228,7 +229,7 @@ pub async fn run_gateway_with_listener(
         whatsapp_app_secret,
     );
 
-    let app = build_app(state);
+    let app = build_app(state, &config.gateway.cors_origins);
     axum::serve(listener, app)
         .await
         .context("serve HTTP gateway")?;
@@ -315,8 +316,8 @@ fn print_gateway_banner(
     println!("  {}\n", t!("gateway.stop_hint"));
 }
 
-fn build_app(state: AppState) -> Router {
-    Router::new()
+fn build_app(state: AppState, cors_origins: &[String]) -> Router {
+    let mut app = Router::new()
         .route("/health", get(handle_health))
         .route("/pair", post(handle_pair))
         .route("/webhook", post(handle_webhook))
@@ -329,5 +330,20 @@ fn build_app(state: AppState) -> Router {
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(REQUEST_TIMEOUT_SECS),
-        ))
+        ));
+
+    if !cors_origins.is_empty() {
+        let origins: Vec<_> = cors_origins.iter().filter_map(|o| o.parse().ok()).collect();
+        app = app.layer(
+            CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                ]),
+        );
+    }
+
+    app
 }
