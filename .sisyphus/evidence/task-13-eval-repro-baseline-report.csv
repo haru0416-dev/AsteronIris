@@ -1,3 +1,4 @@
 suite,success-rate,cost,latency,retries
 autonomy-regression,75.00%,$0.10,149ms,1.500
 injection-defense-regression,100.00%,$0.10,78ms,0.500
+planner-memory-ingestion,100.00%,$0.11,118ms,0.666

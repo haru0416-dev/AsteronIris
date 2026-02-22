@@ -16,7 +16,15 @@
       "avg_cost_cents": 10,
       "avg_latency_ms": 78,
       "avg_retries_milli": 500
+    },
+    {
+      "suite": "planner-memory-ingestion",
+      "case_count": 3,
+      "success_rate_bps": 10000,
+      "avg_cost_cents": 11,
+      "avg_latency_ms": 118,
+      "avg_retries_milli": 666
     }
   ],
-  "summary_fingerprint": 8654044261313886853
+  "summary_fingerprint": 17949701103682954850
 }

@@ -1,6 +1,7 @@
 seed=2776498196
-summary_fingerprint=3769698221218929972
+summary_fingerprint=1608154261148751074
 columns=success-rate,cost,latency,retries
 suite=autonomy-regression success-rate=10000bps cost=13c latency=110ms retries=1250milli
 suite=injection-defense-regression success-rate=10000bps cost=10c latency=84ms retries=250milli
-warning=seed changed (2776498195 -> 2776498196) and summary fingerprint changed (8654044261313886853 -> 3769698221218929972)
+suite=planner-memory-ingestion success-rate=6666bps cost=10c latency=98ms retries=1000milli
+warning=seed changed (2776498195 -> 2776498196) and summary fingerprint changed (17949701103682954850 -> 1608154261148751074)
