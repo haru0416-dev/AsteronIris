@@ -8,10 +8,12 @@
 // Already-paired tokens are persisted in config so restarts don't require
 // re-pairing.
 
+use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::{Mutex, RwLock};
 use std::time::Instant;
+use subtle::{Choice, ConstantTimeEq};
 
 /// Maximum failed pairing attempts before lockout.
 const MAX_PAIR_ATTEMPTS: u32 = 5;
@@ -201,9 +203,11 @@ fn generate_code() -> String {
     }
 }
 
-/// Generate a cryptographically-adequate bearer token (hex-encoded).
+/// Generate a cryptographically-strong bearer token (160-bit entropy, hex-encoded).
 fn generate_token() -> String {
-    format!("zc_{}", uuid::Uuid::new_v4().as_simple())
+    let mut buf = [0u8; 20];
+    rand::rng().fill_bytes(&mut buf);
+    format!("zc_{}", hex::encode(buf))
 }
 
 /// SHA-256 hash a bearer token for storage. Returns lowercase hex.
@@ -224,20 +228,16 @@ fn is_token_hash(value: &str) -> bool {
 pub fn constant_time_eq(a: &str, b: &str) -> bool {
     let a = a.as_bytes();
     let b = b.as_bytes();
-
-    // Track length mismatch as a usize (non-zero = different lengths)
-    let len_diff = a.len() ^ b.len();
-
-    // XOR each byte, padding the shorter input with zeros.
-    // Iterates over max(a.len(), b.len()) to avoid timing differences.
+    let lengths_match: Choice = a.len().ct_eq(&b.len());
     let max_len = a.len().max(b.len());
-    let mut byte_diff = 0u8;
+    let mut acc = 0u8;
     for i in 0..max_len {
-        let x = *a.get(i).unwrap_or(&0);
-        let y = *b.get(i).unwrap_or(&0);
-        byte_diff |= x ^ y;
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        acc |= x ^ y;
     }
-    (len_diff == 0) & (byte_diff == 0)
+    let bytes_match: Choice = acc.ct_eq(&0u8);
+    (lengths_match & bytes_match).into()
 }
 
 /// Check if a host string represents a non-localhost bind address.
@@ -412,6 +412,23 @@ mod tests {
         assert!(!constant_time_eq("a", ""));
     }
 
+    #[test]
+    fn constant_time_eq_empty_strings() {
+        assert!(constant_time_eq("", ""));
+    }
+
+    #[test]
+    fn constant_time_eq_empty_vs_nonempty() {
+        assert!(!constant_time_eq("", "x"));
+        assert!(!constant_time_eq("x", ""));
+    }
+
+    #[test]
+    fn constant_time_eq_different_lengths_same_prefix() {
+        assert!(!constant_time_eq("abc", "abcd"));
+        assert!(!constant_time_eq("abcd", "abc"));
+    }
+
     // ── generate helpers ─────────────────────────────────────
 
     #[test]
@@ -438,7 +455,23 @@ mod tests {
     fn generate_token_has_prefix() {
         let token = generate_token();
         assert!(token.starts_with("zc_"));
-        assert!(token.len() > 10);
+        assert_eq!(token.len(), 43);
+    }
+
+    #[test]
+    fn generate_token_has_correct_length_and_format() {
+        let token = generate_token();
+        // "zc_" (3) + 40 hex chars = 43
+        assert_eq!(token.len(), 43, "token should be 43 chars: zc_ + 40 hex");
+        assert!(token.starts_with("zc_"));
+        assert!(token[3..].chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn generate_token_is_unique() {
+        let a = generate_token();
+        let b = generate_token();
+        assert_ne!(a, b, "two tokens should differ");
     }
 
     // ── Brute force protection ───────────────────────────────
