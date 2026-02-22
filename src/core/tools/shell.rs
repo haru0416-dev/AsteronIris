@@ -11,7 +11,7 @@ const MAX_OUTPUT_BYTES: usize = 1_048_576;
 /// Environment variables safe to pass to shell commands.
 /// Only functional variables are included — never API keys or secrets.
 const SAFE_ENV_VARS: &[&str] = &[
-    "PATH", "HOME", "TERM", "LANG", "LC_ALL", "LC_CTYPE", "USER", "SHELL", "TMPDIR",
+    "PATH", "HOME", "TERM", "LANG", "LC_ALL", "LC_CTYPE", "USER", "SHELL",
 ];
 
 /// Shell command execution tool with sandboxing
@@ -70,6 +70,18 @@ impl Tool for ShellTool {
                 cmd.env(var, val);
             }
         }
+
+        // Override TMPDIR to a controlled workspace-local directory
+        let controlled_tmp = ctx.workspace_dir.join(".asteroniris-tmp");
+        if !controlled_tmp.exists() {
+            std::fs::create_dir_all(&controlled_tmp)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&controlled_tmp, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
+        cmd.env("TMPDIR", &controlled_tmp);
 
         let result =
             tokio::time::timeout(Duration::from_secs(SHELL_TIMEOUT_SECS), cmd.output()).await;
