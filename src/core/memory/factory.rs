@@ -14,11 +14,7 @@ pub fn create_memory(
     workspace_dir: &Path,
     api_key: Option<&str>,
 ) -> anyhow::Result<Box<dyn Memory>> {
-    if let Err(e) = hygiene::run_if_due(config, workspace_dir) {
-        tracing::warn!("memory hygiene skipped: {e}");
-    }
-
-    match config.backend.as_str() {
+    let memory: Box<dyn Memory> = match config.backend.as_str() {
         "sqlite" => {
             let embedder: Arc<dyn embeddings::EmbeddingProvider> =
                 Arc::from(embeddings::create_embedding_provider(
@@ -36,7 +32,7 @@ pub fn create_memory(
                 config.keyword_weight as f32,
                 config.embedding_cache_size,
             )?;
-            Ok(Box::new(mem))
+            Box::new(mem)
         }
         #[cfg(feature = "vector-search")]
         "lancedb" => {
@@ -55,14 +51,20 @@ pub fn create_memory(
                 config.vector_weight as f32,
                 config.keyword_weight as f32,
             )?;
-            Ok(Box::new(mem))
+            Box::new(mem)
         }
-        "markdown" | "none" => Ok(Box::new(MarkdownMemory::new(workspace_dir))),
+        "markdown" | "none" => Box::new(MarkdownMemory::new(workspace_dir)),
         other => {
             tracing::warn!("Unknown memory backend '{other}', falling back to markdown");
-            Ok(Box::new(MarkdownMemory::new(workspace_dir)))
+            Box::new(MarkdownMemory::new(workspace_dir))
         }
+    };
+
+    if let Err(e) = hygiene::run_if_due(config, workspace_dir) {
+        tracing::warn!("memory hygiene skipped: {e}");
     }
+
+    Ok(memory)
 }
 
 pub async fn persist_inference_events(

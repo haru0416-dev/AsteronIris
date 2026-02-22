@@ -54,6 +54,8 @@ impl LanceDbMemory {
             MemorySource::ToolVerified => "tool_verified",
             MemorySource::System => "system",
             MemorySource::Inferred => "inferred",
+            MemorySource::ExternalPrimary => "external_primary",
+            MemorySource::ExternalSecondary => "external_secondary",
         }
     }
 
@@ -62,6 +64,8 @@ impl LanceDbMemory {
             "explicit_user" => MemorySource::ExplicitUser,
             "tool_verified" => MemorySource::ToolVerified,
             "inferred" => MemorySource::Inferred,
+            "external_primary" => MemorySource::ExternalPrimary,
+            "external_secondary" => MemorySource::ExternalSecondary,
             _ => MemorySource::System,
         }
     }
@@ -94,9 +98,13 @@ impl LanceDbMemory {
 
     pub(super) fn category_from_source(source: &MemorySource) -> MemoryCategory {
         match source {
-            MemorySource::ExplicitUser | MemorySource::ToolVerified => MemoryCategory::Core,
+            MemorySource::ExplicitUser
+            | MemorySource::ToolVerified
+            | MemorySource::ExternalPrimary => MemoryCategory::Core,
             MemorySource::System => MemoryCategory::Daily,
-            MemorySource::Inferred => MemoryCategory::Conversation,
+            MemorySource::Inferred | MemorySource::ExternalSecondary => {
+                MemoryCategory::Conversation
+            }
         }
     }
 }

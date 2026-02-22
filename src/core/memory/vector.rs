@@ -125,6 +125,65 @@ pub fn hybrid_merge(
     results
 }
 
+/// Reciprocal Rank Fusion: combine ranked lists using position-based scoring.
+///
+/// RRF avoids raw score mixing issues (BM25 vs cosine scale differences).
+/// Formula: score(d) = Σ 1 / (k + rank(d)) for each ranked list.
+/// Default k=60 per the original RRF paper.
+pub fn rrf_merge(
+    vector_results: &[(String, f32)],
+    keyword_results: &[(String, f32)],
+    limit: usize,
+) -> Vec<ScoredResult> {
+    use std::collections::HashMap;
+
+    const K: f32 = 60.0;
+
+    let mut scores: HashMap<String, (f32, Option<f32>, Option<f32>)> = HashMap::new();
+
+    for (rank, (id, score)) in vector_results.iter().enumerate() {
+        let rank_1based = u16::try_from(rank.saturating_add(1)).unwrap_or(u16::MAX);
+        let rrf_score = 1.0 / (K + f32::from(rank_1based));
+        scores
+            .entry(id.clone())
+            .and_modify(|(total, vector_score, _)| {
+                *total += rrf_score;
+                *vector_score = Some(*score);
+            })
+            .or_insert((rrf_score, Some(*score), None));
+    }
+
+    for (rank, (id, score)) in keyword_results.iter().enumerate() {
+        let rank_1based = u16::try_from(rank.saturating_add(1)).unwrap_or(u16::MAX);
+        let rrf_score = 1.0 / (K + f32::from(rank_1based));
+        scores
+            .entry(id.clone())
+            .and_modify(|(total, _, keyword_score)| {
+                *total += rrf_score;
+                *keyword_score = Some(*score);
+            })
+            .or_insert((rrf_score, None, Some(*score)));
+    }
+
+    let mut results: Vec<ScoredResult> = scores
+        .into_iter()
+        .map(|(id, (total, vector_score, keyword_score))| ScoredResult {
+            id,
+            vector_score,
+            keyword_score,
+            final_score: total,
+        })
+        .collect();
+
+    results.sort_by(|a, b| {
+        b.final_score
+            .partial_cmp(&a.final_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(limit);
+    results
+}
+
 pub fn final_score(
     vector_score: f32,
     bm25_score: f32,
@@ -409,6 +468,56 @@ mod tests {
         let merged = hybrid_merge(&[("only".into(), 0.8)], &[], 0.7, 0.3, 10);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].id, "only");
+    }
+
+    #[test]
+    fn rrf_merge_basic_fusion() {
+        let vector_results = vec![("a".into(), 0.95), ("b".into(), 0.90), ("c".into(), 0.80)];
+        let keyword_results = vec![("b".into(), 3.0), ("a".into(), 2.5), ("d".into(), 2.0)];
+
+        let merged = rrf_merge(&vector_results, &keyword_results, 10);
+        let top_two = [merged[0].id.as_str(), merged[1].id.as_str()];
+        assert!(top_two.contains(&"a"));
+        assert!(top_two.contains(&"b"));
+        assert!(merged.iter().any(|entry| entry.id == "d"));
+    }
+
+    #[test]
+    fn rrf_merge_vector_only() {
+        let vector_results = vec![("a".into(), 0.9), ("b".into(), 0.8)];
+        let merged = rrf_merge(&vector_results, &[], 10);
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].id, "a");
+        assert!(merged.iter().all(|entry| entry.keyword_score.is_none()));
+    }
+
+    #[test]
+    fn rrf_merge_keyword_only() {
+        let keyword_results = vec![("x".into(), 4.0), ("y".into(), 3.0)];
+        let merged = rrf_merge(&[], &keyword_results, 10);
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].id, "x");
+        assert!(merged.iter().all(|entry| entry.vector_score.is_none()));
+    }
+
+    #[test]
+    fn rrf_merge_empty_inputs() {
+        let merged = rrf_merge(&[], &[], 10);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn rrf_merge_deduplicates() {
+        let vector_results = vec![("shared".into(), 0.9)];
+        let keyword_results = vec![("shared".into(), 5.0)];
+        let merged = rrf_merge(&vector_results, &keyword_results, 10);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].id, "shared");
+        assert!(merged[0].vector_score.is_some());
+        assert!(merged[0].keyword_score.is_some());
     }
 
     #[test]

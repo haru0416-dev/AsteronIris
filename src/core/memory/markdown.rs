@@ -195,6 +195,8 @@ impl MarkdownMemory {
             MemorySource::ToolVerified => "tool_verified",
             MemorySource::System => "system",
             MemorySource::Inferred => "inferred",
+            MemorySource::ExternalPrimary => "external_primary",
+            MemorySource::ExternalSecondary => "external_secondary",
         }
     }
 
@@ -204,6 +206,8 @@ impl MarkdownMemory {
             "tool_verified" => Some(MemorySource::ToolVerified),
             "system" => Some(MemorySource::System),
             "inferred" => Some(MemorySource::Inferred),
+            "external_primary" => Some(MemorySource::ExternalPrimary),
+            "external_secondary" => Some(MemorySource::ExternalSecondary),
             _ => None,
         }
     }
@@ -439,9 +443,13 @@ impl MarkdownMemory {
         let input = input.normalize_for_ingress()?;
         let key = format!("{}:{}", input.entity_id, input.slot_key);
         let category = match input.source {
-            MemorySource::ExplicitUser | MemorySource::ToolVerified => MemoryCategory::Core,
+            MemorySource::ExplicitUser
+            | MemorySource::ToolVerified
+            | MemorySource::ExternalPrimary => MemoryCategory::Core,
             MemorySource::System => MemoryCategory::Daily,
-            MemorySource::Inferred => MemoryCategory::Conversation,
+            MemorySource::Inferred | MemorySource::ExternalSecondary => {
+                MemoryCategory::Conversation
+            }
         };
         self.upsert_projection_entry(
             &key,
