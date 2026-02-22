@@ -19,7 +19,7 @@ impl SqliteMemory {
             "core" => MemoryCategory::Core,
             "daily" => MemoryCategory::Daily,
             "conversation" => MemoryCategory::Conversation,
-            other => MemoryCategory::Custom(other.to_string()),
+            other => MemoryCategory::custom(other),
         }
     }
 

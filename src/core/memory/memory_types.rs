@@ -709,3 +709,60 @@ pub enum MemoryCategory {
     #[strum(to_string = "{0}")]
     Custom(String),
 }
+
+impl MemoryCategory {
+    pub fn custom(name: impl Into<String>) -> Self {
+        let name = name.into();
+        let sanitized: String = name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+            .take(128)
+            .collect();
+        Self::Custom(sanitized)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_category_sanitizes_special_chars() {
+        let result = MemoryCategory::custom("hello'; DROP TABLE");
+        match result {
+            MemoryCategory::Custom(name) => {
+                assert_eq!(name, "helloDROPTABLE");
+                assert!(!name.contains('\''));
+                assert!(!name.contains(';'));
+            }
+            _ => panic!("Expected Custom variant"),
+        }
+    }
+
+    #[test]
+    fn custom_category_preserves_valid_chars() {
+        let result = MemoryCategory::custom("my_custom-category.v1");
+        match result {
+            MemoryCategory::Custom(name) => {
+                assert_eq!(name, "my_custom-category.v1");
+            }
+            _ => panic!("Expected Custom variant"),
+        }
+    }
+
+    #[test]
+    fn custom_category_caps_length() {
+        let long_name = "a".repeat(200);
+        let result = MemoryCategory::custom(&long_name);
+        match result {
+            MemoryCategory::Custom(name) => {
+                assert!(
+                    name.len() <= 128,
+                    "Name should be capped at 128 chars, got {}",
+                    name.len()
+                );
+            }
+            _ => panic!("Expected Custom variant"),
+        }
+    }
+}
