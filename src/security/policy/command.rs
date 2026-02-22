@@ -47,6 +47,55 @@ fn is_git_config_injection(args: &str) -> bool {
         .any(|key| lower.contains(key))
 }
 
+fn is_path_like_argument(arg: &str) -> bool {
+    arg.starts_with('/') || arg.starts_with("~/") || arg.contains('/') || arg.contains("..")
+}
+
+fn has_forbidden_path_argument(words: &[&str]) -> bool {
+    let policy = SecurityPolicy::default();
+    words
+        .iter()
+        .copied()
+        .filter(|word| is_path_like_argument(word))
+        .any(|word| !policy.is_path_allowed(word))
+}
+
+fn find_exec_terminator(token: &str) -> Option<(Option<&str>, bool)> {
+    if token == "+" {
+        return Some((None, true));
+    }
+    if token == r"\;" || token == ";" {
+        return Some((None, true));
+    }
+    if let Some(stripped) = token.strip_suffix(r"\;") {
+        let command_token = (!stripped.is_empty()).then_some(stripped);
+        return Some((command_token, true));
+    }
+    None
+}
+
+fn extract_find_exec_payload(words: &[&str], start_idx: usize) -> Option<(String, usize)> {
+    let mut exec_tokens = Vec::new();
+
+    for (index, token) in words.iter().enumerate().skip(start_idx) {
+        if let Some((command_token, is_terminator)) = find_exec_terminator(token) {
+            if let Some(command_token) = command_token {
+                exec_tokens.push(command_token);
+            }
+            if is_terminator {
+                if exec_tokens.is_empty() {
+                    return None;
+                }
+                return Some((exec_tokens.join(" "), index));
+            }
+        }
+
+        exec_tokens.push(token);
+    }
+
+    None
+}
+
 fn has_blocked_arguments(base_cmd: &str, full_segment: &str, allowed_commands: &[String]) -> bool {
     let args = full_segment
         .trim()
@@ -111,16 +160,37 @@ fn has_blocked_arguments(base_cmd: &str, full_segment: &str, allowed_commands: &
             if words.contains(&"-delete") {
                 return true;
             }
-            // `-exec`/`-execdir`: validate that the exec'd command is in the allowlist
-            for (i, w) in words.iter().enumerate() {
-                if (*w == "-exec" || *w == "-execdir")
-                    && let Some(exec_cmd) = words.get(i + 1)
-                {
+            let mut i = 0;
+            while i < words.len() {
+                if words[i] == "-exec" || words[i] == "-execdir" {
+                    let Some((exec_payload, terminator_index)) =
+                        extract_find_exec_payload(&words, i + 1)
+                    else {
+                        return true;
+                    };
+
+                    let exec_cmd_part = skip_env_assignments(&exec_payload);
+                    let Some(exec_cmd) = exec_cmd_part.split_whitespace().next() else {
+                        return true;
+                    };
+
                     let exec_base = exec_cmd.rsplit('/').next().unwrap_or(exec_cmd);
                     if !allowed_commands.iter().any(|a| a == exec_base) {
                         return true;
                     }
+
+                    let exec_words: Vec<&str> = exec_cmd_part.split_whitespace().collect();
+                    if has_forbidden_path_argument(exec_words.get(1..).unwrap_or(&[])) {
+                        return true;
+                    }
+
+                    if has_blocked_arguments(exec_base, exec_cmd_part, allowed_commands) {
+                        return true;
+                    }
+
+                    i = terminator_index;
                 }
+                i += 1;
             }
             false
         }
@@ -145,7 +215,12 @@ impl SecurityPolicy {
 
         // Block subshell/expansion operators — these allow hiding arbitrary
         // commands inside an allowed command (e.g. `echo $(rm -rf /)`)
-        if command.contains('`') || command.contains("$(") || command.contains("${") {
+        if command.contains('`')
+            || command.contains("$(")
+            || command.contains("${")
+            || command.contains("<(")
+            || command.contains(">(")
+        {
             return false;
         }
 
@@ -159,6 +234,10 @@ impl SecurityPolicy {
         for sep in ["&&", "||"] {
             normalized = normalized.replace(sep, "\x00");
         }
+        if normalized.contains('&') {
+            return false;
+        }
+        normalized = normalized.replace(r"\;", "\x01");
         for sep in ['\n', ';', '|'] {
             normalized = normalized.replace(sep, "\x00");
         }
@@ -169,7 +248,8 @@ impl SecurityPolicy {
                 continue;
             }
 
-            let cmd_part = skip_env_assignments(segment);
+            let segment = segment.replace('\x01', r"\;");
+            let cmd_part = skip_env_assignments(&segment);
 
             let base_cmd = cmd_part
                 .split_whitespace()
@@ -356,6 +436,20 @@ mod tests {
     }
 
     #[test]
+    fn is_command_allowed_rejects_background_operator_but_allows_logical_and() {
+        let policy = policy_with_allowed(&["git", "echo"]);
+        assert!(policy.is_command_allowed("git status && echo ok"));
+        assert!(!policy.is_command_allowed("git status & echo ok"));
+    }
+
+    #[test]
+    fn is_command_allowed_rejects_process_substitution() {
+        let policy = policy_with_allowed(&["echo", "cat"]);
+        assert!(!policy.is_command_allowed("echo <(cat Cargo.toml)"));
+        assert!(!policy.is_command_allowed("cat >(wc -l)"));
+    }
+
+    #[test]
     fn is_command_allowed_rejects_mixed_segments_with_one_disallowed_command() {
         let policy = policy_with_allowed(&["git", "echo"]);
         assert!(policy.is_command_allowed("git status && echo ok"));
@@ -367,5 +461,37 @@ mod tests {
         let mut policy = policy_with_allowed(&["git"]);
         policy.autonomy = AutonomyLevel::ReadOnly;
         assert!(!policy.is_command_allowed("git status"));
+    }
+
+    #[test]
+    fn has_blocked_arguments_find_exec_blocks_forbidden_paths() {
+        let allowed = vec!["find".to_string(), "cat".to_string()];
+        assert!(has_blocked_arguments(
+            "find",
+            r"find . -name '*.txt' -exec cat /etc/shadow \;",
+            &allowed
+        ));
+    }
+
+    #[test]
+    fn has_blocked_arguments_find_exec_blocks_disallowed_subcommands() {
+        let allowed = vec!["find".to_string(), "cat".to_string()];
+        assert!(has_blocked_arguments(
+            "find",
+            r"find . -exec curl https://example.com \;",
+            &allowed
+        ));
+    }
+
+    #[test]
+    fn is_command_allowed_rejects_find_exec_with_forbidden_paths() {
+        let policy = policy_with_allowed(&["find", "cat"]);
+        assert!(!policy.is_command_allowed(r"find . -name '*.txt' -exec cat /etc/shadow \;"));
+    }
+
+    #[test]
+    fn is_command_allowed_rejects_find_exec_with_disallowed_subcommands() {
+        let policy = policy_with_allowed(&["find", "cat"]);
+        assert!(!policy.is_command_allowed(r"find . -type f -exec curl https://example.com \;"));
     }
 }
