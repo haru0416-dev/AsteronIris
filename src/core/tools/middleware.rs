@@ -269,6 +269,73 @@ impl ToolMiddleware for AuditMiddleware {
 }
 
 #[derive(Debug)]
+pub struct OutputSizeLimitMiddleware;
+
+const MAX_TOOL_OUTPUT_BYTES: usize = 262_144; // 256KB
+const MAX_TOOL_OUTPUT_LINES: usize = 4_000;
+
+#[async_trait]
+impl ToolMiddleware for OutputSizeLimitMiddleware {
+    async fn before_execute(
+        &self,
+        _tool_name: &str,
+        _args: &Value,
+        _ctx: &ExecutionContext,
+    ) -> anyhow::Result<MiddlewareDecision> {
+        Ok(MiddlewareDecision::Continue)
+    }
+
+    async fn after_execute(
+        &self,
+        tool_name: &str,
+        result: &mut ToolResult,
+        _ctx: &ExecutionContext,
+    ) {
+        let original_bytes = result.output.len();
+        let original_lines = result.output.lines().count();
+
+        let mut truncated = false;
+        let mut output = result.output.clone();
+
+        // First, truncate by line count if necessary
+        if original_lines > MAX_TOOL_OUTPUT_LINES {
+            let lines: Vec<&str> = output.lines().collect();
+            output = lines[..MAX_TOOL_OUTPUT_LINES].join("\n");
+            truncated = true;
+        }
+
+        // Then, truncate by byte count if necessary
+        if output.len() > MAX_TOOL_OUTPUT_BYTES {
+            // Find the safe character boundary
+            let mut byte_pos = MAX_TOOL_OUTPUT_BYTES;
+            while byte_pos > 0 && !output.is_char_boundary(byte_pos) {
+                byte_pos -= 1;
+            }
+            output.truncate(byte_pos);
+            truncated = true;
+        }
+
+        if truncated {
+            let metadata_suffix = format!(
+                "\n... [output truncated: {original_bytes} bytes/{original_lines} lines \u{2192} {MAX_TOOL_OUTPUT_BYTES} bytes/{MAX_TOOL_OUTPUT_LINES} lines max]"
+            );
+            output.push_str(&metadata_suffix);
+
+            tracing::warn!(
+                tool = tool_name,
+                original_bytes = original_bytes,
+                original_lines = original_lines,
+                max_bytes = MAX_TOOL_OUTPUT_BYTES,
+                max_lines = MAX_TOOL_OUTPUT_LINES,
+                "tool output truncated due to size limits"
+            );
+
+            result.output = output;
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ToolResultSanitizationMiddleware;
 
 #[async_trait]
@@ -346,6 +413,7 @@ pub fn default_middleware_chain() -> Vec<Arc<dyn ToolMiddleware>> {
         Arc::new(SecurityMiddleware),
         Arc::new(EntityRateLimitMiddleware),
         Arc::new(AuditMiddleware),
+        Arc::new(OutputSizeLimitMiddleware),
         Arc::new(ToolResultSanitizationMiddleware),
         Arc::new(SecretScrubMiddleware),
     ]
@@ -560,5 +628,67 @@ mod tests {
                 .as_deref()
                 .is_some_and(|msg| msg.contains("[REDACTED]"))
         );
+    }
+
+    #[tokio::test]
+    async fn output_size_limit_passes_small_output() {
+        let security = Arc::new(SecurityPolicy::default());
+        let ctx = ExecutionContext::test_default(security);
+        let middleware = OutputSizeLimitMiddleware;
+        let mut result = ToolResult {
+            success: true,
+            output: "a".repeat(100),
+            error: None,
+            attachments: Vec::new(),
+        };
+
+        let original_output = result.output.clone();
+        middleware.after_execute("shell", &mut result, &ctx).await;
+
+        assert_eq!(result.output, original_output);
+        assert!(!result.output.contains("[output truncated:"));
+    }
+
+    #[tokio::test]
+    async fn output_size_limit_truncates_large_output() {
+        let security = Arc::new(SecurityPolicy::default());
+        let ctx = ExecutionContext::test_default(security);
+        let middleware = OutputSizeLimitMiddleware;
+        let large_output = "x".repeat(300_000);
+        let mut result = ToolResult {
+            success: true,
+            output: large_output,
+            error: None,
+            attachments: Vec::new(),
+        };
+
+        middleware.after_execute("shell", &mut result, &ctx).await;
+
+        assert!(result.output.len() <= MAX_TOOL_OUTPUT_BYTES + 200); // Account for metadata suffix
+        assert!(result.output.contains("[output truncated:"));
+    }
+
+    #[tokio::test]
+    async fn output_size_limit_truncates_by_line_count() {
+        let security = Arc::new(SecurityPolicy::default());
+        let ctx = ExecutionContext::test_default(security);
+        let middleware = OutputSizeLimitMiddleware;
+        let mut lines = Vec::new();
+        for i in 0..5000 {
+            lines.push(format!("line {}\n", i));
+        }
+        let large_output = lines.join("");
+        let mut result = ToolResult {
+            success: true,
+            output: large_output,
+            error: None,
+            attachments: Vec::new(),
+        };
+
+        middleware.after_execute("shell", &mut result, &ctx).await;
+
+        let output_lines = result.output.lines().count();
+        assert!(output_lines <= MAX_TOOL_OUTPUT_LINES + 1); // +1 for metadata line
+        assert!(result.output.contains("[output truncated:"));
     }
 }
