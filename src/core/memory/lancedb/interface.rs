@@ -19,26 +19,41 @@ use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+pub(super) struct UpsertProjectionParams<'a> {
+    pub(super) key: &'a str,
+    pub(super) content: &'a str,
+    pub(super) category: MemoryCategory,
+    pub(super) source: MemorySource,
+    pub(super) confidence: f64,
+    pub(super) importance: f64,
+    pub(super) privacy_level: PrivacyLevel,
+    pub(super) occurred_at: &'a str,
+    pub(super) layer: MemoryLayer,
+    pub(super) provenance: Option<MemoryProvenance>,
+}
+
 impl LanceDbMemory {
     #[allow(clippy::unused_self)]
     pub(super) fn name(&self) -> &str {
         "lancedb"
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn upsert_projection_entry(
         &self,
-        key: &str,
-        content: &str,
-        category: MemoryCategory,
-        source: MemorySource,
-        confidence: f64,
-        importance: f64,
-        privacy_level: PrivacyLevel,
-        occurred_at: &str,
-        layer: MemoryLayer,
-        provenance: Option<MemoryProvenance>,
+        params: UpsertProjectionParams<'_>,
     ) -> anyhow::Result<()> {
+        let UpsertProjectionParams {
+            key,
+            content,
+            category,
+            source,
+            confidence,
+            importance,
+            privacy_level,
+            occurred_at,
+            layer,
+            provenance,
+        } = params;
         let now = Local::now().to_rfc3339();
         let cat = Self::category_to_str(&category);
         let source = Self::source_to_str(&source).to_string();
@@ -258,18 +273,18 @@ impl LanceDbMemory {
     ) -> anyhow::Result<MemoryEvent> {
         let input = input.normalize_for_ingress()?;
         let key = format!("{}:{}", input.entity_id, input.slot_key);
-        self.upsert_projection_entry(
-            &key,
-            &input.value,
-            Self::category_from_source(&input.source),
-            input.source,
-            input.confidence,
-            input.importance,
-            input.privacy_level.clone(),
-            &input.occurred_at,
-            input.layer,
-            input.provenance.clone(),
-        )
+        self.upsert_projection_entry(UpsertProjectionParams {
+            key: &key,
+            content: &input.value,
+            category: Self::category_from_source(&input.source),
+            source: input.source,
+            confidence: input.confidence,
+            importance: input.importance,
+            privacy_level: input.privacy_level.clone(),
+            occurred_at: &input.occurred_at,
+            layer: input.layer,
+            provenance: input.provenance.clone(),
+        })
         .await?;
 
         Ok(MemoryEvent {
@@ -360,40 +375,42 @@ impl LanceDbMemory {
         let applied = match mode {
             ForgetMode::Hard => self.delete_projection_entry(&key).await?,
             ForgetMode::Soft => {
-                self.upsert_projection_entry(
-                    &key,
-                    LANCEDB_DEGRADED_SOFT_FORGET_MARKER,
-                    MemoryCategory::Custom("degraded_soft_deleted".to_string()),
-                    MemorySource::System,
-                    0.0,
-                    0.0,
-                    PrivacyLevel::Private,
-                    &Local::now().to_rfc3339(),
-                    MemoryLayer::Working,
-                    Some(MemoryProvenance::source_reference(
+                let occurred_at = Local::now().to_rfc3339();
+                self.upsert_projection_entry(UpsertProjectionParams {
+                    key: &key,
+                    content: LANCEDB_DEGRADED_SOFT_FORGET_MARKER,
+                    category: MemoryCategory::Custom("degraded_soft_deleted".to_string()),
+                    source: MemorySource::System,
+                    confidence: 0.0,
+                    importance: 0.0,
+                    privacy_level: PrivacyLevel::Private,
+                    occurred_at: &occurred_at,
+                    layer: MemoryLayer::Working,
+                    provenance: Some(MemoryProvenance::source_reference(
                         MemorySource::System,
                         LANCEDB_DEGRADED_SOFT_FORGET_PROVENANCE,
                     )),
-                )
+                })
                 .await?;
                 true
             }
             ForgetMode::Tombstone => {
-                self.upsert_projection_entry(
-                    &key,
-                    LANCEDB_DEGRADED_TOMBSTONE_MARKER,
-                    MemoryCategory::Custom("degraded_tombstoned".to_string()),
-                    MemorySource::System,
-                    0.0,
-                    0.0,
-                    PrivacyLevel::Private,
-                    &Local::now().to_rfc3339(),
-                    MemoryLayer::Working,
-                    Some(MemoryProvenance::source_reference(
+                let occurred_at = Local::now().to_rfc3339();
+                self.upsert_projection_entry(UpsertProjectionParams {
+                    key: &key,
+                    content: LANCEDB_DEGRADED_TOMBSTONE_MARKER,
+                    category: MemoryCategory::Custom("degraded_tombstoned".to_string()),
+                    source: MemorySource::System,
+                    confidence: 0.0,
+                    importance: 0.0,
+                    privacy_level: PrivacyLevel::Private,
+                    occurred_at: &occurred_at,
+                    layer: MemoryLayer::Working,
+                    provenance: Some(MemoryProvenance::source_reference(
                         MemorySource::System,
                         LANCEDB_DEGRADED_TOMBSTONE_PROVENANCE,
                     )),
-                )
+                })
                 .await?;
                 true
             }

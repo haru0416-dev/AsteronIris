@@ -260,23 +260,24 @@ impl Memory for LanceDbMemory {
 #[cfg(test)]
 mod tests {
     use super::super::traits::MemoryLayer;
+    use super::interface::UpsertProjectionParams;
     use super::*;
     use tempfile::TempDir;
     use tokio::time::{Duration, sleep};
 
     async fn test_upsert(mem: &LanceDbMemory, key: &str, content: &str, category: MemoryCategory) {
-        mem.upsert_projection_entry(
+        mem.upsert_projection_entry(UpsertProjectionParams {
             key,
             content,
             category,
-            MemorySource::ExplicitUser,
-            0.95,
-            0.5,
-            PrivacyLevel::Private,
-            "2026-01-01T00:00:00Z",
-            MemoryLayer::Working,
-            None,
-        )
+            source: MemorySource::ExplicitUser,
+            confidence: 0.95,
+            importance: 0.5,
+            privacy_level: PrivacyLevel::Private,
+            occurred_at: "2026-01-01T00:00:00Z",
+            layer: MemoryLayer::Working,
+            provenance: None,
+        })
         .await
         .unwrap();
     }
