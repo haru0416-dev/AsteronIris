@@ -74,7 +74,9 @@ impl Tunnel for CloudflareTunnel {
                 }
                 Ok(Ok(None)) => break,
                 Ok(Err(e)) => bail!("Error reading cloudflared output: {e}"),
-                Err(_) => {} // timeout on this line, keep trying
+                Err(_) => {
+                    tracing::trace!("cloudflared: waiting for tunnel URL (line read timed out)");
+                }
             }
         }
 

@@ -97,7 +97,11 @@ impl Tunnel for CustomTunnel {
                         }
                     }
                     Ok(Ok(None) | Err(_)) => break,
-                    Err(_) => {}
+                    Err(_) => {
+                        tracing::trace!(
+                            "custom tunnel: waiting for tunnel URL (line read timed out)"
+                        );
+                    }
                 }
             }
         }

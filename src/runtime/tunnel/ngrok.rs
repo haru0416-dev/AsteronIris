@@ -85,7 +85,9 @@ impl Tunnel for NgrokTunnel {
                 }
                 Ok(Ok(None)) => break,
                 Ok(Err(e)) => bail!("Error reading ngrok output: {e}"),
-                Err(_) => {}
+                Err(_) => {
+                    tracing::trace!("ngrok: waiting for tunnel URL (line read timed out)");
+                }
             }
         }
 
