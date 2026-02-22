@@ -134,7 +134,7 @@ fn build_config_from_state(state: &state::WizardState) -> Result<Config> {
         identity: crate::config::IdentityConfig::default(),
         tools: crate::config::ToolsConfig::default(),
         mcp: crate::config::McpConfig::default(),
-        locale: String::from("en"),
+        locale: state.selected_locale.clone(),
     };
 
     config.save()?;

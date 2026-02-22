@@ -1,6 +1,8 @@
 use crossterm::event::KeyCode;
 
-use crate::onboard::tui::state::{ChannelSubStep, ProviderSubStep, WizardState, WizardStep};
+use crate::onboard::tui::state::{
+    ChannelSubStep, ProviderSubStep, WizardState, WizardStep, WorkspaceSubStep,
+};
 
 use super::app_data::{
     model_id_for_selection, model_list_for_provider, provider_id_for_selection,
@@ -9,7 +11,10 @@ use super::app_data::{
 
 pub(super) fn is_text_input_active(state: &WizardState) -> bool {
     match state.current_step {
-        WizardStep::Workspace => !state.workspace_use_default.value,
+        WizardStep::Workspace => {
+            !state.workspace_use_default.value
+                && state.workspace_sub_step == WorkspaceSubStep::PathInput
+        }
         WizardStep::Provider => matches!(
             state.provider_sub_step,
             ProviderSubStep::ApiKey
@@ -27,6 +32,7 @@ pub(super) fn is_text_input_active(state: &WizardState) -> bool {
 
 pub(super) fn handle_key(state: &mut WizardState, key: KeyCode) {
     match state.current_step {
+        WizardStep::Language => handle_language_key(state, key),
         WizardStep::Workspace => handle_workspace_key(state, key),
         WizardStep::Provider => handle_provider_key(state, key),
         WizardStep::Channels => handle_channels_key(state, key),
@@ -38,14 +44,41 @@ pub(super) fn handle_key(state: &mut WizardState, key: KeyCode) {
     }
 }
 
+fn handle_language_key(state: &mut WizardState, key: KeyCode) {
+    match key {
+        KeyCode::Up => state.language_select.up(),
+        KeyCode::Down => state.language_select.down(),
+        KeyCode::Enter => {
+            let locale = if state.language_select.selected == 1 {
+                "ja"
+            } else {
+                "en"
+            };
+            state.selected_locale = locale.to_string();
+            rust_i18n::set_locale(locale);
+            state.next_step();
+        }
+        _ => {}
+    }
+}
+
 fn handle_workspace_key(state: &mut WizardState, key: KeyCode) {
-    if state.workspace_use_default.value {
+    if state.workspace_use_default.value || state.workspace_sub_step == WorkspaceSubStep::Choice {
         // Toggle mode — arrows/space/enter
         match key {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
                 state.workspace_use_default.toggle();
+                if state.workspace_use_default.value {
+                    state.workspace_sub_step = WorkspaceSubStep::Choice;
+                }
             }
-            KeyCode::Enter => state.next_step(),
+            KeyCode::Enter => {
+                if state.workspace_use_default.value {
+                    state.next_step();
+                } else {
+                    state.workspace_sub_step = WorkspaceSubStep::PathInput;
+                }
+            }
             KeyCode::Esc => state.prev_step(),
             _ => {}
         }
@@ -62,7 +95,7 @@ fn handle_workspace_key(state: &mut WizardState, key: KeyCode) {
                 }
             }
             KeyCode::Esc => {
-                state.workspace_use_default.value = true;
+                state.workspace_sub_step = WorkspaceSubStep::Choice;
             }
             KeyCode::Char(c) => state.workspace_custom_path.insert(c),
             KeyCode::Backspace => state.workspace_custom_path.backspace(),
@@ -111,11 +144,38 @@ fn handle_provider_key(state: &mut WizardState, key: KeyCode) {
                     let models = model_list_for_provider(&provider_name);
                     state.provider_model_select.set_items(models);
                     state.provider_sub_step = ProviderSubStep::ModelSelect;
+                } else if provider_name == "openai" || provider_name == "anthropic" {
+                    state.provider_sub_step = ProviderSubStep::AuthMethodSelect;
                 } else {
                     state.provider_sub_step = ProviderSubStep::ApiKey;
                 }
             }
             KeyCode::Esc => state.provider_sub_step = ProviderSubStep::TierSelect,
+            _ => {}
+        },
+        ProviderSubStep::AuthMethodSelect => match key {
+            KeyCode::Up => state.provider_auth_method_select.up(),
+            KeyCode::Down => state.provider_auth_method_select.down(),
+            KeyCode::Enter => {
+                if state.provider_auth_method_select.selected == 1 {
+                    match crate::security::auth::import_oauth_access_token_for_provider(
+                        &state.selected_provider,
+                    ) {
+                        Ok(Some((token, _source))) => {
+                            state.selected_api_key = token;
+                            let models = model_list_for_provider(&state.selected_provider);
+                            state.provider_model_select.set_items(models);
+                            state.provider_sub_step = ProviderSubStep::ModelSelect;
+                        }
+                        Ok(None) | Err(_) => {
+                            state.provider_sub_step = ProviderSubStep::ApiKey;
+                        }
+                    }
+                } else {
+                    state.provider_sub_step = ProviderSubStep::ApiKey;
+                }
+            }
+            KeyCode::Esc => state.provider_sub_step = ProviderSubStep::ProviderSelect,
             _ => {}
         },
         ProviderSubStep::ApiKey => match key {
@@ -125,7 +185,13 @@ fn handle_provider_key(state: &mut WizardState, key: KeyCode) {
                 state.provider_model_select.set_items(models);
                 state.provider_sub_step = ProviderSubStep::ModelSelect;
             }
-            KeyCode::Esc => state.provider_sub_step = ProviderSubStep::ProviderSelect,
+            KeyCode::Esc => {
+                if state.selected_provider == "openai" || state.selected_provider == "anthropic" {
+                    state.provider_sub_step = ProviderSubStep::AuthMethodSelect;
+                } else {
+                    state.provider_sub_step = ProviderSubStep::ProviderSelect;
+                }
+            }
             KeyCode::Char(c) => state.provider_api_key.insert(c),
             KeyCode::Backspace => state.provider_api_key.backspace(),
             KeyCode::Delete => state.provider_api_key.delete(),
@@ -144,7 +210,13 @@ fn handle_provider_key(state: &mut WizardState, key: KeyCode) {
                 state.selected_model = model_id;
                 state.next_step();
             }
-            KeyCode::Esc => state.provider_sub_step = ProviderSubStep::ApiKey,
+            KeyCode::Esc => {
+                if state.selected_provider == "openai" || state.selected_provider == "anthropic" {
+                    state.provider_sub_step = ProviderSubStep::AuthMethodSelect;
+                } else {
+                    state.provider_sub_step = ProviderSubStep::ApiKey;
+                }
+            }
             _ => {}
         },
         ProviderSubStep::CustomBaseUrl => match key {

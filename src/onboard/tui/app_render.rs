@@ -67,6 +67,9 @@ pub(super) fn draw_ui(area: Rect, buf: &mut Buffer, state: &WizardState, spinner
 
 fn render_step(area: Rect, buf: &mut Buffer, state: &WizardState, spinner: &Spinner) {
     match state.current_step {
+        WizardStep::Language => {
+            steps::LanguageStep { state }.render(area, buf);
+        }
         WizardStep::Workspace => {
             steps::WorkspaceStep { state }.render(area, buf);
         }

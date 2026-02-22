@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use super::super::state::WizardState;
+use super::super::state::{WizardState, WorkspaceSubStep};
 use super::super::theme;
 use super::super::widgets::{TextInputWidget, ToggleWidget};
 
@@ -45,8 +45,22 @@ impl Widget for WorkspaceStep<'_> {
         .render(toggle_area, buf);
         y += 2;
 
-        // If custom path, show text input
-        if !self.state.workspace_use_default.value && y < area.y + area.height {
+        if !self.state.workspace_use_default.value
+            && self.state.workspace_sub_step == WorkspaceSubStep::Choice
+            && y < area.y + area.height
+        {
+            let hint = Line::from(vec![
+                Span::styled("  ", theme::dim_style()),
+                Span::styled(t!("onboard.workspace.custom_hint"), theme::dim_style()),
+            ]);
+            hint.render(Rect::new(area.x, y, area.width, 1), buf);
+            return;
+        }
+
+        if !self.state.workspace_use_default.value
+            && self.state.workspace_sub_step == WorkspaceSubStep::PathInput
+            && y < area.y + area.height
+        {
             let input_area = Rect::new(area.x, y, area.width, 1);
             TextInputWidget::new(
                 &self.state.workspace_custom_path,

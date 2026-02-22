@@ -6,8 +6,55 @@ use crate::ui::style as ui;
 use super::super::domain::{provider_env_var, validate_base_url};
 use super::super::view::print_bullet;
 
+fn prompt_api_key_for_provider(provider_name: &str) -> Result<String> {
+    let key_url = match provider_name {
+        "openrouter" => "https://openrouter.ai/keys",
+        "anthropic" => "https://console.anthropic.com/settings/keys",
+        "openai" => "https://platform.openai.com/api-keys",
+        "venice" => "https://venice.ai/settings/api",
+        "groq" => "https://console.groq.com/keys",
+        "mistral" => "https://console.mistral.ai/api-keys",
+        "deepseek" => "https://platform.deepseek.com/api_keys",
+        "together" => "https://api.together.xyz/settings/api-keys",
+        "fireworks" => "https://fireworks.ai/account/api-keys",
+        "perplexity" => "https://www.perplexity.ai/settings/api",
+        "xai" => "https://console.x.ai",
+        "cohere" => "https://dashboard.cohere.com/api-keys",
+        "moonshot" => "https://platform.moonshot.cn/console/api-keys",
+        "minimax" => "https://www.minimaxi.com/user-center/basic-information",
+        "vercel" => "https://vercel.com/account/tokens",
+        "cloudflare" => "https://dash.cloudflare.com/profile/api-tokens",
+        "copilot" => "https://github.com/settings/tokens",
+        "bedrock" => "https://console.aws.amazon.com/iam",
+        "gemini" | "google" | "google-gemini" => "https://aistudio.google.com/app/apikey",
+        _ => "",
+    };
+
+    println!();
+    if !key_url.is_empty() {
+        print_bullet(&t!("onboard.provider.api_key_url", url = ui::url(key_url)));
+    }
+    print_bullet(&t!("onboard.provider.api_key_later"));
+    println!();
+
+    let key: String = Input::new()
+        .with_prompt(format!("  {}", t!("onboard.provider.paste_key")))
+        .allow_empty(true)
+        .interact_text()?;
+
+    if key.is_empty() {
+        let env_var = provider_env_var(provider_name);
+        print_bullet(&t!(
+            "onboard.provider.key_skipped",
+            env_var = ui::yellow(env_var)
+        ));
+    }
+
+    Ok(key)
+}
+
 #[allow(clippy::too_many_lines)]
-pub fn setup_provider() -> Result<(String, String, String)> {
+pub fn setup_provider() -> Result<(String, String, String, Option<String>)> {
     // ── Tier selection ──
     let tiers = vec![
         format!("› {}", t!("onboard.provider.tier_recommended")),
@@ -32,7 +79,10 @@ pub fn setup_provider() -> Result<(String, String, String)> {
             ),
             ("venice", "Venice AI — privacy-first (Llama, Opus)"),
             ("anthropic", "Anthropic — Claude Sonnet & Opus (direct)"),
-            ("openai", "OpenAI — GPT-4o, o1, GPT-5 (direct)"),
+            (
+                "openai",
+                "OpenAI — GPT-5.3 Codex (OAuth), GPT-4o, o1, GPT-5",
+            ),
             ("deepseek", "DeepSeek — V3 & R1 (affordable)"),
             ("mistral", "Mistral — Large & Codestral"),
             ("xai", "xAI — Grok 3 & 4"),
@@ -51,6 +101,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
             ("vercel", "Vercel AI Gateway"),
             ("cloudflare", "Cloudflare AI Gateway"),
             ("bedrock", "Amazon Bedrock — AWS managed models"),
+            ("copilot", "GitHub Copilot — OAuth-style developer models"),
         ],
         3 => vec![
             ("moonshot", "Moonshot — Kimi & Kimi Coding"),
@@ -106,7 +157,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
             )
         );
 
-        return Ok((provider_name, api_key, model));
+        return Ok((provider_name, api_key, model, None));
     }
 
     let provider_labels: Vec<&str> = providers.iter().map(|(_, label)| *label).collect();
@@ -120,6 +171,7 @@ pub fn setup_provider() -> Result<(String, String, String)> {
     let provider_name = providers[provider_idx].0;
 
     // ── API key ──
+    let mut oauth_source: Option<String> = None;
     let api_key = if provider_name == "ollama" {
         print_bullet(&t!("onboard.provider.ollama_no_key"));
         String::new()
@@ -178,50 +230,46 @@ pub fn setup_provider() -> Result<(String, String, String)> {
                 .allow_empty(true)
                 .interact_text()?
         }
+    } else if provider_name == "openai" || provider_name == "anthropic" {
+        let auth_methods = vec![
+            t!("onboard.provider.auth_method_api_key").to_string(),
+            t!("onboard.provider.auth_method_oauth").to_string(),
+        ];
+
+        let selected_auth = Select::new()
+            .with_prompt(format!("  {}", t!("onboard.provider.auth_method_prompt")))
+            .items(&auth_methods)
+            .default(0)
+            .interact()?;
+
+        if selected_auth == 1 {
+            print_bullet(&t!("onboard.provider.oauth_import_start"));
+            match crate::security::auth::import_oauth_access_token_for_provider(provider_name) {
+                Ok(Some((token, source))) => {
+                    oauth_source = Some(source);
+                    print_bullet(&t!(
+                        "onboard.provider.oauth_import_success",
+                        source = ui::value(oauth_source.as_deref().unwrap_or("oauth"))
+                    ));
+                    token
+                }
+                Ok(None) => {
+                    print_bullet(&t!("onboard.provider.oauth_import_unavailable"));
+                    prompt_api_key_for_provider(provider_name)?
+                }
+                Err(err) => {
+                    print_bullet(&t!(
+                        "onboard.provider.oauth_import_failed",
+                        error = ui::yellow(err.to_string())
+                    ));
+                    prompt_api_key_for_provider(provider_name)?
+                }
+            }
+        } else {
+            prompt_api_key_for_provider(provider_name)?
+        }
     } else {
-        let key_url = match provider_name {
-            "openrouter" => "https://openrouter.ai/keys",
-            "anthropic" => "https://console.anthropic.com/settings/keys",
-            "openai" => "https://platform.openai.com/api-keys",
-            "venice" => "https://venice.ai/settings/api",
-            "groq" => "https://console.groq.com/keys",
-            "mistral" => "https://console.mistral.ai/api-keys",
-            "deepseek" => "https://platform.deepseek.com/api_keys",
-            "together" => "https://api.together.xyz/settings/api-keys",
-            "fireworks" => "https://fireworks.ai/account/api-keys",
-            "perplexity" => "https://www.perplexity.ai/settings/api",
-            "xai" => "https://console.x.ai",
-            "cohere" => "https://dashboard.cohere.com/api-keys",
-            "moonshot" => "https://platform.moonshot.cn/console/api-keys",
-            "minimax" => "https://www.minimaxi.com/user-center/basic-information",
-            "vercel" => "https://vercel.com/account/tokens",
-            "cloudflare" => "https://dash.cloudflare.com/profile/api-tokens",
-            "bedrock" => "https://console.aws.amazon.com/iam",
-            "gemini" | "google" | "google-gemini" => "https://aistudio.google.com/app/apikey",
-            _ => "",
-        };
-
-        println!();
-        if !key_url.is_empty() {
-            print_bullet(&t!("onboard.provider.api_key_url", url = ui::url(key_url)));
-        }
-        print_bullet(&t!("onboard.provider.api_key_later"));
-        println!();
-
-        let key: String = Input::new()
-            .with_prompt(format!("  {}", t!("onboard.provider.paste_key")))
-            .allow_empty(true)
-            .interact_text()?;
-
-        if key.is_empty() {
-            let env_var = provider_env_var(provider_name);
-            print_bullet(&t!(
-                "onboard.provider.key_skipped",
-                env_var = ui::yellow(env_var)
-            ));
-        }
-
-        key
+        prompt_api_key_for_provider(provider_name)?
     };
 
     // ── Model selection ──
@@ -253,6 +301,10 @@ pub fn setup_provider() -> Result<(String, String, String)> {
             ("claude-haiku-4-5", "Claude Haiku 4.5 (fastest, cheapest)"),
         ],
         "openai" => vec![
+            (
+                "gpt-5.3-codex",
+                "GPT-5.3 Codex (OAuth profile, OpenAI Codex)",
+            ),
             ("gpt-5.2", "GPT-5.2 (flagship)"),
             ("gpt-5-mini", "GPT-5 Mini (fast, cheap)"),
             ("gpt-4.1", "GPT-4.1 (1M context, non-reasoning)"),
@@ -323,6 +375,11 @@ pub fn setup_provider() -> Result<(String, String, String)> {
             ("command-a-03-2025", "Command A (flagship)"),
             ("command-r7b-12-2024", "Command R 7B (fast)"),
         ],
+        "copilot" => vec![
+            ("gpt-4.1", "GPT-4.1 via Copilot (recommended)"),
+            ("gpt-4o", "GPT-4o via Copilot"),
+            ("claude-3.7-sonnet", "Claude Sonnet via Copilot"),
+        ],
         "moonshot" => vec![
             ("kimi-k2.5", "Kimi K2.5 (flagship, multimodal)"),
             ("kimi-k2-turbo-preview", "Kimi K2 Turbo (fast)"),
@@ -369,5 +426,5 @@ pub fn setup_provider() -> Result<(String, String, String)> {
         )
     );
 
-    Ok((provider_name.to_string(), api_key, model))
+    Ok((provider_name.to_string(), api_key, model, oauth_source))
 }

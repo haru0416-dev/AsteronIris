@@ -14,6 +14,7 @@ pub fn default_model_for_provider(provider: &str) -> String {
         "moonshot" | "kimi" => "kimi-k2.5".into(),
         "glm" | "zhipu" => "glm-4.7".into(),
         "minimax" => "MiniMax-M2.1".into(),
+        "copilot" | "github-copilot" => "gpt-4.1".into(),
         _ => "anthropic/claude-sonnet-4-6".into(),
     }
 }
@@ -41,6 +42,7 @@ pub fn provider_env_var(name: &str) -> &'static str {
         "opencode" | "opencode-zen" => "OPENCODE_API_KEY",
         "vercel" | "vercel-ai" => "VERCEL_API_KEY",
         "cloudflare" | "cloudflare-ai" => "CLOUDFLARE_API_KEY",
+        "copilot" | "github-copilot" => "GITHUB_TOKEN",
         "bedrock" | "aws-bedrock" => "AWS_ACCESS_KEY_ID",
         "gemini" | "google" | "google-gemini" => "GEMINI_API_KEY",
         _ => "API_KEY",

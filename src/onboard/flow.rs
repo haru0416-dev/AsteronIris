@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use dialoguer::Confirm;
 use std::fs;
 
+use crate::security::auth::AuthProfileStore;
 use crate::ui::style as ui;
 
 use super::domain::default_model_for_provider;
@@ -52,7 +53,7 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
     let (workspace_dir, config_path) = setup_workspace()?;
 
     print_step(2, 8, &t!("onboard.step.provider"));
-    let (provider, api_key, model) = setup_provider()?;
+    let (provider, api_key, model, oauth_source) = setup_provider()?;
 
     print_step(3, 8, &t!("onboard.step.channels"));
     let channels_config = setup_channels()?;
@@ -79,9 +80,9 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
         api_key: if api_key.is_empty() {
             None
         } else {
-            Some(api_key)
+            Some(api_key.clone())
         },
-        default_provider: Some(provider),
+        default_provider: Some(provider.clone()),
         default_model: Some(model),
         default_temperature: 0.7,
         observability: ObservabilityConfig::default(),
@@ -120,6 +121,33 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
     );
 
     config.save()?;
+
+    if !api_key.trim().is_empty() {
+        let mut auth_store = AuthProfileStore::load_or_init_for_config(&config)?;
+        let profile_id = format!(
+            "{}-onboard-default",
+            provider.replace([':', '/'], "-").to_ascii_lowercase()
+        );
+        auth_store.upsert_profile(
+            crate::security::auth::AuthProfile {
+                id: profile_id.clone(),
+                provider: provider.clone(),
+                label: Some("Created by onboarding".into()),
+                api_key: Some(api_key.clone()),
+                refresh_token: None,
+                auth_scheme: Some(if oauth_source.is_some() {
+                    "oauth".into()
+                } else {
+                    "api_key".into()
+                }),
+                oauth_source,
+                disabled: false,
+            },
+            true,
+        )?;
+        auth_store.mark_profile_used(&provider, &profile_id);
+        auth_store.save_for_config(&config)?;
+    }
 
     print_summary(&config);
     offer_install_daemon(install_daemon_flag, &config)?;

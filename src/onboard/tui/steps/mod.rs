@@ -1,5 +1,6 @@
 pub mod channels;
 pub mod context;
+pub mod language;
 pub mod memory;
 pub mod provider;
 pub mod summary;
@@ -9,6 +10,7 @@ pub mod workspace;
 
 pub use channels::ChannelsStep;
 pub use context::ContextStep;
+pub use language::LanguageStep;
 pub use memory::MemoryStep;
 pub use provider::ProviderStep;
 pub use summary::SummaryStep;

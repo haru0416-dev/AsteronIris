@@ -4,6 +4,7 @@ use super::widgets::{SelectList, TextInput, Toggle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WizardStep {
+    Language,
     Workspace,
     Provider,
     Channels,
@@ -15,7 +16,8 @@ pub enum WizardStep {
 }
 
 impl WizardStep {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
+        Self::Language,
         Self::Workspace,
         Self::Provider,
         Self::Channels,
@@ -32,6 +34,7 @@ impl WizardStep {
 
     pub fn label(self) -> String {
         match self {
+            Self::Language => t!("onboard.step.language"),
             Self::Workspace => t!("onboard.step.workspace"),
             Self::Provider => t!("onboard.step.provider"),
             Self::Channels => t!("onboard.step.channels"),
@@ -46,6 +49,7 @@ impl WizardStep {
 
     pub fn short(self) -> &'static str {
         match self {
+            Self::Language => "Ln",
             Self::Workspace => "WS",
             Self::Provider => "AI",
             Self::Channels => "Ch",
@@ -94,11 +98,18 @@ pub enum ChannelSubStep {
 pub enum ProviderSubStep {
     TierSelect,
     ProviderSelect,
+    AuthMethodSelect,
     ApiKey,
     ModelSelect,
     CustomBaseUrl,
     CustomApiKey,
     CustomModel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceSubStep {
+    Choice,
+    PathInput,
 }
 
 /// The full wizard state machine.
@@ -110,6 +121,7 @@ pub struct WizardState {
 
     // ── Step 1: Workspace ──
     pub workspace_use_default: Toggle,
+    pub workspace_sub_step: WorkspaceSubStep,
     pub workspace_custom_path: TextInput,
     pub workspace_dir: String,
     pub config_path: String,
@@ -118,6 +130,7 @@ pub struct WizardState {
     pub provider_sub_step: ProviderSubStep,
     pub provider_tier_select: SelectList,
     pub provider_select: SelectList,
+    pub provider_auth_method_select: SelectList,
     pub provider_api_key: TextInput,
     pub provider_model_select: SelectList,
     pub provider_custom_base_url: TextInput,
@@ -167,6 +180,9 @@ pub struct WizardState {
 
     // ── Step 8: Summary ──
     pub summary_confirmed: bool,
+
+    pub language_select: SelectList,
+    pub selected_locale: String,
 }
 
 impl WizardState {
@@ -178,12 +194,13 @@ impl WizardState {
         let default_dir = home.join(".asteroniris");
 
         Self {
-            current_step: WizardStep::Workspace,
+            current_step: WizardStep::Language,
             completed_steps: Vec::new(),
             should_quit: false,
             status_message: None,
 
             workspace_use_default: Toggle::new(true),
+            workspace_sub_step: WorkspaceSubStep::Choice,
             workspace_custom_path: TextInput::new(""),
             workspace_dir: default_dir.join("workspace").display().to_string(),
             config_path: default_dir.join("config.toml").display().to_string(),
@@ -198,6 +215,10 @@ impl WizardState {
                 t!("onboard.provider.tier_custom").to_string(),
             ]),
             provider_select: SelectList::new(vec![]),
+            provider_auth_method_select: SelectList::new(vec![
+                t!("onboard.provider.auth_method_api_key").to_string(),
+                t!("onboard.provider.auth_method_oauth").to_string(),
+            ]),
             provider_api_key: TextInput::new(""),
             provider_model_select: SelectList::new(vec![]),
             provider_custom_base_url: TextInput::new(""),
@@ -281,6 +302,9 @@ impl WizardState {
             context_sub_field: 0,
 
             summary_confirmed: false,
+
+            language_select: SelectList::new(vec!["English (en)".into(), "日本語 (ja)".into()]),
+            selected_locale: "en".into(),
         }
     }
 

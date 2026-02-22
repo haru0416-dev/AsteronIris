@@ -12,6 +12,7 @@ pub struct ProviderStep<'a> {
 }
 
 impl Widget for ProviderStep<'_> {
+    #[allow(clippy::too_many_lines)]
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.height < 2 {
             return;
@@ -48,6 +49,22 @@ impl Widget for ProviderStep<'_> {
                     area.height.saturating_sub(2),
                 );
                 SelectListWidget::new(&self.state.provider_select, true).render(list_area, buf);
+            }
+            ProviderSubStep::AuthMethodSelect => {
+                let header = Line::from(Span::styled(
+                    format!("  {}", t!("onboard.provider.auth_method_prompt")),
+                    theme::heading_style(),
+                ));
+                header.render(Rect::new(area.x, area.y, area.width, 1), buf);
+
+                let list_area = Rect::new(
+                    area.x,
+                    area.y + 2,
+                    area.width,
+                    area.height.saturating_sub(2),
+                );
+                SelectListWidget::new(&self.state.provider_auth_method_select, true)
+                    .render(list_area, buf);
             }
             ProviderSubStep::ApiKey => {
                 let header = Line::from(Span::styled(
