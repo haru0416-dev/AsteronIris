@@ -137,14 +137,15 @@ async fn process_whatsapp_message(
                 error,
                 "gateway whatsapp autosave skipped due to policy context"
             );
-        } else {
-            let _ = state
-                .mem
-                .append_event(gateway_whatsapp_autosave_event(
-                    sender,
-                    ingress.persisted_summary.clone(),
-                ))
-                .await;
+        } else if let Err(error) = state
+            .mem
+            .append_event(gateway_whatsapp_autosave_event(
+                sender,
+                ingress.persisted_summary.clone(),
+            ))
+            .await
+        {
+            tracing::warn!(%error, "failed to autosave whatsapp event");
         }
     }
 
@@ -153,16 +154,22 @@ async fn process_whatsapp_message(
             source,
             "blocked high-risk external content at whatsapp ingress"
         );
-        let _ = wa
+        if let Err(error) = wa
             .send_chunked("I could not process that external content safely.", sender)
-            .await;
+            .await
+        {
+            tracing::warn!(%error, "failed to send whatsapp safety block reply");
+        }
         return;
     }
 
     if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-        let _ = wa
+        if let Err(error) = wa
             .send_chunked("I cannot respond right now due to policy limits.", sender)
-            .await;
+            .await
+        {
+            tracing::warn!(%error, "failed to send whatsapp policy limit reply");
+        }
         tracing::warn!("{policy_error}");
         return;
     }
@@ -183,9 +190,12 @@ async fn process_whatsapp_message(
         }
         Err(error) => {
             tracing::error!("LLM error for WhatsApp message: {error:#}");
-            let _ = wa
+            if let Err(error) = wa
                 .send_chunked("Sorry, I couldn't process your message right now.", sender)
-                .await;
+                .await
+            {
+                tracing::warn!(%error, "failed to send whatsapp error reply");
+            }
         }
     }
 }
@@ -239,6 +249,7 @@ pub(super) async fn handle_pair(
 }
 
 /// POST /webhook — main webhook endpoint
+#[allow(clippy::too_many_lines)]
 pub(super) async fn handle_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -311,13 +322,14 @@ pub(super) async fn handle_webhook(
                 error,
                 "gateway webhook autosave skipped due to policy context"
             );
-        } else {
-            let _ = state
-                .mem
-                .append_event(gateway_webhook_autosave_event(
-                    ingress.persisted_summary.clone(),
-                ))
-                .await;
+        } else if let Err(error) = state
+            .mem
+            .append_event(gateway_webhook_autosave_event(
+                ingress.persisted_summary.clone(),
+            ))
+            .await
+        {
+            tracing::warn!(%error, "failed to autosave webhook event");
         }
     }
 
