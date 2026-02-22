@@ -3,6 +3,7 @@ use super::types::{AgentBrowserResponse, BrowserAction};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
+use crate::security::url_validation::validate_url_not_ssrf;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::process::Stdio;
@@ -252,16 +253,15 @@ impl BrowserTool {
     }
 
     /// Validate URL against allowlist
-    pub(super) fn validate_url(&self, url: &str) -> anyhow::Result<()> {
+    pub(super) async fn validate_url(&self, url: &str) -> anyhow::Result<()> {
         let url = url.trim();
 
         if url.is_empty() {
             anyhow::bail!("URL cannot be empty");
         }
 
-        // Allow file:// URLs for local testing
         if url.starts_with("file://") {
-            return Ok(());
+            anyhow::bail!("file:// URLs are blocked by default");
         }
 
         if !url.starts_with("https://") && !url.starts_with("http://") {
@@ -284,6 +284,8 @@ impl BrowserTool {
         if !host_matches_allowlist(&host, &self.allowed_domains) {
             anyhow::bail!("Host '{host}' not in browser.allowed_domains");
         }
+
+        validate_url_not_ssrf(url).await?;
 
         Ok(())
     }
@@ -339,7 +341,7 @@ impl BrowserTool {
     /// Execute a browser action
     async fn execute_action(&self, action: BrowserAction) -> anyhow::Result<ToolResult> {
         if let BrowserAction::Open { url } = &action {
-            self.validate_url(url)?;
+            self.validate_url(url).await?;
         }
 
         let args = browser_action_args(&action);

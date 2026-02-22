@@ -76,16 +76,33 @@ fn is_private_host_catches_ipv6_private_ranges() {
     assert!(!is_private_host("2001:db8::1"));
 }
 
-#[test]
-fn validate_url_blocks_ipv6_ssrf() {
+#[tokio::test]
+async fn validate_url_blocks_ipv6_ssrf() {
     let security = Arc::new(SecurityPolicy::default());
     let tool = BrowserTool::new(security, vec!["*".into()], None);
-    assert!(tool.validate_url("https://[::1]/").is_err());
-    assert!(tool.validate_url("https://[::ffff:127.0.0.1]/").is_err());
+    assert!(tool.validate_url("https://[::1]/").await.is_err());
     assert!(
-        tool.validate_url("https://[::ffff:10.0.0.1]:8080/")
+        tool.validate_url("https://[::ffff:127.0.0.1]/")
+            .await
             .is_err()
     );
+    assert!(
+        tool.validate_url("https://[::ffff:10.0.0.1]:8080/")
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn validate_url_blocks_dns_resolved_private_host() {
+    let security = Arc::new(SecurityPolicy::default());
+    let tool = BrowserTool::new(security, vec!["*".into()], None);
+
+    let err = tool
+        .validate_url("https://localhost./")
+        .await
+        .expect_err("localhost. should resolve to loopback and be blocked");
+    assert!(err.to_string().contains("SSRF blocked"));
 }
 
 #[test]
@@ -118,32 +135,35 @@ fn browser_tool_name() {
     assert_eq!(tool.name(), "browser");
 }
 
-#[test]
-fn browser_tool_validates_url() {
+#[tokio::test]
+async fn browser_tool_validates_url() {
     let security = Arc::new(SecurityPolicy::default());
     let tool = BrowserTool::new(security, vec!["example.com".into()], None);
 
     // Valid
-    assert!(tool.validate_url("https://example.com").is_ok());
-    assert!(tool.validate_url("https://sub.example.com/path").is_ok());
+    assert!(tool.validate_url("https://example.com").await.is_ok());
+    assert!(
+        tool.validate_url("https://sub.example.com/path")
+            .await
+            .is_ok()
+    );
 
     // Invalid - not in allowlist
-    assert!(tool.validate_url("https://other.com").is_err());
+    assert!(tool.validate_url("https://other.com").await.is_err());
 
     // Invalid - private host
-    assert!(tool.validate_url("https://localhost").is_err());
-    assert!(tool.validate_url("https://127.0.0.1").is_err());
+    assert!(tool.validate_url("https://localhost").await.is_err());
+    assert!(tool.validate_url("https://127.0.0.1").await.is_err());
 
     // Invalid - not https
-    assert!(tool.validate_url("ftp://example.com").is_err());
+    assert!(tool.validate_url("ftp://example.com").await.is_err());
 
-    // File URLs allowed
-    assert!(tool.validate_url("file:///tmp/test.html").is_ok());
+    assert!(tool.validate_url("file:///tmp/test.html").await.is_err());
 }
 
-#[test]
-fn browser_tool_empty_allowlist_blocks() {
+#[tokio::test]
+async fn browser_tool_empty_allowlist_blocks() {
     let security = Arc::new(SecurityPolicy::default());
     let tool = BrowserTool::new(security, vec![], None);
-    assert!(tool.validate_url("https://example.com").is_err());
+    assert!(tool.validate_url("https://example.com").await.is_err());
 }
