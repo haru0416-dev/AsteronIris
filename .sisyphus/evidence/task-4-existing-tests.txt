@@ -1,0 +1,8 @@
+
+running 3 tests
+test core::subagents::roles::tests::test_agent_role_serializes_snake_case ... ok
+test core::subagents::tests::subagent_list_and_cancel_work ... ok
+test core::subagents::tests::subagent_inline_and_background_runs_complete ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1870 filtered out; finished in 0.03s
+

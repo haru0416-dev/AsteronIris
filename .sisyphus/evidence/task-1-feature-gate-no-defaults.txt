@@ -1,0 +1,2 @@
+    Checking asteroniris v0.1.0 (/home/haru/Project/asteroniris)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.35s

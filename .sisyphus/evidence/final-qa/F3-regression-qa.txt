@@ -1,0 +1,22 @@
+=== cargo fmt --check ===
+EXIT: 0
+
+=== cargo clippy -- -D warnings ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
+EXIT: 0
+
+=== cargo check --no-default-features ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+EXIT: 0
+
+=== cargo check --features email,vector-search,tui,media ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.24s
+EXIT: 0
+
+=== cargo check --lib ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.24s
+EXIT: 0
+
+=== cargo check --bin asteroniris ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.24s
+EXIT: 0

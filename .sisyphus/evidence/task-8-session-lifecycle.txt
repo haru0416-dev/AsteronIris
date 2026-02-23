@@ -1,0 +1,25 @@
+Task: T8 - CoordinationManager session lifecycle
+Date: 2026-02-23
+
+Changed file:
+- src/core/subagents/coordination.rs
+
+Verification:
+- lsp_diagnostics src/core/subagents/coordination.rs: clean (no diagnostics)
+
+Command: cargo test -- coordination
+Result:
+- core::subagents::coordination::tests::test_missing_session_returns_error ... ok
+- core::subagents::coordination::tests::test_session_id_format ... ok
+- core::subagents::coordination::tests::test_session_lifecycle ... ok
+- test result: ok. 3 passed; 0 failed
+
+Command: cargo test -- subagent
+Result:
+- core::subagents::roles::tests::test_agent_role_serializes_snake_case ... ok
+- core::subagents::coordination::tests::test_missing_session_returns_error ... ok
+- core::subagents::coordination::tests::test_session_id_format ... ok
+- core::subagents::coordination::tests::test_session_lifecycle ... ok
+- core::subagents::tests::subagent_list_and_cancel_work ... ok
+- core::subagents::tests::subagent_inline_and_background_runs_complete ... ok
+- test result: ok. 6 passed; 0 failed

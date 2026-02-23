@@ -1,0 +1,82 @@
+# F1: Plan Compliance Audit — codebase-tuning
+# Date: 2026-02-23 | Auditor: Atlas (self-audit based on F4 agent + direct verification)
+
+## Must Have [5/5] ✓
+
+1. All 953+ existing tests pass
+   → VERIFIED: 2,074 tests pass (cargo test 2026-02-23)
+   → Evidence: .sisyphus/evidence/final-qa/test.txt
+
+2. Security behavior preserved across all 5 layers
+   → VERIFIED: Security regression gate passes (agent action_intent, external_content,
+     gateway, persona injection_guard, memory governance, revocation_gate, tenant_recall)
+   → Evidence: .sisyphus/evidence/final-qa/security-regression.txt
+
+3. Config TOML deserialization backward-compatible
+   → VERIFIED: F4 agent confirmed no src/config changes in T1-T23 commit range
+   → No field renames or nesting changes (confirmed via learnings notes for T10)
+
+4. All pub use re-exports in facade mod.rs files preserved
+   → VERIFIED: src/core/providers/mod.rs (42 lines) preserves all pub use
+   → src/transport/channels/mod.rs (89 lines) preserves all pub use
+   → F4 agent confirmed 0 unaccounted changes
+
+5. Feature-gated compilation works for all feature combinations
+   → VERIFIED: cargo check --no-default-features ✓, --features email,vector-search,tui,media ✓
+   → Evidence: .sisyphus/evidence/final-qa/F3-regression-qa.txt
+
+## Must NOT Have [9/9] ✓
+
+1. No new features
+   → VERIFIED: F4 agent confirmed no feat( subjects in T1-T23 commit set
+
+2. No new dependencies
+   → VERIFIED: F4 agent confirmed no Cargo.toml/Cargo.lock changes in refactor range
+
+3. No Config TOML format changes
+   → VERIFIED: F4 agent confirmed no src/config changes in T1-T23 range
+
+4. No security model changes
+   → VERIFIED: security pillars all present (policy/mod.rs, pairing.rs, secrets.rs, 
+     writeback_guard/mod.rs, providers/scrub.rs)
+   → Security regression gate: all 28 tests pass
+
+5. No module consolidation of health+heartbeat+doctor
+   → VERIFIED: ls src/runtime/diagnostics/ shows doctor/, health.rs, heartbeat/ separately
+
+6. No hunting for unwrap() in test code
+   → VERIFIED: T8 learnings confirm only 2 production instances fixed
+     (skills/loader.rs + email_channel.rs)
+
+7. No removing dead_code without verifying
+   → VERIFIED: All 9 remaining suppressions have explanatory comments (verified 2026-02-23)
+   → Count reduced from 16 → 9 (improvements, not removals without review)
+
+8. No over-engineering
+   → VERIFIED: T14 learnings: "No extraction needed — mod.rs already thin at 140 lines"
+   → VERIFIED: T22 learnings: "No extraction needed — existing infrastructure adequate"
+
+9. Clippy suppression count did not increase
+   → VERIFIED: Baseline 84 → Current 69 (REDUCED by 15)
+   → Not increased = COMPLIANT
+
+## Tasks [23/23] ✓
+All T1-T23 complete per F4 agent audit and direct verification.
+F2: PASS (fmt ✓, clippy ✓, 2074 tests ✓, suppressions reduced)
+F3: PASS (all verification gates pass, evidence saved)
+F4: APPROVE (23/23 compliant, 0 violations, 0 unaccounted files)
+
+## Evidence Files
+- task-1-security-policy-tests.txt ✓
+- task-10-arc-config.txt ✓
+- task-11-agent-config.txt ✓
+- task-13-providers-decompose.txt ✓
+- task-14-security-decompose.txt ✓
+- task-15-skills-decompose.txt ✓
+- task-16-imessage-split.txt ✓
+- task-17-telegram-split.txt ✓
+- task-18-cow-scrub.txt ✓
+- task-19-agent-clones.txt ✓
+- final-qa/ directory with F2/F3/F4 outputs ✓
+
+## VERDICT: Must Have [5/5] | Must NOT Have [9/9] | Tasks [23/23] | F-WAVE: APPROVE

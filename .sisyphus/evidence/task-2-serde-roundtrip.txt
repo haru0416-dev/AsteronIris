@@ -1,0 +1,53 @@
+
+running 8 tests
+test config::schema::taste::tests::test_taste_config_default ... ok
+test core::taste::types::tests::test_axis_has_exactly_3_variants ... ok
+test config::schema::taste::tests::test_taste_config_toml_roundtrip ... ok
+test core::taste::types::tests::test_domain_default_is_general ... ok
+test core::taste::types::tests::test_axis_btreemap_key ... ok
+test core::taste::types::tests::test_suggestion_text_tagged_enum ... ok
+test core::taste::types::tests::test_pair_comparison_roundtrip ... ok
+test core::taste::types::tests::test_artifact_text_roundtrip ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1871 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 90 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
