@@ -9,6 +9,7 @@ pub mod http_client;
 pub mod oauth_recovery;
 pub mod ollama;
 pub mod openai;
+mod openai_compat;
 mod openai_types;
 pub mod openrouter;
 pub mod reliable;

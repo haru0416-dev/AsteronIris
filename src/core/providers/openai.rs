@@ -1,21 +1,20 @@
-use super::openai_types::{
-    ChatCompletionChunk, ChatRequest, ChatResponse, ContentPart, ImageUrlContent, Message,
-    MessageContent, OpenAiTool, OpenAiToolCall, OpenAiToolCallFunction, OpenAiToolDefinition,
-    StreamOptions,
+#[cfg(test)]
+use super::openai_types::Message;
+use super::{
+    openai_compat,
+    openai_types::{ChatRequest, ChatResponse, OpenAiToolCall},
 };
 use crate::core::providers::{
-    ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
-    build_provider_client, scrub_secret_patterns,
-    sse::{SseBuffer, parse_data_lines_without_done},
+    ContentBlock, ProviderMessage, ProviderResponse, StopReason, build_provider_client,
+    scrub_secret_patterns,
     streaming::{ProviderChatRequest, ProviderStream},
-    tool_convert::{ToolFields, map_tools_optional},
     traits::Provider,
 };
+#[cfg(test)]
+use crate::core::providers::{ImageSource, MessageRole, sse::parse_data_lines_without_done};
 use crate::core::tools::traits::ToolSpec;
-use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::Value;
 
 pub struct OpenAiProvider {
     /// Pre-computed `"Bearer <key>"` header value (avoids `format!` per request).
@@ -37,157 +36,12 @@ impl OpenAiProvider {
         model: &str,
         temperature: f64,
     ) -> ChatRequest {
-        let capacity = if system_prompt.is_some() { 2 } else { 1 };
-        let mut messages = Vec::with_capacity(capacity);
-
-        if let Some(sys) = system_prompt {
-            messages.push(Message {
-                role: "system",
-                content: Some(MessageContent::Text(sys.to_string())),
-                tool_call_id: None,
-                tool_calls: None,
-            });
-        }
-
-        messages.push(Message {
-            role: "user",
-            content: Some(MessageContent::Text(message.to_string())),
-            tool_call_id: None,
-            tool_calls: None,
-        });
-
-        ChatRequest {
-            model: model.to_string(),
-            messages,
-            temperature,
-            tools: None,
-            stream: None,
-            stream_options: None,
-        }
+        openai_compat::build_request(system_prompt, message, model, temperature)
     }
 
-    fn build_text_message(role: &'static str, content: String) -> Message {
-        Message {
-            role,
-            content: Some(MessageContent::Text(content)),
-            tool_call_id: None,
-            tool_calls: None,
-        }
-    }
-
+    #[cfg(test)]
     fn map_provider_message(provider_message: &ProviderMessage) -> Vec<Message> {
-        let mut text_parts = Vec::new();
-        let mut image_parts = Vec::new();
-        let mut assistant_tool_calls = Vec::new();
-        let mut tool_messages = Vec::new();
-
-        for block in &provider_message.content {
-            match block {
-                ContentBlock::Text { text } => {
-                    text_parts.push(scrub_secret_patterns(text).into_owned());
-                }
-                ContentBlock::ToolUse { id, name, input } => {
-                    assistant_tool_calls.push(OpenAiToolCall {
-                        id: id.clone(),
-                        r#type: "function".to_string(),
-                        function: OpenAiToolCallFunction {
-                            name: name.clone(),
-                            arguments: input.to_string(),
-                        },
-                    });
-                }
-                ContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                    is_error: _,
-                } => {
-                    tool_messages.push(Message {
-                        role: "tool",
-                        content: Some(MessageContent::Text(
-                            scrub_secret_patterns(content).into_owned(),
-                        )),
-                        tool_call_id: Some(tool_use_id.clone()),
-                        tool_calls: None,
-                    });
-                }
-                ContentBlock::Image { source } => {
-                    let url = match source {
-                        ImageSource::Base64 { media_type, data } => {
-                            format!("data:{media_type};base64,{data}")
-                        }
-                        ImageSource::Url { url } => url.clone(),
-                    };
-                    image_parts.push(ContentPart::ImageUrl {
-                        image_url: ImageUrlContent { url },
-                    });
-                }
-            }
-        }
-
-        let mut messages = Vec::new();
-        let text_content = if text_parts.is_empty() {
-            None
-        } else {
-            Some(text_parts.join("\n"))
-        };
-
-        match provider_message.role {
-            MessageRole::Assistant => {
-                if text_content.is_some() || !assistant_tool_calls.is_empty() {
-                    messages.push(Message {
-                        role: "assistant",
-                        content: text_content.map(MessageContent::Text),
-                        tool_call_id: None,
-                        tool_calls: if assistant_tool_calls.is_empty() {
-                            None
-                        } else {
-                            Some(assistant_tool_calls)
-                        },
-                    });
-                }
-            }
-            MessageRole::User => {
-                if image_parts.is_empty() {
-                    if let Some(content) = text_content {
-                        messages.push(Self::build_text_message("user", content));
-                    }
-                } else {
-                    let mut parts = Vec::new();
-                    if let Some(text) = text_content {
-                        parts.push(ContentPart::Text { text });
-                    }
-                    parts.extend(image_parts);
-                    messages.push(Message {
-                        role: "user",
-                        content: Some(MessageContent::Parts(parts)),
-                        tool_call_id: None,
-                        tool_calls: None,
-                    });
-                }
-            }
-            MessageRole::System => {
-                if let Some(content) = text_content {
-                    messages.push(Self::build_text_message("system", content));
-                }
-            }
-        }
-
-        messages.extend(tool_messages);
-        messages
-    }
-
-    fn build_openai_tools(tools: &[ToolSpec]) -> Option<Vec<OpenAiTool>> {
-        map_tools_optional(tools, |tool| {
-            let fields = ToolFields::from_tool(tool);
-            OpenAiTool {
-                r#type: "function",
-                function: OpenAiToolDefinition {
-                    name: fields.name,
-                    description: fields.description,
-                    parameters: fields.parameters,
-                },
-            }
-        })
+        openai_compat::map_provider_message(provider_message)
     }
 
     fn build_tools_request(
@@ -197,67 +51,21 @@ impl OpenAiProvider {
         model: &str,
         temperature: f64,
     ) -> ChatRequest {
-        let mut openai_messages = Vec::new();
-
-        if let Some(sys) = system_prompt {
-            openai_messages.push(Self::build_text_message(
-                "system",
-                scrub_secret_patterns(sys).into_owned(),
-            ));
-        }
-
-        for provider_message in messages {
-            openai_messages.extend(Self::map_provider_message(provider_message));
-        }
-
-        ChatRequest {
-            model: model.to_string(),
-            messages: openai_messages,
-            temperature,
-            tools: Self::build_openai_tools(tools),
-            stream: None,
-            stream_options: None,
-        }
+        openai_compat::build_tools_request(system_prompt, messages, tools, model, temperature)
     }
 
     fn extract_text(chat_response: &ChatResponse) -> anyhow::Result<String> {
-        chat_response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.clone())
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenAI"))
+        openai_compat::extract_text(chat_response, "OpenAI")
     }
 
     fn map_finish_reason(finish_reason: Option<&str>) -> StopReason {
-        match finish_reason {
-            Some("stop") => StopReason::EndTurn,
-            Some("tool_calls") => StopReason::ToolUse,
-            Some("length") => StopReason::MaxTokens,
-            Some(_) | None => StopReason::Error,
-        }
+        openai_compat::map_finish_reason(finish_reason)
     }
 
     fn parse_tool_calls(
         tool_calls: Option<Vec<OpenAiToolCall>>,
     ) -> anyhow::Result<Vec<ContentBlock>> {
-        tool_calls
-            .unwrap_or_default()
-            .into_iter()
-            .map(|tool_call| {
-                let input: Value = serde_json::from_str(&tool_call.function.arguments)
-                    .with_context(|| {
-                        format!(
-                            "OpenAI tool call arguments were not valid JSON for {}",
-                            tool_call.function.name
-                        )
-                    })?;
-                Ok(ContentBlock::ToolUse {
-                    id: tool_call.id,
-                    name: tool_call.function.name,
-                    input,
-                })
-            })
-            .collect()
+        openai_compat::parse_tool_calls(tool_calls, "OpenAI")
     }
 
     async fn call_api(
@@ -281,10 +89,10 @@ impl OpenAiProvider {
             .client
             .post("https://api.openai.com/v1/chat/completions")
             .header("Authorization", auth_header)
-            .json(&request)
+            .json(request)
             .send()
             .await
-            .context("OpenAI request failed")?;
+            .map_err(|error| anyhow::anyhow!("OpenAI request failed: {error}"))?;
 
         if !response.status().is_success() {
             return Err(super::api_error("OpenAI", response).await);
@@ -293,7 +101,7 @@ impl OpenAiProvider {
         response
             .json()
             .await
-            .context("OpenAI response JSON decode failed")
+            .map_err(|error| anyhow::anyhow!("OpenAI response JSON decode failed: {error}"))
     }
 
     async fn call_api_streaming(&self, request: &ChatRequest) -> anyhow::Result<reqwest::Response> {
@@ -308,7 +116,7 @@ impl OpenAiProvider {
             .json(request)
             .send()
             .await
-            .context("OpenAI request failed")?;
+            .map_err(|error| anyhow::anyhow!("OpenAI request failed: {error}"))?;
 
         if !response.status().is_success() {
             return Err(super::api_error("OpenAI", response).await);
@@ -321,105 +129,9 @@ impl OpenAiProvider {
         &self,
         req: ProviderChatRequest,
     ) -> anyhow::Result<ProviderStream> {
-        use crate::core::providers::streaming::StreamEvent;
-        use futures_util::StreamExt;
-
-        let request = ChatRequest {
-            model: req.model,
-            messages: {
-                let mut openai_messages = Vec::new();
-
-                if let Some(sys) = req.system_prompt {
-                    openai_messages.push(Self::build_text_message(
-                        "system",
-                        scrub_secret_patterns(&sys).into_owned(),
-                    ));
-                }
-
-                for provider_message in &req.messages {
-                    openai_messages.extend(Self::map_provider_message(provider_message));
-                }
-
-                openai_messages
-            },
-            temperature: req.temperature,
-            tools: Self::build_openai_tools(&req.tools),
-            stream: Some(true),
-            stream_options: Some(StreamOptions {
-                include_usage: true,
-            }),
-        };
-
+        let request = openai_compat::build_stream_request(req);
         let response = self.call_api_streaming(&request).await?;
-        let mut byte_stream = response.bytes_stream();
-
-        let stream = async_stream::try_stream! {
-            let mut sse_buffer = SseBuffer::new();
-            let mut sent_start = false;
-
-            while let Some(chunk_result) = byte_stream.next().await {
-                let chunk = chunk_result?;
-                sse_buffer.push_chunk(&chunk);
-
-                while let Some(event_block) = sse_buffer.next_event_block() {
-                    for data in parse_data_lines_without_done(&event_block) {
-                        let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data) else {
-                            continue;
-                        };
-
-                        if !sent_start {
-                            yield StreamEvent::ResponseStart {
-                                model: chunk.model.clone(),
-                            };
-                            sent_start = true;
-                        }
-
-                        for choice in &chunk.choices {
-                            if let Some(content) = &choice.delta.content
-                                && !content.is_empty()
-                            {
-                                yield StreamEvent::TextDelta {
-                                    text: content.clone(),
-                                };
-                            }
-
-                            if let Some(tool_calls) = &choice.delta.tool_calls {
-                                for tool_call in tool_calls {
-                                    yield StreamEvent::ToolCallDelta {
-                                        index: tool_call.index,
-                                        id: tool_call.id.clone(),
-                                        name: tool_call.function.as_ref().and_then(|f| f.name.clone()),
-                                        input_json_delta: tool_call
-                                            .function
-                                            .as_ref()
-                                            .and_then(|f| f.arguments.clone())
-                                            .unwrap_or_default(),
-                                    };
-                                }
-                            }
-
-                            if let Some(finish) = choice.finish_reason.as_deref() {
-                                let stop = Self::map_finish_reason(Some(finish));
-                                let (input_t, output_t) = chunk
-                                    .usage
-                                    .as_ref()
-                                    .map_or((None, None), |u| {
-                                        (Some(u.prompt_tokens), Some(u.completion_tokens))
-                                    });
-
-                                yield StreamEvent::Done {
-                                    stop_reason: Some(stop),
-                                    input_tokens: input_t,
-                                    output_tokens: output_t,
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-        };
-
-        Ok(Box::pin(stream))
+        Ok(openai_compat::sse_response_to_provider_stream(response))
     }
 }
 
