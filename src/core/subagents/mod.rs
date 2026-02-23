@@ -49,6 +49,9 @@ struct SubagentRunEntry {
 static RUNTIME: OnceLock<RwLock<Option<SubagentRuntimeConfig>>> = OnceLock::new();
 static RUNS: OnceLock<Mutex<HashMap<String, SubagentRunEntry>>> = OnceLock::new();
 
+#[cfg(test)]
+pub(crate) static TEST_RUNTIME_LOCK: Mutex<()> = Mutex::new(());
+
 fn runtime_lock() -> &'static RwLock<Option<SubagentRuntimeConfig>> {
     RUNTIME.get_or_init(|| RwLock::new(None))
 }
@@ -232,6 +235,10 @@ mod tests {
 
     #[tokio::test]
     async fn subagent_inline_and_background_runs_complete() {
+        let _guard = TEST_RUNTIME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         configure_runtime(SubagentRuntimeConfig {
             provider: Arc::new(MockProvider),
             system_prompt: "sys".to_string(),
@@ -254,6 +261,10 @@ mod tests {
 
     #[tokio::test]
     async fn subagent_list_and_cancel_work() {
+        let _guard = TEST_RUNTIME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         configure_runtime(SubagentRuntimeConfig {
             provider: Arc::new(MockProvider),
             system_prompt: "sys".to_string(),

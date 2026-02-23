@@ -188,6 +188,13 @@ pub fn all_tools(
     tools.push(Box::new(SubagentOutputTool::new()));
     tools.push(Box::new(SubagentCancelTool::new()));
 
+    #[cfg(feature = "taste")]
+    {
+        if let Ok(engine) = crate::core::taste::create_taste_engine(&crate::config::TasteConfig::default()) {
+            tools.push(Box::new(super::TasteEvaluateTool::new(engine)));
+        }
+    }
+
     tools
 }
 

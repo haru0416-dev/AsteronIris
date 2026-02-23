@@ -15,6 +15,8 @@ pub mod shell;
 pub mod subagent_cancel;
 pub mod subagent_output;
 pub mod subagent_spawn;
+#[cfg(feature = "taste")]
+pub mod taste_evaluate;
 pub mod traits;
 
 pub use browser::BrowserTool;
@@ -39,6 +41,8 @@ pub use shell::ShellTool;
 pub use subagent_cancel::SubagentCancelTool;
 pub use subagent_output::SubagentOutputTool;
 pub use subagent_spawn::SubagentSpawnTool;
+#[cfg(feature = "taste")]
+pub use taste_evaluate::TasteEvaluateTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
 pub use traits::{
