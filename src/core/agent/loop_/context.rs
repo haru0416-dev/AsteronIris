@@ -84,12 +84,12 @@ pub(super) async fn build_context_with_policy(
     if !replayable_entries.is_empty() {
         context.push_str("[Memory context]\n");
         for entry in &replayable_entries {
-            let value = if entry.slot_key.starts_with("external.") {
-                sanitize_external_fragment_for_context(&entry.slot_key, &entry.value)
+            if entry.slot_key.starts_with("external.") {
+                let value = sanitize_external_fragment_for_context(&entry.slot_key, &entry.value);
+                let _ = writeln!(context, "- {}: {}", entry.slot_key, value);
             } else {
-                entry.value.clone()
-            };
-            let _ = writeln!(context, "- {}: {}", entry.slot_key, value);
+                let _ = writeln!(context, "- {}: {}", entry.slot_key, entry.value);
+            }
         }
         context.push('\n');
     }

@@ -196,14 +196,16 @@ impl GeminiProvider {
             .as_ref()
             .and_then(|c| c.first())
             .map(|candidate| {
-                candidate
-                    .content
-                    .parts
-                    .iter()
-                    .filter_map(|part| part.text.as_ref())
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                let mut out = String::new();
+                for part in &candidate.content.parts {
+                    if let Some(t) = &part.text {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(t);
+                    }
+                }
+                out
             })
             .unwrap_or_default();
 
@@ -653,16 +655,18 @@ impl Provider for GeminiProvider {
             .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))?;
 
         let content_blocks = Self::parse_content_blocks(&candidate.content.parts);
-        let text = content_blocks
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                ContentBlock::ToolUse { .. }
-                | ContentBlock::ToolResult { .. }
-                | ContentBlock::Image { .. } => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = {
+            let mut out = String::new();
+            for block in &content_blocks {
+                if let ContentBlock::Text { text: t } = block {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(t);
+                }
+            }
+            out
+        };
 
         let mut provider_response = if let Some(usage) = result.usage_metadata {
             ProviderResponse::with_usage(

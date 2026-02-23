@@ -45,6 +45,7 @@ impl SqliteMemory {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn str_to_source_kind(s: &str) -> Option<SourceKind> {
         match s {
             "conversation" => Some(SourceKind::Conversation),

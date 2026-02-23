@@ -122,19 +122,20 @@ impl MarkdownMemory {
     }
 
     fn encode_tag_value(value: &str) -> String {
-        value
-            .chars()
-            .flat_map(|ch| match ch {
-                '%' => "%25".chars().collect::<Vec<_>>(),
-                ';' => "%3B".chars().collect::<Vec<_>>(),
-                '=' => "%3D".chars().collect::<Vec<_>>(),
-                '&' => "%26".chars().collect::<Vec<_>>(),
-                '\\' => "%5C".chars().collect::<Vec<_>>(),
-                '[' => "%5B".chars().collect::<Vec<_>>(),
-                ']' => "%5D".chars().collect::<Vec<_>>(),
-                _ => vec![ch],
-            })
-            .collect()
+        let mut out = String::with_capacity(value.len());
+        for ch in value.chars() {
+            match ch {
+                '%' => out.push_str("%25"),
+                ';' => out.push_str("%3B"),
+                '=' => out.push_str("%3D"),
+                '&' => out.push_str("%26"),
+                '\\' => out.push_str("%5C"),
+                '[' => out.push_str("%5B"),
+                ']' => out.push_str("%5D"),
+                _ => out.push(ch),
+            }
+        }
+        out
     }
 
     fn decode_tag_value(value: &str) -> Option<String> {

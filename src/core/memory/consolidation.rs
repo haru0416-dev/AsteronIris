@@ -91,17 +91,20 @@ fn save_state(workspace_dir: &Path, state: &ConsolidationState) -> Result<()> {
     Ok(())
 }
 
+fn join_whitespace(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for word in raw.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
+}
+
 fn build_consolidation_value(input: &ConsolidationInput) -> String {
-    let user: String = input
-        .user_message
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let assistant: String = input
-        .assistant_response
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let user = join_whitespace(&input.user_message);
+    let assistant = join_whitespace(&input.assistant_response);
     let user = truncate_with_ellipsis(&user, 120);
     let assistant = truncate_with_ellipsis(&assistant, 240);
     format!(

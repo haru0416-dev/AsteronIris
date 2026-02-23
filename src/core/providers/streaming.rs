@@ -333,7 +333,7 @@ impl StreamingSecretScrubber {
     }
 
     pub fn scrub_delta(&mut self, delta: &str) -> String {
-        let mut combined = self.carry.clone();
+        let mut combined = std::mem::take(&mut self.carry);
         combined.push_str(delta);
 
         let scrubbed = scrub_secret_patterns(&combined).into_owned();

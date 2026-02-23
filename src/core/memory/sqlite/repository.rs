@@ -88,13 +88,8 @@ impl SqliteMemory {
             MemoryEventType::ContradictionMarked => SignalTier::Governance,
             _ => input.signal_tier.unwrap_or(SignalTier::Belief),
         };
-        let signal_tier_str = Self::signal_tier_to_str(Self::str_to_signal_tier(
-            Self::signal_tier_to_str(signal_tier),
-        ));
-        let source_kind = input.source_kind.map(|kind| {
-            let encoded = Self::source_kind_to_str(kind);
-            Self::str_to_source_kind(encoded).map_or(encoded, Self::source_kind_to_str)
-        });
+        let signal_tier_str = Self::signal_tier_to_str(signal_tier);
+        let source_kind = input.source_kind.map(Self::source_kind_to_str);
         let source_uri = input.source_ref.clone();
         let provenance_source_class = input
             .provenance

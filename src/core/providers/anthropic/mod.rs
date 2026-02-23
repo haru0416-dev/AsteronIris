@@ -154,16 +154,15 @@ impl AnthropicProvider {
     }
 
     fn text_from_content_blocks(blocks: &[ContentBlock]) -> Option<String> {
-        let text = blocks
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                ContentBlock::ToolUse { .. }
-                | ContentBlock::ToolResult { .. }
-                | ContentBlock::Image { .. } => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let mut text = String::new();
+        for block in blocks {
+            if let ContentBlock::Text { text: t } = block {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(t);
+            }
+        }
 
         if text.is_empty() { None } else { Some(text) }
     }

@@ -189,7 +189,13 @@ fn normalize_source_ref(raw: &str) -> anyhow::Result<String> {
 }
 
 fn normalize_content(raw: &str) -> anyhow::Result<String> {
-    let normalized = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut normalized = String::with_capacity(raw.len());
+    for word in raw.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(word);
+    }
     if normalized.is_empty() {
         anyhow::bail!("signal_envelope.content must not be empty");
     }

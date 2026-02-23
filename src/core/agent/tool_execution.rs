@@ -31,11 +31,17 @@ pub(crate) fn build_result(
     }
 }
 
+fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 pub(crate) fn classify_execute_error(message: &str) -> Option<LoopStopReason> {
-    let lowered = message.to_lowercase();
-    if lowered.contains("action limit") {
+    if contains_ascii_ignore_case(message, "action limit") {
         Some(LoopStopReason::RateLimited)
-    } else if lowered.contains("requires approval") {
+    } else if contains_ascii_ignore_case(message, "requires approval") {
         Some(LoopStopReason::ApprovalDenied)
     } else {
         None
@@ -43,7 +49,7 @@ pub(crate) fn classify_execute_error(message: &str) -> Option<LoopStopReason> {
 }
 
 pub(crate) fn is_action_limit_message(message: &str) -> bool {
-    message.to_lowercase().contains("action limit")
+    contains_ascii_ignore_case(message, "action limit")
 }
 
 pub(crate) fn format_tool_result_content(result: &ToolResult) -> String {
@@ -74,17 +80,16 @@ fn extract_last_text(messages: &[ProviderMessage]) -> String {
         .rev()
         .find(|message| message.role == MessageRole::Assistant)
         .map(|message| {
-            message
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    ContentBlock::ToolUse { .. }
-                    | ContentBlock::ToolResult { .. }
-                    | ContentBlock::Image { .. } => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+            let mut out = String::new();
+            for block in &message.content {
+                if let ContentBlock::Text { text } = block {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(text);
+                }
+            }
+            out
         })
         .unwrap_or_default()
 }
