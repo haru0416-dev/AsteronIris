@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use crate::config::Config;
 use crate::plugins::integrations::IntegrationEntry;
 
-const REGISTRY_SOURCE: &str = include_str!("registry.rs");
+const REGISTRY_SOURCE: &str = include_str!("registry/catalog.rs");
 const SKILLFORGE_SOURCE: &str = include_str!("../skillforge/mod.rs");
 const SCOPE_LOCK_BASELINE: &str = include_str!("inventory_scope_lock.json");
 const CAPABILITY_MATRIX_SOURCE: &str = include_str!("integration_capability_matrix.json");
@@ -246,7 +246,7 @@ pub fn parse_registry_coming_soon_count(source: &str) -> Result<usize> {
         .next()
         .ok_or_else(|| anyhow!("registry source is empty"))?;
 
-    Ok(scope.matches("IntegrationStatus::ComingSoon").count())
+    Ok(scope.matches("status::coming_soon").count())
 }
 
 pub fn parse_skillforge_unimplemented_sources(source: &str) -> Result<Vec<String>> {
@@ -290,7 +290,7 @@ pub fn parse_registry_coming_soon_entries(
             category = Some(parsed_category);
         }
 
-        if trimmed.contains("IntegrationStatus::ComingSoon") {
+        if trimmed.contains("status::coming_soon") {
             is_coming_soon = true;
         }
 
@@ -524,7 +524,7 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("registry source should have cfg(test) marker");
-        let symbol_count = count_symbol_occurrences(scope, "IntegrationStatus::ComingSoon");
+        let symbol_count = count_symbol_occurrences(scope, "status::coming_soon");
         let parsed_count = parse_registry_coming_soon_count(REGISTRY_SOURCE).unwrap();
 
         assert_eq!(parsed_count, symbol_count);
