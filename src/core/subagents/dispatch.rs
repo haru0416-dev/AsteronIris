@@ -1,6 +1,6 @@
 use super::coordination::{AggregatedResult, CoordinationSession, DispatchResult};
-use super::{SubagentRunStatus, run_inline};
 use super::roles::AgentRole;
+use super::{SubagentRunStatus, run_inline};
 use anyhow::Result;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
@@ -40,7 +40,11 @@ pub async fn dispatch_parallel(
 
             let timeout_secs = config.timeout_secs.unwrap_or(60);
             let model_override = config.model_override;
-            let dispatch_result = timeout(Duration::from_secs(timeout_secs), run_inline(task, model_override)).await;
+            let dispatch_result = timeout(
+                Duration::from_secs(timeout_secs),
+                run_inline(task, model_override),
+            )
+            .await;
 
             #[allow(clippy::cast_possible_truncation)]
             let elapsed_ms = started_at.elapsed().as_millis() as u64;
@@ -110,8 +114,8 @@ pub async fn dispatch_parallel(
 mod tests {
     use super::*;
     use crate::core::providers::Provider;
-    use crate::core::subagents::{SubagentRuntimeConfig, TEST_RUNTIME_LOCK, configure_runtime};
     use crate::core::subagents::roles::{RoleAssignment, RoleConfig};
+    use crate::core::subagents::{SubagentRuntimeConfig, TEST_RUNTIME_LOCK, configure_runtime};
     use async_trait::async_trait;
     use std::sync::Arc;
 
@@ -207,12 +211,20 @@ mod tests {
         assert_eq!(aggregated.results[1].role, AgentRole::Executor);
         assert_eq!(aggregated.results[0].status, SubagentRunStatus::Completed);
         assert_eq!(aggregated.results[1].status, SubagentRunStatus::Completed);
-        assert_eq!(aggregated.results[0].output.as_deref(), Some("subagent:task-a"));
-        assert_eq!(aggregated.results[1].output.as_deref(), Some("subagent:task-b"));
-        assert!(aggregated
-            .results
-            .iter()
-            .all(|result| result.run_id.starts_with("run_")));
+        assert_eq!(
+            aggregated.results[0].output.as_deref(),
+            Some("subagent:task-a")
+        );
+        assert_eq!(
+            aggregated.results[1].output.as_deref(),
+            Some("subagent:task-b")
+        );
+        assert!(
+            aggregated
+                .results
+                .iter()
+                .all(|result| result.run_id.starts_with("run_"))
+        );
         assert!(aggregated.all_succeeded);
     }
 
@@ -242,10 +254,12 @@ mod tests {
         assert_eq!(aggregated.results[0].status, SubagentRunStatus::Completed);
         assert_eq!(aggregated.results[1].status, SubagentRunStatus::Failed);
         assert_eq!(aggregated.results[1].output, None);
-        assert!(aggregated.results[1]
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("forced failure")));
+        assert!(
+            aggregated.results[1]
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("forced failure"))
+        );
         assert!(!aggregated.all_succeeded);
     }
 
@@ -312,10 +326,12 @@ mod tests {
         assert_eq!(aggregated.results[1].role, AgentRole::Executor);
         assert_eq!(aggregated.results[1].status, SubagentRunStatus::Failed);
         assert_eq!(aggregated.results[1].output, None);
-        assert!(aggregated.results[1]
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("forced failure")));
+        assert!(
+            aggregated.results[1]
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("forced failure"))
+        );
 
         // Reviewer: timeout
         assert_eq!(aggregated.results[2].role, AgentRole::Reviewer);

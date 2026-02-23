@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use strum::Display;
 
-// TextFormat — format of text artifact
+/// Format of a text artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextFormat {
@@ -11,7 +11,7 @@ pub enum TextFormat {
     Html,
 }
 
-// Artifact — input to the taste engine (Text and Ui only, NO image/video/audio)
+/// Input artifact to the taste engine (text or UI only; no image/video/audio).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Artifact {
@@ -27,7 +27,7 @@ pub enum Artifact {
     },
 }
 
-// Domain — which domain an artifact belongs to
+/// Domain classification for an artifact (text, UI, or general).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display, Default)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -38,7 +38,7 @@ pub enum Domain {
     General,
 }
 
-// Axis — aesthetic evaluation axis (EXACTLY 3, no more)
+/// Aesthetic evaluation axis (coherence, hierarchy, intentionality).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -48,10 +48,10 @@ pub enum Axis {
     Intentionality,
 }
 
-// AxisScores — scores per axis (BTreeMap for stable ordering)
+/// Scores per aesthetic axis (`BTreeMap` for stable ordering).
 pub type AxisScores = BTreeMap<Axis, f64>;
 
-// TasteContext — context for evaluating an artifact
+/// Context for evaluating an artifact (domain, genre, purpose, audience, constraints).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TasteContext {
     #[serde(default)]
@@ -68,7 +68,7 @@ pub struct TasteContext {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-// Priority — suggestion priority level
+/// Priority level for a suggestion (high, medium, low).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -78,7 +78,7 @@ pub enum Priority {
     Low,
 }
 
-// TextOp — text correction operations
+/// Text correction operation type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextOp {
@@ -89,7 +89,7 @@ pub enum TextOp {
     Other(String),
 }
 
-// UiOp — UI correction operations
+/// UI correction operation type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UiOp {
@@ -100,7 +100,7 @@ pub enum UiOp {
     Other(String),
 }
 
-// Suggestion — improvement suggestion (tagged enum)
+/// Improvement suggestion for an artifact (general, text, or UI).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Suggestion {
@@ -121,7 +121,7 @@ pub enum Suggestion {
     },
 }
 
-// TasteReport — result of evaluating an artifact
+/// Result of evaluating an artifact (axis scores, domain, suggestions).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TasteReport {
     pub axis: AxisScores,
@@ -131,7 +131,7 @@ pub struct TasteReport {
     pub raw_critique: Option<String>,
 }
 
-// Winner — who won a pair comparison
+/// Outcome of a pair comparison (left, right, tie, or abstain).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Winner {
@@ -141,7 +141,7 @@ pub enum Winner {
     Abstain,
 }
 
-// PairComparison — record of a human/LLM preference comparison
+/// Record of a preference comparison between two artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairComparison {
     pub domain: Domain,

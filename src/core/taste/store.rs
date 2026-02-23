@@ -3,9 +3,10 @@
 use super::types::{Domain, PairComparison, TasteContext, Winner};
 use anyhow::Context as _;
 use async_trait::async_trait;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::Mutex;
 
+/// Rating for an item based on preference comparisons.
 pub struct ItemRating {
     pub item_id: String,
     pub domain: Domain,
@@ -251,8 +252,7 @@ impl TasteStore for SqliteTasteStore {
 
         let mut ratings = Vec::new();
         for row in rows {
-            let (item_id, dom_s, rating, n_comp, updated) =
-                row.context("read rating row")?;
+            let (item_id, dom_s, rating, n_comp, updated) = row.context("read rating row")?;
             let domain: Domain = serde_json::from_value(serde_json::Value::String(dom_s))
                 .context("deserialize domain")?;
             ratings.push(ItemRating {
@@ -270,8 +270,8 @@ impl TasteStore for SqliteTasteStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{Domain, PairComparison, TasteContext, Winner};
+    use super::*;
     use rusqlite::Connection;
 
     fn fresh_store() -> SqliteTasteStore {

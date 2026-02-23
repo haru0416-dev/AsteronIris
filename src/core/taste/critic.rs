@@ -7,6 +7,7 @@ use super::types::{Artifact, Axis, AxisScores, TasteContext, TextFormat};
 use crate::core::providers::{Provider, scrub_secret_patterns};
 use async_trait::async_trait;
 
+/// Result of critiquing an artifact (axis scores, raw response, confidence).
 pub struct CritiqueResult {
     pub axis_scores: AxisScores,
     pub raw_response: String,

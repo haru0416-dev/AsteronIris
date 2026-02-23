@@ -11,6 +11,7 @@ use super::learner::TasteLearner;
 use super::store::TasteStore;
 use super::types::{Artifact, Domain, PairComparison, TasteContext, TasteReport};
 
+/// Trait for evaluating artifacts and comparing preferences.
 #[async_trait]
 pub trait TasteEngine: Send + Sync {
     async fn evaluate(
@@ -51,6 +52,7 @@ impl TasteEngine for DefaultTasteEngine {
     }
 }
 
+/// Creates a taste engine instance from configuration.
 pub fn create_taste_engine(_config: &TasteConfig) -> anyhow::Result<Arc<dyn TasteEngine>> {
     anyhow::bail!("create_taste_engine: full wiring in T9 (Wave 3)")
 }

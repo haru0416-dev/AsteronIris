@@ -1,5 +1,8 @@
-// Taste engine module — gated behind `taste` feature.
-// Provides LLM-based aesthetic evaluation for text and UI artifacts.
+//! Taste engine module — LLM-based aesthetic evaluation for text and UI artifacts.
+//!
+//! The taste engine provides structured critique of artifacts across three aesthetic axes:
+//! coherence, hierarchy, and intentionality. It supports pair comparisons for preference learning
+//! and stores ratings in a persistent backend.
 
 pub(crate) mod adapter;
 pub(crate) mod critic;
