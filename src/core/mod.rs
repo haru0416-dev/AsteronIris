@@ -6,4 +6,6 @@ pub mod planner;
 pub mod providers;
 pub mod sessions;
 pub mod subagents;
+#[cfg(feature = "taste")]
+pub mod taste;
 pub mod tools;

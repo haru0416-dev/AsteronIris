@@ -1,11 +1,15 @@
 use crate::core::providers::Provider;
 use anyhow::{Result, bail};
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
+
+pub mod coordination;
+pub mod dispatch;
+pub mod roles;
 
 #[derive(Clone)]
 pub struct SubagentRuntimeConfig {
@@ -15,7 +19,7 @@ pub struct SubagentRuntimeConfig {
     pub default_temperature: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentRunStatus {
     Running,

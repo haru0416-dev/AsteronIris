@@ -122,6 +122,7 @@ tui = ["dep:ratatui", "dep:crossterm"]
 media = ["dep:infer", "dep:mime"]
 mcp = ["dep:rmcp"]
 link-extraction = ["dep:scraper"]
+taste = []
 
 [profile.dev]
 codegen-units = 256

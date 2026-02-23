@@ -1,6 +1,6 @@
 use super::super::{
     AutonomyConfig, ChannelsConfig, GatewayConfig, McpConfig, MemoryConfig, ObservabilityConfig,
-    ToolsConfig, TunnelConfig,
+    TasteConfig, ToolsConfig, TunnelConfig,
 };
 use crate::media::types::MediaConfig;
 use anyhow::Result;
@@ -71,6 +71,9 @@ pub struct Config {
 
     #[serde(default)]
     pub mcp: McpConfig,
+
+    #[serde(default)]
+    pub taste: TasteConfig,
 
     #[serde(default = "default_locale")]
     pub locale: String,
@@ -338,6 +341,7 @@ impl Default for Config {
             identity: IdentityConfig::default(),
             tools: ToolsConfig::default(),
             mcp: McpConfig::default(),
+            taste: TasteConfig::default(),
             locale: default_locale(),
         }
     }

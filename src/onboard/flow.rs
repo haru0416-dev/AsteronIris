@@ -102,6 +102,7 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
         identity: crate::config::IdentityConfig::default(),
         tools: crate::config::ToolsConfig::default(),
         mcp: crate::config::McpConfig::default(),
+        taste: crate::config::TasteConfig::default(),
         locale: String::from("en"),
     };
 
@@ -314,6 +315,7 @@ pub fn run_quick_setup(
         identity: crate::config::IdentityConfig::default(),
         tools: crate::config::ToolsConfig::default(),
         mcp: crate::config::McpConfig::default(),
+        taste: crate::config::TasteConfig::default(),
         locale: String::from("en"),
     };
 

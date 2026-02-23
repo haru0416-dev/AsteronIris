@@ -5,5 +5,5 @@ pub use schema::{
     EmailConfig, GatewayConfig, GatewayDefenseMode, HeartbeatConfig, IMessageConfig,
     IdentityConfig, MatrixConfig, McpConfig, MediaConfig, MemoryConfig, ObservabilityConfig,
     PersonaConfig, ReliabilityConfig, RuntimeConfig, RuntimeKind, SecretsConfig, SlackConfig,
-    TelegramConfig, ToolsConfig, TunnelConfig, WebhookConfig,
+    TasteConfig, TelegramConfig, ToolsConfig, TunnelConfig, WebhookConfig,
 };

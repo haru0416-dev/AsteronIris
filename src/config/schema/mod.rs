@@ -5,6 +5,7 @@ mod gateway;
 mod mcp;
 mod memory;
 mod observability;
+mod taste;
 mod tools;
 mod tunnel;
 
@@ -25,6 +26,7 @@ pub use gateway::{GatewayConfig, GatewayDefenseMode};
 pub use mcp::{McpConfig, McpServerConfig, McpTransport};
 pub use memory::MemoryConfig;
 pub use observability::ObservabilityConfig;
+pub use taste::TasteConfig;
 #[allow(unused_imports)]
 pub use tools::{ToolEntry, ToolsConfig};
 pub use tunnel::{
