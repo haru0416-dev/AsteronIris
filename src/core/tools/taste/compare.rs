@@ -1,7 +1,7 @@
-use crate::core::tools::traits::{Tool, ToolResult};
 use crate::core::taste::engine::TasteEngine;
 use crate::core::taste::types::{Domain, PairComparison, TasteContext, Winner};
 use crate::core::tools::middleware::ExecutionContext;
+use crate::core::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;

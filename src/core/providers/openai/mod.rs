@@ -1,11 +1,5 @@
 pub(super) mod compat;
 pub(super) mod types;
-use compat as openai_compat;
-#[cfg(test)]
-use types::Message;
-#[cfg(test)]
-use types::OpenAiToolCall;
-use types::{ChatRequest, ChatResponse};
 #[cfg(test)]
 use crate::core::providers::{ContentBlock, StopReason};
 #[cfg(test)]
@@ -17,7 +11,13 @@ use crate::core::providers::{
 };
 use crate::core::tools::traits::ToolSpec;
 use async_trait::async_trait;
+use compat as openai_compat;
 use reqwest::Client;
+#[cfg(test)]
+use types::Message;
+#[cfg(test)]
+use types::OpenAiToolCall;
+use types::{ChatRequest, ChatResponse};
 
 pub struct OpenAiProvider {
     /// Pre-computed `"Bearer <key>"` header value (avoids `format!` per request).

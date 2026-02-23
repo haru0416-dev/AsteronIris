@@ -1,10 +1,10 @@
-use crate::core::tools::traits::{Tool, ToolResult};
 use crate::core::memory::traits::MemoryLayer;
 use crate::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
     SourceKind,
 };
 use crate::core::tools::middleware::ExecutionContext;
+use crate::core::tools::traits::{Tool, ToolResult};
 use crate::security::writeback_guard::enforce_tool_memory_write_policy;
 use async_trait::async_trait;
 use serde_json::json;

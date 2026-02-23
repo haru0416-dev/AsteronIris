@@ -1,5 +1,5 @@
-use super::*;
 use super::types::CandidateContent;
+use super::*;
 use crate::core::providers::Provider;
 use crate::core::tools::traits::ToolSpec;
 

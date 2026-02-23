@@ -50,7 +50,10 @@ pub(in crate::core::providers) fn build_request(
     }
 }
 
-pub(in crate::core::providers) fn build_text_message(role: &'static str, content: String) -> Message {
+pub(in crate::core::providers) fn build_text_message(
+    role: &'static str,
+    content: String,
+) -> Message {
     Message {
         role,
         content: Some(MessageContent::Text(content)),
@@ -59,7 +62,9 @@ pub(in crate::core::providers) fn build_text_message(role: &'static str, content
     }
 }
 
-pub(in crate::core::providers) fn map_provider_message(provider_message: &ProviderMessage) -> Vec<Message> {
+pub(in crate::core::providers) fn map_provider_message(
+    provider_message: &ProviderMessage,
+) -> Vec<Message> {
     let mut text_parts = Vec::new();
     let mut image_parts = Vec::new();
     let mut assistant_tool_calls = Vec::new();
@@ -160,7 +165,9 @@ pub(in crate::core::providers) fn map_provider_message(provider_message: &Provid
     messages
 }
 
-pub(in crate::core::providers) fn build_openai_tools(tools: &[ToolSpec]) -> Option<Vec<OpenAiTool>> {
+pub(in crate::core::providers) fn build_openai_tools(
+    tools: &[ToolSpec],
+) -> Option<Vec<OpenAiTool>> {
     map_tools_optional(tools, |tool| {
         let fields = ToolFields::from_tool(tool);
         OpenAiTool {
@@ -381,7 +388,9 @@ pub(in crate::core::providers) fn build_tool_provider_response(
     Ok(provider_response)
 }
 
-pub(in crate::core::providers) fn sse_response_to_provider_stream(response: reqwest::Response) -> ProviderStream {
+pub(in crate::core::providers) fn sse_response_to_provider_stream(
+    response: reqwest::Response,
+) -> ProviderStream {
     let mut byte_stream = response.bytes_stream();
 
     let stream = async_stream::try_stream! {

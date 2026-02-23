@@ -1,6 +1,7 @@
 use crate::core::memory::{
     MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SourceKind,
 };
+use anyhow::Context as _;
 
 fn expected_person_entity(person_id: &str) -> String {
     format!("person:{person_id}")
@@ -44,13 +45,11 @@ pub fn enforce_persona_long_term_write_policy(
     }
 
     require_common_write_metadata(event)?;
-    if event
+    let provenance = event
         .provenance
         .as_ref()
-        .expect("checked by require_common_write_metadata")
-        .source_class
-        != MemorySource::System
-    {
+        .context("provenance missing after validation")?;
+    if provenance.source_class != MemorySource::System {
         anyhow::bail!("persona writeback policy requires provenance.source_class=system");
     }
 

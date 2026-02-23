@@ -3,10 +3,6 @@
 //! This module provides a single implementation that works for all of them.
 
 mod types;
-use types::{
-    ChatRequest, ChatResponse, Message, ResponsesInput, ResponsesRequest, ResponsesResponse,
-    extract_chat_text, extract_responses_sse_text, extract_responses_text,
-};
 use super::sanitize_api_error;
 use crate::core::providers::{
     ProviderMessage, ProviderResponse, build_provider_client,
@@ -17,6 +13,10 @@ use crate::core::tools::traits::ToolSpec;
 use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
+use types::{
+    ChatRequest, ChatResponse, Message, ResponsesInput, ResponsesRequest, ResponsesResponse,
+    extract_chat_text, extract_responses_sse_text, extract_responses_text,
+};
 
 /// A provider that speaks the OpenAI-compatible chat completions API.
 /// Used by: Venice, Vercel AI Gateway, Cloudflare AI Gateway, Moonshot,

@@ -1,6 +1,6 @@
-use crate::core::tools::traits::{Tool, ToolResult};
 use crate::core::memory::{ForgetMode, Memory};
 use crate::core::tools::middleware::ExecutionContext;
+use crate::core::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;

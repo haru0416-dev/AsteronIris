@@ -1,7 +1,7 @@
-use super::{ApprovalBroker, ApprovalDecision, ApprovalRequest};
 #[cfg(feature = "discord")]
 use super::discord::DiscordApprovalBroker;
 use super::telegram::TelegramApprovalBroker;
+use super::{ApprovalBroker, ApprovalDecision, ApprovalRequest};
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
