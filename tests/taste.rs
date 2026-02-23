@@ -359,9 +359,27 @@ mod pipeline_tests {
 
         // 3 suggestion variants
         assert_eq!(recovered.suggestions.len(), 3);
-        assert!(matches!(&recovered.suggestions[0], Suggestion::General { priority: Priority::High, .. }));
-        assert!(matches!(&recovered.suggestions[1], Suggestion::Text { op: TextOp::RestructureArgument, .. }));
-        assert!(matches!(&recovered.suggestions[2], Suggestion::Ui { op: UiOp::AddContrast, .. }));
+        assert!(matches!(
+            &recovered.suggestions[0],
+            Suggestion::General {
+                priority: Priority::High,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &recovered.suggestions[1],
+            Suggestion::Text {
+                op: TextOp::RestructureArgument,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &recovered.suggestions[2],
+            Suggestion::Ui {
+                op: UiOp::AddContrast,
+                ..
+            }
+        ));
 
         // raw_critique preserved
         assert_eq!(
@@ -407,13 +425,19 @@ mod pipeline_tests {
             assert_eq!(recovered.right_id, "dashboard_v2");
             assert_eq!(recovered.domain, Domain::Ui);
             assert_eq!(recovered.created_at_ms, 1_700_000_000_000);
-            assert_eq!(recovered.rationale.as_deref(), Some("equally compelling layouts"));
+            assert_eq!(
+                recovered.rationale.as_deref(),
+                Some("equally compelling layouts")
+            );
 
             // Nested context fields
             assert_eq!(recovered.ctx.domain, Domain::Ui);
             assert_eq!(recovered.ctx.genre.as_deref(), Some("dashboard"));
             assert_eq!(recovered.ctx.purpose.as_deref(), Some("executive summary"));
-            assert_eq!(recovered.ctx.audience.as_deref(), Some("C-suite executives"));
+            assert_eq!(
+                recovered.ctx.audience.as_deref(),
+                Some("C-suite executives")
+            );
             assert_eq!(recovered.ctx.constraints.len(), 2);
             assert_eq!(recovered.ctx.constraints[0], "max 3 columns");
             assert_eq!(recovered.ctx.constraints[1], "mobile-first");
@@ -451,8 +475,14 @@ mod pipeline_tests {
 
         assert_eq!(recovered.domain, Domain::Text);
         assert_eq!(recovered.genre.as_deref(), Some("technical blog post"));
-        assert_eq!(recovered.purpose.as_deref(), Some("explain async Rust patterns"));
-        assert_eq!(recovered.audience.as_deref(), Some("intermediate Rust developers"));
+        assert_eq!(
+            recovered.purpose.as_deref(),
+            Some("explain async Rust patterns")
+        );
+        assert_eq!(
+            recovered.audience.as_deref(),
+            Some("intermediate Rust developers")
+        );
         assert_eq!(recovered.constraints.len(), 3);
         assert_eq!(recovered.constraints[2], "no unsafe");
 

@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 
-
 pub struct TasteEvaluateTool {
     engine: Arc<dyn TasteEngine>,
 }
@@ -300,11 +299,13 @@ mod tests {
         let ctx = ExecutionContext::test_default(Arc::new(SecurityPolicy::default()));
         let result = tool.execute(json!({}), &ctx).await.unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("Missing 'artifact'"));
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Missing 'artifact'")
+        );
     }
 
     #[tokio::test]
@@ -343,11 +344,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("Unsupported artifact kind"));
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Unsupported artifact kind")
+        );
     }
 
     #[test]

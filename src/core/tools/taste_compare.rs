@@ -88,19 +88,18 @@ impl Tool for TasteCompareTool {
             });
         };
 
-        let winner: Winner = match serde_json::from_value(serde_json::Value::String(
-            winner_str.to_string(),
-        )) {
-            Ok(w) => w,
-            Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(e.to_string()),
-                    attachments: vec![],
-                });
-            }
-        };
+        let winner: Winner =
+            match serde_json::from_value(serde_json::Value::String(winner_str.to_string())) {
+                Ok(w) => w,
+                Err(e) => {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(e.to_string()),
+                        attachments: vec![],
+                    });
+                }
+            };
 
         let domain_str = args
             .get("domain")
@@ -120,7 +119,10 @@ impl Tool for TasteCompareTool {
             }
         };
 
-        let rationale = args.get("rationale").and_then(|v| v.as_str()).map(String::from);
+        let rationale = args
+            .get("rationale")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         #[allow(clippy::cast_possible_truncation)]
         let created_at_ms = std::time::SystemTime::now()

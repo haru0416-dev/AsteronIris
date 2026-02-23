@@ -91,8 +91,9 @@ impl TasteEngine for DefaultTasteEngine {
 
 /// Creates a taste engine instance from configuration.
 pub fn create_taste_engine(config: &TasteConfig) -> anyhow::Result<Arc<dyn TasteEngine>> {
-    let provider = create_provider("synthetic", None)
-        .map_err(|e| anyhow::anyhow!("failed to create synthetic provider for taste engine: {e}"))?;
+    let provider = create_provider("synthetic", None).map_err(|e| {
+        anyhow::anyhow!("failed to create synthetic provider for taste engine: {e}")
+    })?;
 
     let critic = LlmCritic::new(Arc::from(provider), "claude-3-haiku-20240307".to_string());
 
