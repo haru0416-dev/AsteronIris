@@ -5,6 +5,7 @@ pub mod approval_cli;
 pub mod approval_discord;
 pub mod approval_telegram;
 pub mod auth;
+pub mod defaults;
 pub mod external_content;
 pub mod pairing;
 pub mod permissions;
@@ -27,6 +28,7 @@ pub use approval_cli::CliApprovalBroker;
 pub use approval_discord::DiscordApprovalBroker;
 #[allow(unused_imports)]
 pub use approval_telegram::TelegramApprovalBroker;
+pub use defaults::{default_allowed_commands, default_forbidden_paths};
 #[allow(unused_imports)]
 pub use pairing::PairingGuard;
 pub use permissions::PermissionStore;
