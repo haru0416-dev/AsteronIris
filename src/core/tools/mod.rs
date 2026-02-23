@@ -17,6 +17,8 @@ pub mod subagent_output;
 pub mod subagent_spawn;
 #[cfg(feature = "taste")]
 pub mod taste_evaluate;
+#[cfg(feature = "taste")]
+pub mod taste_compare;
 pub mod traits;
 
 pub use browser::BrowserTool;
@@ -43,6 +45,8 @@ pub use subagent_output::SubagentOutputTool;
 pub use subagent_spawn::SubagentSpawnTool;
 #[cfg(feature = "taste")]
 pub use taste_evaluate::TasteEvaluateTool;
+#[cfg(feature = "taste")]
+pub use taste_compare::TasteCompareTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
 pub use traits::{

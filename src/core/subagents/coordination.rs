@@ -222,4 +222,64 @@ mod tests {
             session.session_id
         );
     }
+
+    #[test]
+    fn test_session_lifecycle_three_roles_with_context() {
+        let mut manager = CoordinationManager::new();
+
+        let roles = vec![
+            RoleConfig {
+                role: AgentRole::Planner,
+                system_prompt_override: None,
+                model_override: None,
+                temperature_override: None,
+                timeout_secs: Some(30),
+            },
+            RoleConfig {
+                role: AgentRole::Executor,
+                system_prompt_override: None,
+                model_override: None,
+                temperature_override: None,
+                timeout_secs: Some(60),
+            },
+            RoleConfig {
+                role: AgentRole::Reviewer,
+                system_prompt_override: None,
+                model_override: None,
+                temperature_override: None,
+                timeout_secs: Some(10),
+            },
+        ];
+        let session = manager.create_session(roles).unwrap();
+        let id = session.session_id.clone();
+
+        // Verify 3 roles assigned
+        assert_eq!(manager.get_session(&id).unwrap().roles.len(), 3);
+
+        // Add context messages from each role
+        manager
+            .add_context_message(&id, AgentRole::Planner, "Here is the plan".into())
+            .unwrap();
+        manager
+            .add_context_message(&id, AgentRole::Executor, "Executing step 1".into())
+            .unwrap();
+        manager
+            .add_context_message(&id, AgentRole::Reviewer, "Reviewed step 1".into())
+            .unwrap();
+
+        // Verify message count and content
+        let ctx = manager.get_shared_context(&id).unwrap();
+        assert_eq!(ctx.messages.len(), 3);
+        assert_eq!(ctx.messages[0].role, AgentRole::Planner);
+        assert_eq!(ctx.messages[0].content, "Here is the plan");
+        assert_eq!(ctx.messages[1].role, AgentRole::Executor);
+        assert_eq!(ctx.messages[1].content, "Executing step 1");
+        assert_eq!(ctx.messages[2].role, AgentRole::Reviewer);
+        assert_eq!(ctx.messages[2].content, "Reviewed step 1");
+
+        // Close session and verify removal
+        manager.close_session(&id).unwrap();
+        assert!(manager.get_session(&id).is_none());
+        assert!(manager.get_shared_context(&id).is_none());
+    }
 }

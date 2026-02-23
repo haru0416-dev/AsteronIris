@@ -271,4 +271,80 @@ mod tests {
         assert_eq!(aggregated.results[0].error.as_deref(), Some("timeout"));
         assert!(!aggregated.all_succeeded);
     }
+
+    #[tokio::test]
+    async fn dispatch_parallel_mixed_outcomes() {
+        let _guard = TEST_RUNTIME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        configure_test_runtime();
+
+        let session = make_session(
+            "coord_mixed",
+            vec![
+                role_config(AgentRole::Planner, Some(5)),
+                role_config(AgentRole::Executor, Some(5)),
+                role_config(AgentRole::Reviewer, Some(1)),
+            ],
+        );
+        let tasks = vec![
+            (AgentRole::Planner, "task-ok".to_string()),
+            (AgentRole::Executor, "fail-task".to_string()),
+            (AgentRole::Reviewer, "sleep:1500".to_string()),
+        ];
+
+        let aggregated = dispatch_parallel(&session, tasks).await.unwrap();
+
+        assert_eq!(aggregated.session_id, "coord_mixed");
+        assert_eq!(aggregated.results.len(), 3);
+        assert!(!aggregated.all_succeeded);
+
+        // Planner: success
+        assert_eq!(aggregated.results[0].role, AgentRole::Planner);
+        assert_eq!(aggregated.results[0].status, SubagentRunStatus::Completed);
+        assert_eq!(
+            aggregated.results[0].output.as_deref(),
+            Some("subagent:task-ok")
+        );
+
+        // Executor: failure
+        assert_eq!(aggregated.results[1].role, AgentRole::Executor);
+        assert_eq!(aggregated.results[1].status, SubagentRunStatus::Failed);
+        assert_eq!(aggregated.results[1].output, None);
+        assert!(aggregated.results[1]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("forced failure")));
+
+        // Reviewer: timeout
+        assert_eq!(aggregated.results[2].role, AgentRole::Reviewer);
+        assert_eq!(aggregated.results[2].status, SubagentRunStatus::Cancelled);
+        assert_eq!(aggregated.results[2].output, None);
+        assert_eq!(aggregated.results[2].error.as_deref(), Some("timeout"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_role_timeout_override() {
+        let _guard = TEST_RUNTIME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        configure_test_runtime();
+
+        let session = make_session(
+            "coord_timeout_override",
+            vec![role_config(AgentRole::Executor, Some(1))],
+        );
+        let tasks = vec![(AgentRole::Executor, "sleep:1500".to_string())];
+
+        let aggregated = dispatch_parallel(&session, tasks).await.unwrap();
+
+        assert_eq!(aggregated.results.len(), 1);
+        assert_eq!(aggregated.results[0].role, AgentRole::Executor);
+        assert_eq!(aggregated.results[0].status, SubagentRunStatus::Cancelled);
+        assert_eq!(aggregated.results[0].output, None);
+        assert_eq!(aggregated.results[0].error.as_deref(), Some("timeout"));
+        assert!(!aggregated.all_succeeded);
+    }
 }

@@ -191,7 +191,8 @@ pub fn all_tools(
     #[cfg(feature = "taste")]
     {
         if let Ok(engine) = crate::core::taste::create_taste_engine(&crate::config::TasteConfig::default()) {
-            tools.push(Box::new(super::TasteEvaluateTool::new(engine)));
+            tools.push(Box::new(super::TasteEvaluateTool::new(Arc::clone(&engine))));
+            tools.push(Box::new(super::TasteCompareTool::new(engine)));
         }
     }
 
