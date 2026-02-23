@@ -74,22 +74,29 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
-    #[async_trait::async_trait]
     impl Channel for AlwaysFailChannel {
         fn name(&self) -> &str {
             self.name
         }
 
-        async fn send(&self, _message: &str, _recipient: &str) -> anyhow::Result<()> {
-            Ok(())
+        fn send<'a>(
+            &'a self,
+            _message: &'a str,
+            _recipient: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>>
+        {
+            Box::pin(async move { Ok(()) })
         }
 
-        async fn listen(
-            &self,
+        fn listen<'a>(
+            &'a self,
             _tx: tokio::sync::mpsc::Sender<ChannelMessage>,
-        ) -> anyhow::Result<()> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            anyhow::bail!("listen boom")
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("listen boom")
+            })
         }
     }
 

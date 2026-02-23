@@ -6,7 +6,7 @@ use crate::core::memory::traits::{Memory, MemoryLayer};
 use crate::runtime::observability::traits::{AutonomyLifecycleSignal, ObserverMetric};
 use crate::runtime::observability::{NoopObserver, Observer};
 use crate::security::writeback_guard::enforce_ingestion_write_policy;
-use async_trait::async_trait;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -21,7 +21,6 @@ pub struct IngestionResult {
     pub reason: Option<String>,
 }
 
-#[async_trait]
 pub trait IngestionPipeline: Send + Sync {
     async fn ingest(&self, envelope: SignalEnvelope) -> anyhow::Result<IngestionResult>;
 
@@ -121,8 +120,8 @@ pub(super) fn semantic_dedup_key(
     format!("{digest:x}")
 }
 
-#[async_trait]
 impl IngestionPipeline for SqliteIngestionPipeline {
+    #[allow(clippy::too_many_lines)]
     async fn ingest(&self, envelope: SignalEnvelope) -> anyhow::Result<IngestionResult> {
         let envelope = envelope.normalize()?;
         let source_class = match envelope.source_kind {

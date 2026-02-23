@@ -1,12 +1,9 @@
-use crate::core::providers::response::{
-    ContentBlock, ProviderMessage, ProviderResponse, StopReason,
-};
+use crate::core::providers::response::{ContentBlock, ProviderResponse, StopReason};
 use crate::core::providers::scrub::scrub_secret_patterns;
-use crate::core::tools::traits::ToolSpec;
 use anyhow::Result;
-use async_trait::async_trait;
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -39,17 +36,23 @@ pub enum StreamEvent {
     },
 }
 
-#[async_trait]
 pub trait StreamSink: Send + Sync {
-    async fn on_event(&self, event: &StreamEvent);
+    fn on_event<'a>(
+        &'a self,
+        event: &'a StreamEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 }
 
 #[derive(Debug, Default)]
 pub struct NullStreamSink;
 
-#[async_trait]
 impl StreamSink for NullStreamSink {
-    async fn on_event(&self, _event: &StreamEvent) {}
+    fn on_event<'a>(
+        &'a self,
+        _event: &'a StreamEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async {})
+    }
 }
 
 pub struct ChannelStreamSink {
@@ -85,29 +88,34 @@ impl ChannelStreamSink {
     }
 }
 
-#[async_trait]
 impl StreamSink for ChannelStreamSink {
-    async fn on_event(&self, event: &StreamEvent) {
-        match event {
-            StreamEvent::TextDelta { text } => {
-                let mut guard = self.buffer.lock().await;
-                guard.push_str(text);
-                let flush_now = guard.len() >= self.flush_threshold
-                    && (Self::at_flush_boundary(&guard) || guard.len() >= self.flush_threshold * 2);
-                if !flush_now {
-                    return;
+    fn on_event<'a>(
+        &'a self,
+        event: &'a StreamEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            match event {
+                StreamEvent::TextDelta { text } => {
+                    let mut guard = self.buffer.lock().await;
+                    guard.push_str(text);
+                    let flush_now = guard.len() >= self.flush_threshold
+                        && (Self::at_flush_boundary(&guard)
+                            || guard.len() >= self.flush_threshold * 2);
+                    if !flush_now {
+                        return;
+                    }
+                    let payload = std::mem::take(&mut *guard);
+                    drop(guard);
+                    let _ = self.sender.send(payload).await;
                 }
-                let payload = std::mem::take(&mut *guard);
-                drop(guard);
-                let _ = self.sender.send(payload).await;
+                StreamEvent::Done { .. } => {
+                    self.flush_buffer().await;
+                }
+                StreamEvent::ResponseStart { .. }
+                | StreamEvent::ToolCallDelta { .. }
+                | StreamEvent::ToolCallComplete { .. } => {}
             }
-            StreamEvent::Done { .. } => {
-                self.flush_buffer().await;
-            }
-            StreamEvent::ResponseStart { .. }
-            | StreamEvent::ToolCallDelta { .. }
-            | StreamEvent::ToolCallComplete { .. } => {}
-        }
+        })
     }
 }
 
@@ -136,22 +144,17 @@ impl Default for CliStreamSink {
     }
 }
 
-#[async_trait]
 impl StreamSink for CliStreamSink {
-    async fn on_event(&self, event: &StreamEvent) {
-        if let StreamEvent::TextDelta { text } = event {
-            (self.writer)(text);
-        }
+    fn on_event<'a>(
+        &'a self,
+        event: &'a StreamEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if let StreamEvent::TextDelta { text } = event {
+                (self.writer)(text);
+            }
+        })
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderChatRequest {
-    pub system_prompt: Option<String>,
-    pub messages: Vec<ProviderMessage>,
-    pub tools: Vec<ToolSpec>,
-    pub model: String,
-    pub temperature: f64,
 }
 
 pub struct StreamCollector {

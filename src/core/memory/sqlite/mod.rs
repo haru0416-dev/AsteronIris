@@ -5,10 +5,11 @@ use super::traits::{
 };
 use crate::core::memory::vector;
 use anyhow::Context;
-use async_trait::async_trait;
 use chrono::Local;
 use rusqlite::{Connection, params};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 /// Extension trait for `Mutex::lock()` — converts `PoisonError` to `anyhow::Error`.
@@ -248,43 +249,53 @@ impl SqliteMemory {
     }
 }
 
-#[async_trait]
 impl Memory for SqliteMemory {
     fn name(&self) -> &str {
         SqliteMemory::name(self)
     }
 
-    async fn health_check(&self) -> bool {
-        SqliteMemory::health_check(self).await
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move { SqliteMemory::health_check(self).await })
     }
 
-    async fn append_event(&self, input: MemoryEventInput) -> anyhow::Result<MemoryEvent> {
-        SqliteMemory::append_event(self, input).await
-    }
-
-    async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
-        SqliteMemory::recall_scoped(self, query).await
-    }
-
-    async fn resolve_slot(
+    fn append_event(
         &self,
-        entity_id: &str,
-        slot_key: &str,
-    ) -> anyhow::Result<Option<BeliefSlot>> {
-        SqliteMemory::resolve_slot(self, entity_id, slot_key).await
+        input: MemoryEventInput,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MemoryEvent>> + Send + '_>> {
+        Box::pin(async move { SqliteMemory::append_event(self, input).await })
     }
 
-    async fn forget_slot(
+    fn recall_scoped(
         &self,
-        entity_id: &str,
-        slot_key: &str,
+        query: RecallQuery,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<MemoryRecallItem>>> + Send + '_>> {
+        Box::pin(async move { SqliteMemory::recall_scoped(self, query).await })
+    }
+
+    fn resolve_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<BeliefSlot>>> + Send + 'a>> {
+        Box::pin(async move { SqliteMemory::resolve_slot(self, entity_id, slot_key).await })
+    }
+
+    fn forget_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
         mode: ForgetMode,
-        reason: &str,
-    ) -> anyhow::Result<ForgetOutcome> {
-        SqliteMemory::forget_slot(self, entity_id, slot_key, mode, reason).await
+        reason: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ForgetOutcome>> + Send + 'a>> {
+        Box::pin(
+            async move { SqliteMemory::forget_slot(self, entity_id, slot_key, mode, reason).await },
+        )
     }
 
-    async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
-        SqliteMemory::count_events(self, entity_id).await
+    fn count_events<'a>(
+        &'a self,
+        entity_id: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + 'a>> {
+        Box::pin(async move { SqliteMemory::count_events(self, entity_id).await })
     }
 }

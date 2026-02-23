@@ -200,7 +200,8 @@ fn encode_base64(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use anyhow::anyhow;
-    use async_trait::async_trait;
+    use std::future::Future;
+    use std::pin::Pin;
 
     use crate::core::providers::response::{ImageSource, MessageRole, ProviderResponse};
     use crate::core::tools::traits::ToolSpec;
@@ -236,65 +237,66 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Provider for MockVisionProvider {
-        async fn chat_with_system(
-            &self,
-            _system_prompt: Option<&str>,
-            _message: &str,
-            _model: &str,
+        fn chat_with_system<'a>(
+            &'a self,
+            _system_prompt: Option<&'a str>,
+            _message: &'a str,
+            _model: &'a str,
             _temperature: f64,
-        ) -> anyhow::Result<String> {
-            Ok("unused".to_string())
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+            Box::pin(async move { Ok("unused".to_string()) })
         }
 
-        async fn chat_with_tools(
-            &self,
-            system_prompt: Option<&str>,
-            messages: &[ProviderMessage],
-            tools: &[ToolSpec],
-            model: &str,
+        fn chat_with_tools<'a>(
+            &'a self,
+            system_prompt: Option<&'a str>,
+            messages: &'a [ProviderMessage],
+            tools: &'a [ToolSpec],
+            model: &'a str,
             temperature: f64,
-        ) -> anyhow::Result<ProviderResponse> {
-            self.calls.lock().unwrap().push((
-                system_prompt.map(ToString::to_string),
-                model.to_string(),
-                temperature,
-                tools.len(),
-            ));
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push((
+                    system_prompt.map(ToString::to_string),
+                    model.to_string(),
+                    temperature,
+                    tools.len(),
+                ));
 
-            assert_eq!(messages.len(), 1);
-            assert!(matches!(messages[0].role, MessageRole::User));
-            assert!(matches!(&messages[0].content[0], ContentBlock::Text { .. }));
-            assert!(matches!(
-                &messages[0].content[1],
-                ContentBlock::Image { .. }
-            ));
+                assert_eq!(messages.len(), 1);
+                assert!(matches!(messages[0].role, MessageRole::User));
+                assert!(matches!(&messages[0].content[0], ContentBlock::Text { .. }));
+                assert!(matches!(
+                    &messages[0].content[1],
+                    ContentBlock::Image { .. }
+                ));
 
-            if let ContentBlock::Image { source } = &messages[0].content[1] {
-                match source {
-                    ImageSource::Base64 { media_type, data } => {
-                        assert_eq!(media_type, "image/png");
-                        assert_eq!(data, "AQID");
+                if let ContentBlock::Image { source } = &messages[0].content[1] {
+                    match source {
+                        ImageSource::Base64 { media_type, data } => {
+                            assert_eq!(media_type, "image/png");
+                            assert_eq!(data, "AQID");
+                        }
+                        ImageSource::Url { .. } => panic!("expected base64 image source"),
                     }
-                    ImageSource::Url { .. } => panic!("expected base64 image source"),
                 }
-            }
 
-            match self.mode {
-                VisionMode::Success => Ok(ProviderResponse::text_only(
-                    "A small test image with three bytes.".to_string(),
-                )),
-                VisionMode::EmptyText => Ok(ProviderResponse {
-                    text: "   ".to_string(),
-                    input_tokens: None,
-                    output_tokens: None,
-                    model: None,
-                    content_blocks: vec![],
-                    stop_reason: None,
-                }),
-                VisionMode::Error => Err(anyhow!("vision provider failed")),
-            }
+                match self.mode {
+                    VisionMode::Success => Ok(ProviderResponse::text_only(
+                        "A small test image with three bytes.".to_string(),
+                    )),
+                    VisionMode::EmptyText => Ok(ProviderResponse {
+                        text: "   ".to_string(),
+                        input_tokens: None,
+                        output_tokens: None,
+                        model: None,
+                        content_blocks: vec![],
+                        stop_reason: None,
+                    }),
+                    VisionMode::Error => Err(anyhow!("vision provider failed")),
+                }
+            })
         }
 
         fn supports_vision(&self) -> bool {

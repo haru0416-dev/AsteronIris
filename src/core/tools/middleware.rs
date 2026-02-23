@@ -6,11 +6,12 @@ use crate::security::policy::{
     AutonomyLevel, EntityRateLimiter, RateLimitError, TenantPolicyContext,
 };
 use crate::security::{ApprovalBroker, PermissionStore, SecurityPolicy};
-use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 const CRITICAL_BOOTSTRAP_FORBIDDEN_WRITE_TARGETS: [&str; 4] =
@@ -74,217 +75,228 @@ pub enum MiddlewareDecision {
     RequireApproval(ActionIntent),
 }
 
-#[async_trait]
 pub trait ToolMiddleware: Send + Sync + std::fmt::Debug {
-    async fn before_execute(
-        &self,
-        tool_name: &str,
-        args: &Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision>;
+    fn before_execute<'a>(
+        &'a self,
+        tool_name: &'a str,
+        args: &'a Value,
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>>;
 
-    async fn after_execute(&self, tool_name: &str, result: &mut ToolResult, ctx: &ExecutionContext);
+    fn after_execute<'a>(
+        &'a self,
+        tool_name: &'a str,
+        result: &'a mut ToolResult,
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 }
 
 #[derive(Debug)]
 pub struct SecurityMiddleware;
 
-#[async_trait]
 impl ToolMiddleware for SecurityMiddleware {
     #[allow(clippy::too_many_lines)]
-    async fn before_execute(
-        &self,
-        tool_name: &str,
-        args: &Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision> {
-        if ctx.autonomy_level == AutonomyLevel::ReadOnly {
-            match tool_name {
-                "file_read" | "memory_recall" | "browser" => {}
-                _ => {
-                    return Ok(MiddlewareDecision::Block(
-                        "blocked by security policy: autonomy is read-only".to_string(),
-                    ));
-                }
-            }
-        }
-
-        if let Some(allowed_tools) = &ctx.allowed_tools
-            && !allowed_tools.contains(tool_name)
-        {
-            return Ok(MiddlewareDecision::Block(format!(
-                "blocked by security policy: tool '{tool_name}' is not allowed for this entity"
-            )));
-        }
-
-        match tool_name {
-            "shell" => {
-                let command = args.get("command").and_then(Value::as_str).unwrap_or("");
-                if !ctx.security.is_command_allowed(command) {
-                    return Ok(MiddlewareDecision::Block(format!(
-                        "blocked by security policy: command not allowed: {command}"
-                    )));
-                }
-            }
-            "file_read" => {
-                let path = args.get("path").and_then(Value::as_str).unwrap_or("");
-                if !ctx.security.is_path_allowed(path) {
-                    return Ok(MiddlewareDecision::Block(format!(
-                        "blocked by security policy: path not allowed: {path}"
-                    )));
-                }
-
-                let full_path = ctx.workspace_dir.join(path);
-                if let Ok(resolved_path) = tokio::fs::canonicalize(&full_path).await
-                    && !ctx.security.is_resolved_path_allowed(&resolved_path)
-                {
-                    return Ok(MiddlewareDecision::Block(format!(
-                        "blocked by security policy: resolved path escapes workspace: {}",
-                        resolved_path.display()
-                    )));
-                }
-            }
-            "file_write" => {
-                let path = args.get("path").and_then(Value::as_str).unwrap_or("");
-                if !ctx.security.is_path_allowed(path) {
-                    return Ok(MiddlewareDecision::Block(format!(
-                        "blocked by security policy: path not allowed: {path}"
-                    )));
-                }
-                if is_critical_bootstrap_write_target(path) {
-                    return Ok(MiddlewareDecision::Block(format!(
-                        "blocked by security policy: write target is protected bootstrap file: {path}"
-                    )));
-                }
-
-                let full_path = ctx.workspace_dir.join(path);
-                if let Some(parent) = full_path.parent() {
-                    let mut candidate: Option<&Path> = Some(parent);
-                    while let Some(current) = candidate {
-                        if current.exists() {
-                            if let Ok(resolved) = tokio::fs::canonicalize(current).await
-                                && !ctx.security.is_resolved_path_allowed(&resolved)
-                            {
-                                return Ok(MiddlewareDecision::Block(format!(
-                                    "blocked by security policy: resolved path escapes workspace: {}",
-                                    resolved.display()
-                                )));
-                            }
-                            break;
-                        }
-                        candidate = current.parent();
+    fn before_execute<'a>(
+        &'a self,
+        tool_name: &'a str,
+        args: &'a Value,
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            if ctx.autonomy_level == AutonomyLevel::ReadOnly {
+                match tool_name {
+                    "file_read" | "memory_recall" | "browser" => {}
+                    _ => {
+                        return Ok(MiddlewareDecision::Block(
+                            "blocked by security policy: autonomy is read-only".to_string(),
+                        ));
                     }
                 }
             }
-            "memory_governance" => {
-                if !ctx.security.can_act() {
-                    return Ok(MiddlewareDecision::Block(
-                        "blocked by security policy: autonomy is read-only".to_string(),
-                    ));
+
+            if let Some(allowed_tools) = &ctx.allowed_tools
+                && !allowed_tools.contains(tool_name)
+            {
+                return Ok(MiddlewareDecision::Block(format!(
+                    "blocked by security policy: tool '{tool_name}' is not allowed for this entity"
+                )));
+            }
+
+            match tool_name {
+                "shell" => {
+                    let command = args.get("command").and_then(Value::as_str).unwrap_or("");
+                    if !ctx.security.is_command_allowed(command) {
+                        return Ok(MiddlewareDecision::Block(format!(
+                            "blocked by security policy: command not allowed: {command}"
+                        )));
+                    }
+                }
+                "file_read" => {
+                    let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+                    if !ctx.security.is_path_allowed(path) {
+                        return Ok(MiddlewareDecision::Block(format!(
+                            "blocked by security policy: path not allowed: {path}"
+                        )));
+                    }
+
+                    let full_path = ctx.workspace_dir.join(path);
+                    if let Ok(resolved_path) = tokio::fs::canonicalize(&full_path).await
+                        && !ctx.security.is_resolved_path_allowed(&resolved_path)
+                    {
+                        return Ok(MiddlewareDecision::Block(format!(
+                            "blocked by security policy: resolved path escapes workspace: {}",
+                            resolved_path.display()
+                        )));
+                    }
+                }
+                "file_write" => {
+                    let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+                    if !ctx.security.is_path_allowed(path) {
+                        return Ok(MiddlewareDecision::Block(format!(
+                            "blocked by security policy: path not allowed: {path}"
+                        )));
+                    }
+                    if is_critical_bootstrap_write_target(path) {
+                        return Ok(MiddlewareDecision::Block(format!(
+                            "blocked by security policy: write target is protected bootstrap file: {path}"
+                        )));
+                    }
+
+                    let full_path = ctx.workspace_dir.join(path);
+                    if let Some(parent) = full_path.parent() {
+                        let mut candidate: Option<&Path> = Some(parent);
+                        while let Some(current) = candidate {
+                            if current.exists() {
+                                if let Ok(resolved) = tokio::fs::canonicalize(current).await
+                                    && !ctx.security.is_resolved_path_allowed(&resolved)
+                                {
+                                    return Ok(MiddlewareDecision::Block(format!(
+                                        "blocked by security policy: resolved path escapes workspace: {}",
+                                        resolved.display()
+                                    )));
+                                }
+                                break;
+                            }
+                            candidate = current.parent();
+                        }
+                    }
+                }
+                "memory_governance" => {
+                    if !ctx.security.can_act() {
+                        return Ok(MiddlewareDecision::Block(
+                            "blocked by security policy: autonomy is read-only".to_string(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+
+            let args_summary = summarize_args(tool_name, args);
+
+            if let Some(permission_store) = &ctx.permission_store {
+                permission_store.set_entity_allowlist(&ctx.entity_id, ctx.allowed_tools.clone());
+                if permission_store.is_granted(tool_name, &args_summary) {
+                    return Ok(MiddlewareDecision::Continue);
                 }
             }
-            _ => {}
-        }
 
-        let args_summary = summarize_args(tool_name, args);
-
-        if let Some(permission_store) = &ctx.permission_store {
-            permission_store.set_entity_allowlist(&ctx.entity_id, ctx.allowed_tools.clone());
-            if permission_store.is_granted(tool_name, &args_summary) {
-                return Ok(MiddlewareDecision::Continue);
+            if ctx.autonomy_level == AutonomyLevel::Supervised {
+                return Ok(MiddlewareDecision::RequireApproval(ActionIntent::new(
+                    tool_name,
+                    &ctx.entity_id,
+                    serde_json::json!({
+                        "tool": tool_name,
+                        "args_summary": args_summary,
+                    }),
+                )));
             }
-        }
 
-        if ctx.autonomy_level == AutonomyLevel::Supervised {
-            return Ok(MiddlewareDecision::RequireApproval(ActionIntent::new(
-                tool_name,
-                &ctx.entity_id,
-                serde_json::json!({
-                    "tool": tool_name,
-                    "args_summary": args_summary,
-                }),
-            )));
-        }
-
-        Ok(MiddlewareDecision::Continue)
+            Ok(MiddlewareDecision::Continue)
+        })
     }
 
-    async fn after_execute(
-        &self,
-        _tool_name: &str,
-        _result: &mut ToolResult,
-        _ctx: &ExecutionContext,
-    ) {
+    fn after_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _result: &'a mut ToolResult,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {})
     }
 }
 
 #[derive(Debug)]
 pub struct EntityRateLimitMiddleware;
 
-#[async_trait]
 impl ToolMiddleware for EntityRateLimitMiddleware {
-    async fn before_execute(
-        &self,
-        _tool_name: &str,
-        _args: &Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision> {
-        match ctx.rate_limiter.check_and_record(&ctx.entity_id) {
-            Ok(()) => Ok(MiddlewareDecision::Continue),
-            Err(RateLimitError::GlobalExhausted) => Ok(MiddlewareDecision::Block(
-                "blocked by security policy: global action limit exceeded".to_string(),
-            )),
-            Err(RateLimitError::EntityExhausted { entity_id }) => {
-                Ok(MiddlewareDecision::Block(format!(
-                    "blocked by security policy: entity action limit exceeded for '{entity_id}'"
-                )))
+    fn before_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _args: &'a Value,
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            match ctx.rate_limiter.check_and_record(&ctx.entity_id) {
+                Ok(()) => Ok(MiddlewareDecision::Continue),
+                Err(RateLimitError::GlobalExhausted) => Ok(MiddlewareDecision::Block(
+                    "blocked by security policy: global action limit exceeded".to_string(),
+                )),
+                Err(RateLimitError::EntityExhausted { entity_id }) => {
+                    Ok(MiddlewareDecision::Block(format!(
+                        "blocked by security policy: entity action limit exceeded for '{entity_id}'"
+                    )))
+                }
             }
-        }
+        })
     }
 
-    async fn after_execute(
-        &self,
-        _tool_name: &str,
-        _result: &mut ToolResult,
-        _ctx: &ExecutionContext,
-    ) {
+    fn after_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _result: &'a mut ToolResult,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {})
     }
 }
 
 #[derive(Debug)]
 pub struct AuditMiddleware;
 
-#[async_trait]
 impl ToolMiddleware for AuditMiddleware {
-    async fn before_execute(
-        &self,
-        tool_name: &str,
-        _args: &Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision> {
-        tracing::info!(
-            tool = tool_name,
-            entity_id = %ctx.entity_id,
-            turn_number = ctx.turn_number,
-            "tool execution started"
-        );
-        Ok(MiddlewareDecision::Continue)
+    fn before_execute<'a>(
+        &'a self,
+        tool_name: &'a str,
+        _args: &'a Value,
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            tracing::info!(
+                tool = tool_name,
+                entity_id = %ctx.entity_id,
+                turn_number = ctx.turn_number,
+                "tool execution started"
+            );
+            Ok(MiddlewareDecision::Continue)
+        })
     }
 
-    async fn after_execute(
-        &self,
-        tool_name: &str,
-        result: &mut ToolResult,
-        ctx: &ExecutionContext,
-    ) {
-        tracing::info!(
-            tool = tool_name,
-            entity_id = %ctx.entity_id,
-            turn_number = ctx.turn_number,
-            success = result.success,
-            has_error = result.error.is_some(),
-            "tool execution finished"
-        );
+    fn after_execute<'a>(
+        &'a self,
+        tool_name: &'a str,
+        result: &'a mut ToolResult,
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            tracing::info!(
+                tool = tool_name,
+                entity_id = %ctx.entity_id,
+                turn_number = ctx.turn_number,
+                success = result.success,
+                has_error = result.error.is_some(),
+                "tool execution finished"
+            );
+        })
     }
 }
 
@@ -294,137 +306,142 @@ pub struct OutputSizeLimitMiddleware;
 const MAX_TOOL_OUTPUT_BYTES: usize = 262_144; // 256KB
 const MAX_TOOL_OUTPUT_LINES: usize = 4_000;
 
-#[async_trait]
 impl ToolMiddleware for OutputSizeLimitMiddleware {
-    async fn before_execute(
-        &self,
-        _tool_name: &str,
-        _args: &Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision> {
-        Ok(MiddlewareDecision::Continue)
+    fn before_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _args: &'a Value,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>> {
+        Box::pin(async move { Ok(MiddlewareDecision::Continue) })
     }
 
-    async fn after_execute(
-        &self,
-        tool_name: &str,
-        result: &mut ToolResult,
-        _ctx: &ExecutionContext,
-    ) {
-        let original_bytes = result.output.len();
-        let original_lines = result.output.lines().count();
+    fn after_execute<'a>(
+        &'a self,
+        tool_name: &'a str,
+        result: &'a mut ToolResult,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let original_bytes = result.output.len();
+            let original_lines = result.output.lines().count();
 
-        let mut truncated = false;
-        let mut output = result.output.clone();
+            let mut truncated = false;
+            let mut output = result.output.clone();
 
-        // First, truncate by line count if necessary
-        if original_lines > MAX_TOOL_OUTPUT_LINES {
-            let lines: Vec<&str> = output.lines().collect();
-            output = lines[..MAX_TOOL_OUTPUT_LINES].join("\n");
-            truncated = true;
-        }
-
-        // Then, truncate by byte count if necessary
-        if output.len() > MAX_TOOL_OUTPUT_BYTES {
-            // Find the safe character boundary
-            let mut byte_pos = MAX_TOOL_OUTPUT_BYTES;
-            while byte_pos > 0 && !output.is_char_boundary(byte_pos) {
-                byte_pos -= 1;
+            // First, truncate by line count if necessary
+            if original_lines > MAX_TOOL_OUTPUT_LINES {
+                let lines: Vec<&str> = output.lines().collect();
+                output = lines[..MAX_TOOL_OUTPUT_LINES].join("\n");
+                truncated = true;
             }
-            output.truncate(byte_pos);
-            truncated = true;
-        }
 
-        if truncated {
-            let metadata_suffix = format!(
-                "\n... [output truncated: {original_bytes} bytes/{original_lines} lines \u{2192} {MAX_TOOL_OUTPUT_BYTES} bytes/{MAX_TOOL_OUTPUT_LINES} lines max]"
-            );
-            output.push_str(&metadata_suffix);
+            // Then, truncate by byte count if necessary
+            if output.len() > MAX_TOOL_OUTPUT_BYTES {
+                // Find the safe character boundary
+                let mut byte_pos = MAX_TOOL_OUTPUT_BYTES;
+                while byte_pos > 0 && !output.is_char_boundary(byte_pos) {
+                    byte_pos -= 1;
+                }
+                output.truncate(byte_pos);
+                truncated = true;
+            }
 
-            tracing::warn!(
-                tool = tool_name,
-                original_bytes = original_bytes,
-                original_lines = original_lines,
-                max_bytes = MAX_TOOL_OUTPUT_BYTES,
-                max_lines = MAX_TOOL_OUTPUT_LINES,
-                "tool output truncated due to size limits"
-            );
+            if truncated {
+                let metadata_suffix = format!(
+                    "\n... [output truncated: {original_bytes} bytes/{original_lines} lines \u{2192} {MAX_TOOL_OUTPUT_BYTES} bytes/{MAX_TOOL_OUTPUT_LINES} lines max]"
+                );
+                output.push_str(&metadata_suffix);
 
-            result.output = output;
-        }
+                tracing::warn!(
+                    tool = tool_name,
+                    original_bytes = original_bytes,
+                    original_lines = original_lines,
+                    max_bytes = MAX_TOOL_OUTPUT_BYTES,
+                    max_lines = MAX_TOOL_OUTPUT_LINES,
+                    "tool output truncated due to size limits"
+                );
+
+                result.output = output;
+            }
+        })
     }
 }
 
 #[derive(Debug)]
 pub struct ToolResultSanitizationMiddleware;
 
-#[async_trait]
 impl ToolMiddleware for ToolResultSanitizationMiddleware {
-    async fn before_execute(
-        &self,
-        _tool_name: &str,
-        _args: &Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision> {
-        Ok(MiddlewareDecision::Continue)
+    fn before_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _args: &'a Value,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>> {
+        Box::pin(async move { Ok(MiddlewareDecision::Continue) })
     }
 
-    async fn after_execute(
-        &self,
-        tool_name: &str,
-        result: &mut ToolResult,
-        _ctx: &ExecutionContext,
-    ) {
-        if !result.output.is_empty() {
-            let prepared =
-                prepare_external_content(&format!("tool:{tool_name}:output"), &result.output);
-            result.output = prepared.model_input;
+    fn after_execute<'a>(
+        &'a self,
+        tool_name: &'a str,
+        result: &'a mut ToolResult,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if !result.output.is_empty() {
+                let prepared =
+                    prepare_external_content(&format!("tool:{tool_name}:output"), &result.output);
+                result.output = prepared.model_input;
 
-            if prepared.action == ExternalAction::Block {
-                result.success = false;
-                result.error = Some("tool output blocked by external-content policy".to_string());
+                if prepared.action == ExternalAction::Block {
+                    result.success = false;
+                    result.error =
+                        Some("tool output blocked by external-content policy".to_string());
+                }
             }
-        }
 
-        if let Some(existing_error) = result.error.take() {
-            let prepared =
-                prepare_external_content(&format!("tool:{tool_name}:error"), &existing_error);
-            if prepared.action == ExternalAction::Block {
-                result.success = false;
-                result.error = Some("tool error blocked by external-content policy".to_string());
-            } else {
-                result.error = Some(prepared.model_input);
+            if let Some(existing_error) = result.error.take() {
+                let prepared =
+                    prepare_external_content(&format!("tool:{tool_name}:error"), &existing_error);
+                if prepared.action == ExternalAction::Block {
+                    result.success = false;
+                    result.error =
+                        Some("tool error blocked by external-content policy".to_string());
+                } else {
+                    result.error = Some(prepared.model_input);
+                }
             }
-        }
+        })
     }
 }
 
 #[derive(Debug)]
 pub struct SecretScrubMiddleware;
 
-#[async_trait]
 impl ToolMiddleware for SecretScrubMiddleware {
-    async fn before_execute(
-        &self,
-        _tool_name: &str,
-        _args: &Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision> {
-        Ok(MiddlewareDecision::Continue)
+    fn before_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _args: &'a Value,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>> {
+        Box::pin(async move { Ok(MiddlewareDecision::Continue) })
     }
 
-    async fn after_execute(
-        &self,
-        _tool_name: &str,
-        result: &mut ToolResult,
-        _ctx: &ExecutionContext,
-    ) {
-        result.output = scrub_secret_patterns(&result.output).into_owned();
-        result.error = result
-            .error
-            .as_deref()
-            .map(scrub_secret_patterns)
-            .map(std::borrow::Cow::into_owned);
+    fn after_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        result: &'a mut ToolResult,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            result.output = scrub_secret_patterns(&result.output).into_owned();
+            result.error = result
+                .error
+                .as_deref()
+                .map(scrub_secret_patterns)
+                .map(std::borrow::Cow::into_owned);
+        })
     }
 }
 

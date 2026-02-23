@@ -9,7 +9,6 @@ pub use github::GitHubScout;
 pub use huggingface::HuggingFaceScout;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -57,7 +56,6 @@ pub struct ScoutResult {
 
 // ── Scout trait ──────────────────────────────────────────────────────────────
 
-#[async_trait]
 pub trait Scout: Send + Sync {
     /// Discover candidate skills from the source.
     async fn discover(&self) -> Result<Vec<ScoutResult>>;

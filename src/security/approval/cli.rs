@@ -2,7 +2,8 @@ use crate::security::approval::{
     ApprovalBroker, ApprovalDecision, ApprovalRequest, GrantScope, PermissionGrant,
 };
 use anyhow::Result;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 pub struct CliApprovalBroker {
@@ -19,51 +20,55 @@ impl CliApprovalBroker {
     }
 }
 
-#[async_trait]
 impl ApprovalBroker for CliApprovalBroker {
-    async fn request_approval(&self, request: &ApprovalRequest) -> Result<ApprovalDecision> {
-        // Print formatted box to stderr
-        eprintln!();
-        eprintln!("┌─ Tool Approval Required ─────────────────────────");
-        eprintln!("│ Tool:    {}", request.tool_name);
-        eprintln!("│ Args:    {}", request.args_summary);
-        eprintln!("│ Risk:    {:?}", request.risk_level);
-        eprintln!("│ Entity:  {}", request.entity_id);
-        eprintln!("├──────────────────────────────────────────────────");
-        eprintln!("│ [A]llow  [D]eny  Allow [S]ession  Allow [P]ermanent");
-        eprintln!("└──────────────────────────────────────────────────");
-        eprint!("  > ");
+    fn request_approval<'a>(
+        &'a self,
+        request: &'a ApprovalRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ApprovalDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            // Print formatted box to stderr
+            eprintln!();
+            eprintln!("┌─ Tool Approval Required ─────────────────────────");
+            eprintln!("│ Tool:    {}", request.tool_name);
+            eprintln!("│ Args:    {}", request.args_summary);
+            eprintln!("│ Risk:    {:?}", request.risk_level);
+            eprintln!("│ Entity:  {}", request.entity_id);
+            eprintln!("├──────────────────────────────────────────────────");
+            eprintln!("│ [A]llow  [D]eny  Allow [S]ession  Allow [P]ermanent");
+            eprintln!("└──────────────────────────────────────────────────");
+            eprint!("  > ");
 
-        // Read input with timeout
-        let decision = tokio::time::timeout(self.timeout, read_single_char()).await;
+            // Read input with timeout
+            let decision = tokio::time::timeout(self.timeout, read_single_char()).await;
 
-        match decision {
-            Ok(Ok(ch)) => match ch.to_ascii_lowercase() {
-                'a' => Ok(ApprovalDecision::Approved),
-                'd' => Ok(ApprovalDecision::Denied {
-                    reason: "denied by user".to_string(),
+            match decision {
+                Ok(Ok(ch)) => match ch.to_ascii_lowercase() {
+                    'a' => Ok(ApprovalDecision::Approved),
+                    'd' => Ok(ApprovalDecision::Denied {
+                        reason: "denied by user".to_string(),
+                    }),
+                    's' => Ok(ApprovalDecision::ApprovedWithGrant(PermissionGrant {
+                        tool: request.tool_name.clone(),
+                        pattern: request.args_summary.clone(),
+                        scope: GrantScope::Session,
+                    })),
+                    'p' => Ok(ApprovalDecision::ApprovedWithGrant(PermissionGrant {
+                        tool: request.tool_name.clone(),
+                        pattern: request.args_summary.clone(),
+                        scope: GrantScope::Permanent,
+                    })),
+                    _ => Ok(ApprovalDecision::Denied {
+                        reason: format!("unrecognized input: '{ch}'"),
+                    }),
+                },
+                Ok(Err(e)) => Ok(ApprovalDecision::Denied {
+                    reason: format!("input error: {e}"),
                 }),
-                's' => Ok(ApprovalDecision::ApprovedWithGrant(PermissionGrant {
-                    tool: request.tool_name.clone(),
-                    pattern: request.args_summary.clone(),
-                    scope: GrantScope::Session,
-                })),
-                'p' => Ok(ApprovalDecision::ApprovedWithGrant(PermissionGrant {
-                    tool: request.tool_name.clone(),
-                    pattern: request.args_summary.clone(),
-                    scope: GrantScope::Permanent,
-                })),
-                _ => Ok(ApprovalDecision::Denied {
-                    reason: format!("unrecognized input: '{ch}'"),
+                Err(_) => Ok(ApprovalDecision::Denied {
+                    reason: "approval timed out".to_string(),
                 }),
-            },
-            Ok(Err(e)) => Ok(ApprovalDecision::Denied {
-                reason: format!("input error: {e}"),
-            }),
-            Err(_) => Ok(ApprovalDecision::Denied {
-                reason: "approval timed out".to_string(),
-            }),
-        }
+            }
+        })
     }
 }
 

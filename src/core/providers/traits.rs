@@ -1,8 +1,9 @@
 use super::response::{ContentBlock, ProviderMessage, ProviderResponse};
-use crate::core::providers::streaming::{ProviderChatRequest, ProviderStream, resp_to_events};
+use crate::core::providers::streaming::{ProviderStream, resp_to_events};
 use crate::core::tools::traits::ToolSpec;
-use async_trait::async_trait;
 use futures_util::stream;
+use std::future::Future;
+use std::pin::Pin;
 
 pub fn messages_to_text(messages: &[ProviderMessage]) -> String {
     messages
@@ -35,53 +36,63 @@ pub fn messages_to_text(messages: &[ProviderMessage]) -> String {
         .join("\n")
 }
 
-#[async_trait]
 pub trait Provider: Send + Sync {
-    async fn chat(&self, message: &str, model: &str, temperature: f64) -> anyhow::Result<String> {
-        self.chat_with_system(None, message, model, temperature)
-            .await
+    fn chat<'a>(
+        &'a self,
+        message: &'a str,
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.chat_with_system(None, message, model, temperature)
+                .await
+        })
     }
 
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<String>;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>>;
 
     /// Warm up the HTTP connection pool (TLS handshake, DNS, HTTP/2 setup).
     /// Default implementation is a no-op; providers with HTTP clients should override.
-    async fn warmup(&self) -> anyhow::Result<()> {
-        Ok(())
+    fn warmup(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move { Ok(()) })
     }
 
-    async fn chat_with_system_full(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system_full<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let text = self
-            .chat_with_system(system_prompt, message, model, temperature)
-            .await?;
-        Ok(ProviderResponse::text_only(text))
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let text = self
+                .chat_with_system(system_prompt, message, model, temperature)
+                .await?;
+            Ok(ProviderResponse::text_only(text))
+        })
     }
 
     /// Chat with structured tool support.
     /// Default: concatenates messages into text, ignores tools, falls back to text-only chat.
-    async fn chat_with_tools(
-        &self,
-        system_prompt: Option<&str>,
-        messages: &[ProviderMessage],
-        _tools: &[ToolSpec],
-        model: &str,
+    fn chat_with_tools<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        _tools: &'a [ToolSpec],
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let text = messages_to_text(messages);
-        self.chat_with_system_full(system_prompt, &text, model, temperature)
-            .await
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let text = messages_to_text(messages);
+            self.chat_with_system_full(system_prompt, &text, model, temperature)
+                .await
+        })
     }
 
     /// Whether this provider supports native structured tool calling.
@@ -100,20 +111,20 @@ pub trait Provider: Send + Sync {
 
     /// Chat with tools and return a stream of events.
     /// Default: converts response to events and returns as a stream.
-    async fn chat_with_tools_stream(
-        &self,
-        req: ProviderChatRequest,
-    ) -> anyhow::Result<ProviderStream> {
-        let resp = self
-            .chat_with_tools(
-                req.system_prompt.as_deref(),
-                &req.messages,
-                &req.tools,
-                &req.model,
-                req.temperature,
-            )
-            .await?;
-        Ok(Box::pin(stream::iter(resp_to_events(resp))))
+    fn chat_with_tools_stream<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [ToolSpec],
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderStream>> + Send + 'a>> {
+        Box::pin(async move {
+            let resp = self
+                .chat_with_tools(system_prompt, messages, tools, model, temperature)
+                .await?;
+            Ok(Box::pin(stream::iter(resp_to_events(resp))) as ProviderStream)
+        })
     }
 }
 
@@ -121,6 +132,8 @@ pub trait Provider: Send + Sync {
 mod tests {
     use super::*;
     use crate::core::providers::response::MessageRole;
+    use std::future::Future;
+    use std::pin::Pin;
 
     #[test]
     fn messages_to_text_concatenates_text_blocks() {
@@ -256,16 +269,15 @@ mod tests {
         // Create a minimal mock provider to test the default implementation
         struct MockProvider;
 
-        #[async_trait]
         impl Provider for MockProvider {
-            async fn chat_with_system(
-                &self,
-                _system_prompt: Option<&str>,
-                _message: &str,
-                _model: &str,
+            fn chat_with_system<'a>(
+                &'a self,
+                _system_prompt: Option<&'a str>,
+                _message: &'a str,
+                _model: &'a str,
                 _temperature: f64,
-            ) -> anyhow::Result<String> {
-                Ok("response".to_string())
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+                Box::pin(async move { Ok("response".to_string()) })
             }
         }
 

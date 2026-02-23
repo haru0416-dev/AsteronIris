@@ -4,7 +4,6 @@
 //! Implement the Channel trait, register it, and the agent works everywhere.
 
 use anyhow::Result;
-use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 /// Mirrors src/channels/traits.rs
@@ -17,7 +16,6 @@ pub struct ChannelMessage {
     pub timestamp: u64,
 }
 
-#[async_trait]
 pub trait Channel: Send + Sync {
     fn name(&self) -> &str;
     async fn send(&self, message: &str, recipient: &str) -> Result<()>;
@@ -46,7 +44,6 @@ impl TelegramChannel {
     }
 }
 
-#[async_trait]
 impl Channel for TelegramChannel {
     fn name(&self) -> &str {
         "telegram"

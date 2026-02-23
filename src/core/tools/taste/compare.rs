@@ -2,8 +2,9 @@ use crate::core::taste::engine::TasteEngine;
 use crate::core::taste::types::{Domain, PairComparison, TasteContext, Winner};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::traits::{Tool, ToolResult};
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct TasteCompareTool {
@@ -16,7 +17,6 @@ impl TasteCompareTool {
     }
 }
 
-#[async_trait]
 impl Tool for TasteCompareTool {
     fn name(&self) -> &str {
         "taste_compare"
@@ -56,41 +56,61 @@ impl Tool for TasteCompareTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let Some(left_id) = args.get("left_id").and_then(|v| v.as_str()) else {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Missing 'left_id' parameter".to_string()),
-                attachments: vec![],
-            });
-        };
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(left_id) = args.get("left_id").and_then(|v| v.as_str()) else {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Missing 'left_id' parameter".to_string()),
+                    attachments: vec![],
+                });
+            };
 
-        let Some(right_id) = args.get("right_id").and_then(|v| v.as_str()) else {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Missing 'right_id' parameter".to_string()),
-                attachments: vec![],
-            });
-        };
+            let Some(right_id) = args.get("right_id").and_then(|v| v.as_str()) else {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Missing 'right_id' parameter".to_string()),
+                    attachments: vec![],
+                });
+            };
 
-        let Some(winner_str) = args.get("winner").and_then(|v| v.as_str()) else {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Missing 'winner' parameter".to_string()),
-                attachments: vec![],
-            });
-        };
+            let Some(winner_str) = args.get("winner").and_then(|v| v.as_str()) else {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Missing 'winner' parameter".to_string()),
+                    attachments: vec![],
+                });
+            };
 
-        let winner: Winner =
-            match serde_json::from_value(serde_json::Value::String(winner_str.to_string())) {
-                Ok(w) => w,
+            let winner: Winner =
+                match serde_json::from_value(serde_json::Value::String(winner_str.to_string())) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some(e.to_string()),
+                            attachments: vec![],
+                        });
+                    }
+                };
+
+            let domain_str = args
+                .get("domain")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general")
+                .to_string();
+
+            let domain: Domain = match serde_json::from_value(serde_json::Value::String(domain_str))
+            {
+                Ok(d) => d,
                 Err(e) => {
                     return Ok(ToolResult {
                         success: false,
@@ -101,65 +121,48 @@ impl Tool for TasteCompareTool {
                 }
             };
 
-        let domain_str = args
-            .get("domain")
-            .and_then(|v| v.as_str())
-            .unwrap_or("general")
-            .to_string();
+            let rationale = args
+                .get("rationale")
+                .and_then(|v| v.as_str())
+                .map(String::from);
 
-        let domain: Domain = match serde_json::from_value(serde_json::Value::String(domain_str)) {
-            Ok(d) => d,
-            Err(e) => {
-                return Ok(ToolResult {
+            #[allow(clippy::cast_possible_truncation)]
+            let created_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            let comparison = PairComparison {
+                domain,
+                ctx: TasteContext::default(),
+                left_id: left_id.to_string(),
+                right_id: right_id.to_string(),
+                winner: winner.clone(),
+                rationale,
+                created_at_ms,
+            };
+
+            match self.engine.compare(&comparison).await {
+                Ok(()) => Ok(ToolResult {
+                    success: true,
+                    output: json!({
+                        "status": "comparison_recorded",
+                        "left_id": left_id,
+                        "right_id": right_id,
+                        "winner": winner_str
+                    })
+                    .to_string(),
+                    error: None,
+                    attachments: vec![],
+                }),
+                Err(e) => Ok(ToolResult {
                     success: false,
                     output: String::new(),
                     error: Some(e.to_string()),
                     attachments: vec![],
-                });
+                }),
             }
-        };
-
-        let rationale = args
-            .get("rationale")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        #[allow(clippy::cast_possible_truncation)]
-        let created_at_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        let comparison = PairComparison {
-            domain,
-            ctx: TasteContext::default(),
-            left_id: left_id.to_string(),
-            right_id: right_id.to_string(),
-            winner: winner.clone(),
-            rationale,
-            created_at_ms,
-        };
-
-        match self.engine.compare(&comparison).await {
-            Ok(()) => Ok(ToolResult {
-                success: true,
-                output: json!({
-                    "status": "comparison_recorded",
-                    "left_id": left_id,
-                    "right_id": right_id,
-                    "winner": winner_str
-                })
-                .to_string(),
-                error: None,
-                attachments: vec![],
-            }),
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(e.to_string()),
-                attachments: vec![],
-            }),
-        }
+        })
     }
 }
 
@@ -171,34 +174,40 @@ mod tests {
     };
     use crate::security::SecurityPolicy;
     use std::collections::BTreeMap;
+    use std::future::Future;
+    use std::pin::Pin;
 
     struct MockTasteEngine;
 
-    #[async_trait]
     impl TasteEngine for MockTasteEngine {
-        async fn evaluate(
-            &self,
-            _artifact: &Artifact,
-            _ctx: &TasteContext,
-        ) -> anyhow::Result<TasteReport> {
-            let mut axis = BTreeMap::new();
-            axis.insert(Axis::Coherence, 0.8);
-            axis.insert(Axis::Hierarchy, 0.7);
-            axis.insert(Axis::Intentionality, 0.9);
-            Ok(TasteReport {
-                axis,
-                domain: Domain::Text,
-                suggestions: vec![Suggestion::General {
-                    title: "Improve structure".into(),
-                    rationale: "Would benefit from clearer sections".into(),
-                    priority: Priority::Medium,
-                }],
-                raw_critique: None,
+        fn evaluate<'a>(
+            &'a self,
+            _artifact: &'a Artifact,
+            _ctx: &'a TasteContext,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<TasteReport>> + Send + 'a>> {
+            Box::pin(async move {
+                let mut axis = BTreeMap::new();
+                axis.insert(Axis::Coherence, 0.8);
+                axis.insert(Axis::Hierarchy, 0.7);
+                axis.insert(Axis::Intentionality, 0.9);
+                Ok(TasteReport {
+                    axis,
+                    domain: Domain::Text,
+                    suggestions: vec![Suggestion::General {
+                        title: "Improve structure".into(),
+                        rationale: "Would benefit from clearer sections".into(),
+                        priority: Priority::Medium,
+                    }],
+                    raw_critique: None,
+                })
             })
         }
 
-        async fn compare(&self, _comparison: &PairComparison) -> anyhow::Result<()> {
-            Ok(())
+        fn compare<'a>(
+            &'a self,
+            _comparison: &'a PairComparison,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+            Box::pin(async move { Ok(()) })
         }
 
         fn enabled(&self) -> bool {

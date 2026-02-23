@@ -5,14 +5,14 @@ use crate::core::providers::{ContentBlock, StopReason};
 #[cfg(test)]
 use crate::core::providers::{ImageSource, MessageRole, sse::parse_data_lines_without_done};
 use crate::core::providers::{
-    ProviderMessage, ProviderResponse, build_provider_client,
-    streaming::{ProviderChatRequest, ProviderStream},
+    ProviderMessage, ProviderResponse, build_provider_client, streaming::ProviderStream,
     traits::Provider,
 };
 use crate::core::tools::traits::ToolSpec;
-use async_trait::async_trait;
 use compat as openai_compat;
 use reqwest::Client;
+use std::future::Future;
+use std::pin::Pin;
 #[cfg(test)]
 use types::Message;
 #[cfg(test)]
@@ -121,54 +121,65 @@ impl OpenAiProvider {
 
     async fn chat_with_tools_stream_impl(
         &self,
-        req: ProviderChatRequest,
-    ) -> anyhow::Result<ProviderStream> {
-        let request = openai_compat::build_stream_request(req);
-        let response = self.call_api_streaming(&request).await?;
-        Ok(openai_compat::sse_response_to_provider_stream(response))
-    }
-}
-
-#[async_trait]
-impl Provider for OpenAiProvider {
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
-        temperature: f64,
-    ) -> anyhow::Result<String> {
-        let chat_response = self
-            .call_api(system_prompt, message, model, temperature)
-            .await?;
-        Self::extract_text(&chat_response)
-    }
-
-    async fn chat_with_system_full(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
-        temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let chat_response = self
-            .call_api(system_prompt, message, model, temperature)
-            .await?;
-
-        openai_compat::build_text_provider_response(chat_response, "OpenAI")
-    }
-
-    async fn chat_with_tools(
-        &self,
         system_prompt: Option<&str>,
         messages: &[ProviderMessage],
         tools: &[ToolSpec],
         model: &str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let request = Self::build_tools_request(system_prompt, messages, tools, model, temperature);
-        let chat_response = self.call_api_with_request(&request).await?;
-        openai_compat::build_tool_provider_response(chat_response, "OpenAI")
+    ) -> anyhow::Result<ProviderStream> {
+        let request =
+            openai_compat::build_stream_request(system_prompt, messages, tools, model, temperature);
+        let response = self.call_api_streaming(&request).await?;
+        Ok(openai_compat::sse_response_to_provider_stream(response))
+    }
+}
+
+impl Provider for OpenAiProvider {
+    fn chat_with_system<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let chat_response = self
+                .call_api(system_prompt, message, model, temperature)
+                .await?;
+            Self::extract_text(&chat_response)
+        })
+    }
+
+    fn chat_with_system_full<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let chat_response = self
+                .call_api(system_prompt, message, model, temperature)
+                .await?;
+
+            openai_compat::build_text_provider_response(chat_response, "OpenAI")
+        })
+    }
+
+    fn chat_with_tools<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [ToolSpec],
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let request =
+                Self::build_tools_request(system_prompt, messages, tools, model, temperature);
+            let chat_response = self.call_api_with_request(&request).await?;
+            openai_compat::build_tool_provider_response(chat_response, "OpenAI")
+        })
     }
 
     fn supports_tool_calling(&self) -> bool {
@@ -183,11 +194,18 @@ impl Provider for OpenAiProvider {
         true
     }
 
-    async fn chat_with_tools_stream(
-        &self,
-        req: ProviderChatRequest,
-    ) -> anyhow::Result<ProviderStream> {
-        self.chat_with_tools_stream_impl(req).await
+    fn chat_with_tools_stream<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [ToolSpec],
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderStream>> + Send + 'a>> {
+        Box::pin(async move {
+            self.chat_with_tools_stream_impl(system_prompt, messages, tools, model, temperature)
+                .await
+        })
     }
 }
 

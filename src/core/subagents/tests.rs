@@ -1,19 +1,19 @@
 use super::*;
 use crate::core::providers::Provider;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 
 struct MockProvider;
 
-#[async_trait]
 impl Provider for MockProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        Ok(format!("subagent:{message}"))
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move { Ok(format!("subagent:{message}")) })
     }
 }
 

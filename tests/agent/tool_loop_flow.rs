@@ -10,8 +10,9 @@ use asteroniris::core::providers::traits::Provider;
 use asteroniris::core::tools::middleware::{ExecutionContext, default_middleware_chain};
 use asteroniris::core::tools::{FileReadTool, ShellTool, ToolRegistry, ToolSpec};
 use asteroniris::security::{AutonomyLevel, EntityRateLimiter, SecurityPolicy};
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use tempfile::TempDir;
 
 #[derive(Debug)]
@@ -45,47 +46,48 @@ impl MockProvider {
     }
 }
 
-#[async_trait]
 impl Provider for MockProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> Result<String> {
-        Ok(String::new())
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move { Ok(String::new()) })
     }
 
-    async fn chat_with_tools(
-        &self,
-        system_prompt: Option<&str>,
-        messages: &[ProviderMessage],
-        _tools: &[ToolSpec],
-        _model: &str,
+    fn chat_with_tools<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        _tools: &'a [ToolSpec],
+        _model: &'a str,
         _temperature: f64,
-    ) -> Result<ProviderResponse> {
-        self.seen_system_prompts
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(system_prompt.map(str::to_string));
-        self.seen_messages
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(messages.to_vec());
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            self.seen_system_prompts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(system_prompt.map(str::to_string));
+            self.seen_messages
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(messages.to_vec());
 
-        let mut responses = self
-            .responses
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Ok(responses.pop_front().unwrap_or_else(|| ProviderResponse {
-            text: String::new(),
-            input_tokens: None,
-            output_tokens: None,
-            model: None,
-            content_blocks: vec![],
-            stop_reason: Some(StopReason::EndTurn),
-        }))
+            let mut responses = self
+                .responses
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(responses.pop_front().unwrap_or_else(|| ProviderResponse {
+                text: String::new(),
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                content_blocks: vec![],
+                stop_reason: Some(StopReason::EndTurn),
+            }))
+        })
     }
 
     fn supports_tool_calling(&self) -> bool {

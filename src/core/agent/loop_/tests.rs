@@ -5,9 +5,10 @@ use crate::core::persona::state_header::StateHeader;
 use crate::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use crate::core::providers::reliable::ReliableProvider;
 use crate::security::SecurityPolicy;
-use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
@@ -19,25 +20,26 @@ struct MockProvider {
     fail_on_call: Option<usize>,
 }
 
-#[async_trait]
 impl Provider for MockProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        let call_number = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.fail_on_call == Some(call_number) {
-            anyhow::bail!("mock failure on call {call_number}");
-        }
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let call_number = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.fail_on_call == Some(call_number) {
+                anyhow::bail!("mock failure on call {call_number}");
+            }
 
-        Ok(self
-            .responses
-            .get(call_number - 1)
-            .cloned()
-            .unwrap_or_else(|| "{}".to_string()))
+            Ok(self
+                .responses
+                .get(call_number - 1)
+                .cloned()
+                .unwrap_or_else(|| "{}".to_string()))
+        })
     }
 }
 
@@ -212,17 +214,18 @@ struct AlwaysFailProvider {
     calls: Arc<AtomicUsize>,
 }
 
-#[async_trait]
 impl Provider for AlwaysFailProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        anyhow::bail!("transient reflect failure")
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("transient reflect failure")
+        })
     }
 }
 
@@ -236,34 +239,37 @@ struct MessageFailProvider {
     message: &'static str,
 }
 
-#[async_trait]
 impl Provider for TemperatureCaptureProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
-        temperature: f64,
-    ) -> anyhow::Result<String> {
-        self.temperatures
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(temperature);
-        Ok(self.response.clone())
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
+        _temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        let temperature = _temperature;
+        Box::pin(async move {
+            self.temperatures
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(temperature);
+            Ok(self.response.clone())
+        })
     }
 }
 
-#[async_trait]
 impl Provider for MessageFailProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        anyhow::bail!(self.message)
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!(self.message)
+        })
     }
 }
 

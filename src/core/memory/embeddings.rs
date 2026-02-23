@@ -1,11 +1,11 @@
 use anyhow::Context;
-use async_trait::async_trait;
 
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::pin::Pin;
 use std::time::Duration;
 
 /// Trait for embedding providers — convert text to vectors
-#[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
     /// Provider name
     fn name(&self) -> &str;
@@ -14,14 +14,23 @@ pub trait EmbeddingProvider: Send + Sync {
     fn dimensions(&self) -> usize;
 
     /// Embed a batch of texts into vectors
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>>;
+    #[allow(clippy::type_complexity)]
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [&'a str],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>>;
 
     /// Embed a single text
-    async fn embed_one(&self, text: &str) -> anyhow::Result<Vec<f32>> {
-        let mut results = self.embed(&[text]).await?;
-        results
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("Empty embedding result"))
+    fn embed_one<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<f32>>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut results = self.embed(&[text]).await?;
+            results
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("Empty embedding result"))
+        })
     }
 }
 
@@ -67,7 +76,6 @@ impl DeterministicEmbedding {
 }
 
 #[cfg(test)]
-#[async_trait]
 impl EmbeddingProvider for DeterministicEmbedding {
     fn name(&self) -> &str {
         "deterministic_test"
@@ -77,18 +85,23 @@ impl EmbeddingProvider for DeterministicEmbedding {
         self.dims
     }
 
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-        let mut out = Vec::with_capacity(texts.len());
-        for &t in texts {
-            let base = Self::fnv1a64(self.seed, t.as_bytes());
-            let mut v = Vec::with_capacity(self.dims);
-            for i in 0..self.dims {
-                let mixed = Self::splitmix64(base ^ (i as u64));
-                v.push(Self::u64_to_unit_f32(mixed));
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [&'a str],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut out = Vec::with_capacity(texts.len());
+            for &t in texts {
+                let base = Self::fnv1a64(self.seed, t.as_bytes());
+                let mut v = Vec::with_capacity(self.dims);
+                for i in 0..self.dims {
+                    let mixed = Self::splitmix64(base ^ (i as u64));
+                    v.push(Self::u64_to_unit_f32(mixed));
+                }
+                out.push(v);
             }
-            out.push(v);
-        }
-        Ok(out)
+            Ok(out)
+        })
     }
 }
 
@@ -96,7 +109,6 @@ impl EmbeddingProvider for DeterministicEmbedding {
 
 pub struct NoopEmbedding;
 
-#[async_trait]
 impl EmbeddingProvider for NoopEmbedding {
     fn name(&self) -> &str {
         "none"
@@ -106,8 +118,11 @@ impl EmbeddingProvider for NoopEmbedding {
         0
     }
 
-    async fn embed(&self, _texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-        Ok(Vec::new())
+    fn embed<'a>(
+        &'a self,
+        _texts: &'a [&'a str],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move { Ok(Vec::new()) })
     }
 }
 
@@ -221,7 +236,6 @@ impl OpenAiEmbedding {
     }
 }
 
-#[async_trait]
 impl EmbeddingProvider for OpenAiEmbedding {
     fn name(&self) -> &str {
         "openai"
@@ -231,54 +245,59 @@ impl EmbeddingProvider for OpenAiEmbedding {
         self.dims
     }
 
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [&'a str],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move {
+            if texts.is_empty() {
+                return Ok(Vec::new());
+            }
 
-        let body = serde_json::json!({
-            "model": self.model,
-            "input": texts,
-        });
+            let body = serde_json::json!({
+                "model": self.model,
+                "input": texts,
+            });
 
-        let resp = self
-            .client
-            .post(&self.cached_embeddings_url)
-            .header("Authorization", &self.cached_auth_header)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .context("embedding HTTP request failed")?;
+            let resp = self
+                .client
+                .post(&self.cached_embeddings_url)
+                .header("Authorization", &self.cached_auth_header)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .context("embedding HTTP request failed")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!("Embedding API error {status}");
-        }
+            if !resp.status().is_success() {
+                let status = resp.status();
+                anyhow::bail!("Embedding API error {status}");
+            }
 
-        let json: serde_json::Value = resp.json().await?;
-        let data = json
-            .get("data")
-            .and_then(|d| d.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid embedding response: missing 'data'"))?;
+            let json: serde_json::Value = resp.json().await?;
+            let data = json
+                .get("data")
+                .and_then(|d| d.as_array())
+                .ok_or_else(|| anyhow::anyhow!("Invalid embedding response: missing 'data'"))?;
 
-        let mut embeddings = Vec::with_capacity(data.len());
-        for item in data {
-            let embedding = item
-                .get("embedding")
-                .and_then(|e| e.as_array())
-                .ok_or_else(|| anyhow::anyhow!("Invalid embedding item"))?;
+            let mut embeddings = Vec::with_capacity(data.len());
+            for item in data {
+                let embedding = item
+                    .get("embedding")
+                    .and_then(|e| e.as_array())
+                    .ok_or_else(|| anyhow::anyhow!("Invalid embedding item"))?;
 
-            #[allow(clippy::cast_possible_truncation)]
-            let vec: Vec<f32> = embedding
-                .iter()
-                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                .collect();
+                #[allow(clippy::cast_possible_truncation)]
+                let vec: Vec<f32> = embedding
+                    .iter()
+                    .filter_map(|v| v.as_f64().map(|f| f as f32))
+                    .collect();
 
-            embeddings.push(vec);
-        }
+                embeddings.push(vec);
+            }
 
-        Ok(embeddings)
+            Ok(embeddings)
+        })
     }
 }
 

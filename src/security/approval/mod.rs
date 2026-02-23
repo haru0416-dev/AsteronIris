@@ -11,8 +11,9 @@ pub use discord::DiscordApprovalBroker;
 pub use telegram::TelegramApprovalBroker;
 
 use crate::core::providers::scrub_secret_patterns;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,24 +54,26 @@ pub enum GrantScope {
     Permanent,
 }
 
-#[async_trait]
 pub trait ApprovalBroker: Send + Sync {
-    async fn request_approval(&self, request: &ApprovalRequest)
-    -> anyhow::Result<ApprovalDecision>;
+    fn request_approval<'a>(
+        &'a self,
+        request: &'a ApprovalRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ApprovalDecision>> + Send + 'a>>;
 }
 
 pub struct AutoDenyBroker {
     pub reason: String,
 }
 
-#[async_trait]
 impl ApprovalBroker for AutoDenyBroker {
-    async fn request_approval(
-        &self,
-        _request: &ApprovalRequest,
-    ) -> anyhow::Result<ApprovalDecision> {
-        Ok(ApprovalDecision::Denied {
-            reason: self.reason.clone(),
+    fn request_approval<'a>(
+        &'a self,
+        _request: &'a ApprovalRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ApprovalDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(ApprovalDecision::Denied {
+                reason: self.reason.clone(),
+            })
         })
     }
 }

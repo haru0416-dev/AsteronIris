@@ -4,7 +4,6 @@
 //! Tools are the agent's hands — they let it interact with the world.
 
 use anyhow::Result;
-use async_trait::async_trait;
 use serde_json::{Value, json};
 
 /// Mirrors src/tools/traits.rs
@@ -15,7 +14,6 @@ pub struct ToolResult {
     pub error: Option<String>,
 }
 
-#[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
@@ -26,7 +24,6 @@ pub trait Tool: Send + Sync {
 /// Example: A tool that fetches a URL and returns the status code
 pub struct HttpGetTool;
 
-#[async_trait]
 impl Tool for HttpGetTool {
     fn name(&self) -> &str {
         "http_get"

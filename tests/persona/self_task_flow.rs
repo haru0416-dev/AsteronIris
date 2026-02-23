@@ -12,7 +12,8 @@ use asteroniris::core::providers::Provider;
 use asteroniris::platform::cron::{self, CronJobKind, CronJobOrigin};
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use tempfile::TempDir;
 
 struct SequenceProvider {
@@ -27,24 +28,25 @@ impl SequenceProvider {
     }
 }
 
-#[async_trait]
 impl Provider for SequenceProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> Result<String> {
-        let mut responses = self
-            .responses
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if responses.is_empty() {
-            return Ok("{}".to_string());
-        }
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut responses = self
+                .responses
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if responses.is_empty() {
+                return Ok("{}".to_string());
+            }
 
-        responses.remove(0)
+            responses.remove(0)
+        })
     }
 }
 

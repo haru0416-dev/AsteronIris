@@ -2,7 +2,7 @@
 
 use super::{Scout, ScoutResult, ScoutSource, dedup, urlencoding};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
+
 use tracing::{debug, warn};
 
 /// Searches GitHub for repos matching skill-related queries.
@@ -95,7 +95,6 @@ impl GitHubScout {
     }
 }
 
-#[async_trait]
 impl Scout for GitHubScout {
     async fn discover(&self) -> Result<Vec<ScoutResult>> {
         let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);

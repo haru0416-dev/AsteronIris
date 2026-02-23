@@ -7,7 +7,7 @@ use crate::core::providers::{
     ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
     scrub_secret_patterns,
     sse::{SseBuffer, parse_data_lines_without_done},
-    streaming::{ProviderChatRequest, ProviderStream, StreamEvent},
+    streaming::{ProviderStream, StreamEvent},
     tool_convert::{ToolFields, map_tools_optional},
 };
 use crate::core::tools::traits::ToolSpec;
@@ -215,20 +215,18 @@ pub(in crate::core::providers) fn build_tools_request(
     }
 }
 
-pub(in crate::core::providers) fn build_stream_request(req: ProviderChatRequest) -> ChatRequest {
-    let ProviderChatRequest {
-        system_prompt,
-        messages,
-        tools,
-        model,
-        temperature,
-    } = req;
-
+pub(in crate::core::providers) fn build_stream_request(
+    system_prompt: Option<&str>,
+    messages: &[ProviderMessage],
+    tools: &[ToolSpec],
+    model: &str,
+    temperature: f64,
+) -> ChatRequest {
     ChatRequest {
-        model,
-        messages: build_messages(system_prompt.as_deref(), &messages),
+        model: model.to_string(),
+        messages: build_messages(system_prompt, messages),
         temperature,
-        tools: build_openai_tools(&tools),
+        tools: build_openai_tools(tools),
         stream: Some(true),
         stream_options: Some(StreamOptions {
             include_usage: true,

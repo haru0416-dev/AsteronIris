@@ -1,8 +1,9 @@
 use crate::config::TasteConfig;
 use crate::core::providers::Provider;
-use async_trait::async_trait;
 use rusqlite::Connection;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use super::adapter::{DomainAdapter, TextAdapter, UiAdapter};
@@ -12,15 +13,17 @@ use super::store::{SqliteTasteStore, TasteStore};
 use super::types::{Artifact, Domain, PairComparison, TasteContext, TasteReport, Winner};
 
 /// Trait for evaluating artifacts and comparing preferences.
-#[async_trait]
 pub trait TasteEngine: Send + Sync {
-    async fn evaluate(
-        &self,
-        artifact: &Artifact,
-        ctx: &TasteContext,
-    ) -> anyhow::Result<TasteReport>;
+    fn evaluate<'a>(
+        &'a self,
+        artifact: &'a Artifact,
+        ctx: &'a TasteContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<TasteReport>> + Send + 'a>>;
 
-    async fn compare(&self, comparison: &PairComparison) -> anyhow::Result<()>;
+    fn compare<'a>(
+        &'a self,
+        comparison: &'a PairComparison,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
     fn enabled(&self) -> bool;
 }
@@ -33,55 +36,61 @@ pub struct DefaultTasteEngine {
     pub(crate) learner: Option<Arc<Mutex<BradleyTerryLearner>>>,
 }
 
-#[async_trait]
 impl TasteEngine for DefaultTasteEngine {
-    async fn evaluate(
-        &self,
-        artifact: &Artifact,
-        ctx: &TasteContext,
-    ) -> anyhow::Result<TasteReport> {
-        let critique = self.critic.critique(artifact, ctx).await?;
+    fn evaluate<'a>(
+        &'a self,
+        artifact: &'a Artifact,
+        ctx: &'a TasteContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<TasteReport>> + Send + 'a>> {
+        Box::pin(async move {
+            let critique = self.critic.critique(artifact, ctx).await?;
 
-        let domain = match artifact {
-            Artifact::Text { .. } => Domain::Text,
-            Artifact::Ui { .. } => Domain::Ui,
-        };
+            let domain = match artifact {
+                Artifact::Text { .. } => Domain::Text,
+                Artifact::Ui { .. } => Domain::Ui,
+            };
 
-        let suggestions = self
-            .adapters
-            .get(&domain)
-            .map(|adapter| adapter.suggest(&critique, ctx))
-            .unwrap_or_default();
+            let suggestions = self
+                .adapters
+                .get(&domain)
+                .map(|adapter| adapter.suggest(&critique, ctx))
+                .unwrap_or_default();
 
-        Ok(TasteReport {
-            axis: critique.axis_scores,
-            domain,
-            suggestions,
-            raw_critique: Some(critique.raw_response),
+            Ok(TasteReport {
+                axis: critique.axis_scores,
+                domain,
+                suggestions,
+                raw_critique: Some(critique.raw_response),
+            })
         })
     }
 
-    async fn compare(&self, comparison: &PairComparison) -> anyhow::Result<()> {
-        if let Some(store) = &self.store {
-            store.save_comparison(comparison).await?;
-        }
+    fn compare<'a>(
+        &'a self,
+        comparison: &'a PairComparison,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            if let Some(store) = &self.store {
+                store.save_comparison(comparison).await?;
+            }
 
-        if let Some(learner) = &self.learner {
-            let mut l = learner
-                .lock()
-                .map_err(|e| anyhow::anyhow!("learner lock poisoned: {e}"))?;
+            if let Some(learner) = &self.learner {
+                let mut l = learner
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("learner lock poisoned: {e}"))?;
 
-            let outcome = match comparison.winner {
-                Winner::Left => 1.0,
-                Winner::Right => 0.0,
-                Winner::Tie => 0.5,
-                Winner::Abstain => return Ok(()),
-            };
+                let outcome = match comparison.winner {
+                    Winner::Left => 1.0,
+                    Winner::Right => 0.0,
+                    Winner::Tie => 0.5,
+                    Winner::Abstain => return Ok(()),
+                };
 
-            l.update(&comparison.left_id, &comparison.right_id, outcome);
-        }
+                l.update(&comparison.left_id, &comparison.right_id, outcome);
+            }
 
-        Ok(())
+            Ok(())
+        })
     }
 
     fn enabled(&self) -> bool {

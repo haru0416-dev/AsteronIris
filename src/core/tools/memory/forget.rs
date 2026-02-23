@@ -1,8 +1,9 @@
 use crate::core::memory::{ForgetMode, Memory};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::traits::{Tool, ToolResult};
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 /// Let the agent forget/delete a memory entry
@@ -16,7 +17,6 @@ impl MemoryForgetTool {
     }
 }
 
-#[async_trait]
 impl Tool for MemoryForgetTool {
     fn name(&self) -> &str {
         "memory_forget"
@@ -69,66 +69,68 @@ impl Tool for MemoryForgetTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let key = args
-            .get("slot_key")
-            .or_else(|| args.get("key"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'slot_key' parameter"))?;
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let key = args
+                .get("slot_key")
+                .or_else(|| args.get("key"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'slot_key' parameter"))?;
 
-        let entity_id = args
-            .get("entity_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'entity_id' parameter"))?;
-        let reason = args
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("user_requested");
+            let entity_id = args
+                .get("entity_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'entity_id' parameter"))?;
+            let reason = args
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("user_requested");
 
-        let policy_context = &ctx.tenant_context;
-        if let Err(error) = policy_context.enforce_recall_scope(entity_id) {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Failed to forget memory: {error}")),
+            let policy_context = &ctx.tenant_context;
+            if let Err(error) = policy_context.enforce_recall_scope(entity_id) {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to forget memory: {error}")),
 
-                attachments: Vec::new(),
-            });
-        }
+                    attachments: Vec::new(),
+                });
+            }
 
-        let mode = match args.get("mode").and_then(|v| v.as_str()) {
-            Some("hard") => ForgetMode::Hard,
-            Some("tombstone") => ForgetMode::Tombstone,
-            _ => ForgetMode::Soft,
-        };
+            let mode = match args.get("mode").and_then(|v| v.as_str()) {
+                Some("hard") => ForgetMode::Hard,
+                Some("tombstone") => ForgetMode::Tombstone,
+                _ => ForgetMode::Soft,
+            };
 
-        match self.memory.forget_slot(entity_id, key, mode, reason).await {
-            Ok(outcome) if outcome.applied => Ok(ToolResult {
-                success: true,
-                output: format!("Forgot slot: {key}"),
-                error: None,
+            match self.memory.forget_slot(entity_id, key, mode, reason).await {
+                Ok(outcome) if outcome.applied => Ok(ToolResult {
+                    success: true,
+                    output: format!("Forgot slot: {key}"),
+                    error: None,
 
-                attachments: Vec::new(),
-            }),
-            Ok(_) => Ok(ToolResult {
-                success: true,
-                output: format!("No memory found with key: {key}"),
-                error: None,
+                    attachments: Vec::new(),
+                }),
+                Ok(_) => Ok(ToolResult {
+                    success: true,
+                    output: format!("No memory found with key: {key}"),
+                    error: None,
 
-                attachments: Vec::new(),
-            }),
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Failed to forget memory: {e}")),
+                    attachments: Vec::new(),
+                }),
+                Err(e) => Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to forget memory: {e}")),
 
-                attachments: Vec::new(),
-            }),
-        }
+                    attachments: Vec::new(),
+                }),
+            }
+        })
     }
 }
 

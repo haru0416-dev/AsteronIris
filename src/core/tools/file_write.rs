@@ -1,8 +1,9 @@
 use super::common::{failed_tool_result, workspace_path_property};
 use super::traits::{Tool, ToolResult};
 use crate::core::tools::middleware::ExecutionContext;
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 
 /// Write file contents with path sandboxing
 pub struct FileWriteTool;
@@ -13,7 +14,6 @@ impl FileWriteTool {
     }
 }
 
-#[async_trait]
 impl Tool for FileWriteTool {
     fn name(&self) -> &str {
         "file_write"
@@ -37,82 +37,84 @@ impl Tool for FileWriteTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let path = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
 
-        let content = args
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'content' parameter"))?;
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'content' parameter"))?;
 
-        let full_path = ctx.workspace_dir.join(path);
+            let full_path = ctx.workspace_dir.join(path);
 
-        let Some(parent) = full_path.parent() else {
-            return Ok(failed_tool_result("Invalid path: missing parent directory"));
-        };
+            let Some(parent) = full_path.parent() else {
+                return Ok(failed_tool_result("Invalid path: missing parent directory"));
+            };
 
-        match tokio::fs::metadata(parent).await {
-            Ok(meta) => {
-                if !meta.is_dir() {
+            match tokio::fs::metadata(parent).await {
+                Ok(meta) => {
+                    if !meta.is_dir() {
+                        return Ok(failed_tool_result(format!(
+                            "Invalid path: parent is not a directory: {}",
+                            parent.display()
+                        )));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                Err(e) => {
                     return Ok(failed_tool_result(format!(
-                        "Invalid path: parent is not a directory: {}",
-                        parent.display()
+                        "Failed to inspect parent directory: {e}"
                     )));
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            Err(e) => {
+
+            // Resolve parent AFTER creation to block symlink escapes.
+            let resolved_parent = match tokio::fs::canonicalize(parent).await {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok(failed_tool_result(format!(
+                        "Failed to resolve file path: {e}"
+                    )));
+                }
+            };
+
+            let Some(file_name) = full_path.file_name() else {
+                return Ok(failed_tool_result("Invalid path: missing file name"));
+            };
+
+            let resolved_target = resolved_parent.join(file_name);
+
+            // If the target already exists and is a symlink, refuse to follow it
+            if let Ok(meta) = tokio::fs::symlink_metadata(&resolved_target).await
+                && meta.file_type().is_symlink()
+            {
                 return Ok(failed_tool_result(format!(
-                    "Failed to inspect parent directory: {e}"
+                    "Refusing to write through symlink: {}",
+                    resolved_target.display()
                 )));
             }
-        }
 
-        // Resolve parent AFTER creation to block symlink escapes.
-        let resolved_parent = match tokio::fs::canonicalize(parent).await {
-            Ok(p) => p,
-            Err(e) => {
-                return Ok(failed_tool_result(format!(
-                    "Failed to resolve file path: {e}"
-                )));
+            match tokio::fs::write(&resolved_target, content).await {
+                Ok(()) => Ok(ToolResult {
+                    success: true,
+                    output: format!("Written {} bytes to {path}", content.len()),
+                    error: None,
+
+                    attachments: Vec::new(),
+                }),
+                Err(e) => Ok(failed_tool_result(format!("Failed to write file: {e}"))),
             }
-        };
-
-        let Some(file_name) = full_path.file_name() else {
-            return Ok(failed_tool_result("Invalid path: missing file name"));
-        };
-
-        let resolved_target = resolved_parent.join(file_name);
-
-        // If the target already exists and is a symlink, refuse to follow it
-        if let Ok(meta) = tokio::fs::symlink_metadata(&resolved_target).await
-            && meta.file_type().is_symlink()
-        {
-            return Ok(failed_tool_result(format!(
-                "Refusing to write through symlink: {}",
-                resolved_target.display()
-            )));
-        }
-
-        match tokio::fs::write(&resolved_target, content).await {
-            Ok(()) => Ok(ToolResult {
-                success: true,
-                output: format!("Written {} bytes to {path}", content.len()),
-                error: None,
-
-                attachments: Vec::new(),
-            }),
-            Err(e) => Ok(failed_tool_result(format!("Failed to write file: {e}"))),
-        }
+        })
     }
 }
 

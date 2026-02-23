@@ -10,24 +10,24 @@ use asteroniris::core::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
 use asteroniris::transport::channels::build_system_prompt;
-use async_trait::async_trait;
 use rusqlite::{Connection, params};
+use std::future::Future;
+use std::pin::Pin;
 use tempfile::TempDir;
 
 struct FixedResponseProvider {
     response: String,
 }
 
-#[async_trait]
 impl Provider for FixedResponseProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> Result<String> {
-        Ok(self.response.clone())
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move { Ok(self.response.clone()) })
     }
 }
 

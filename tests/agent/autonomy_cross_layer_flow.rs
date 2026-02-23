@@ -21,7 +21,8 @@ use asteroniris::runtime::observability::traits::{
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::external_content::{ExternalAction, prepare_external_content};
 use asteroniris::security::policy::TenantPolicyContext;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use tempfile::TempDir;
 
 struct SequenceProvider {
@@ -40,30 +41,31 @@ impl SequenceProvider {
     }
 }
 
-#[async_trait]
 impl Provider for SequenceProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> Result<String> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        self.seen_messages
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(message.to_string());
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen_messages
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(message.to_string());
 
-        let mut responses = self
-            .responses
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if responses.is_empty() {
-            return Ok("{}".to_string());
-        }
+            let mut responses = self
+                .responses
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if responses.is_empty() {
+                return Ok("{}".to_string());
+            }
 
-        responses.remove(0)
+            responses.remove(0)
+        })
     }
 }
 

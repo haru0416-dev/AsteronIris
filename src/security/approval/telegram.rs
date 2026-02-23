@@ -1,7 +1,8 @@
 use crate::security::approval::{ApprovalBroker, ApprovalDecision, ApprovalRequest};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 pub struct TelegramApprovalBroker {
@@ -145,28 +146,32 @@ impl TelegramApprovalBroker {
     }
 }
 
-#[async_trait]
 impl ApprovalBroker for TelegramApprovalBroker {
-    async fn request_approval(&self, request: &ApprovalRequest) -> Result<ApprovalDecision> {
-        if self.timeout.is_zero() {
-            return Ok(ApprovalDecision::Denied {
-                reason: "approval timed out".to_string(),
-            });
-        }
+    fn request_approval<'a>(
+        &'a self,
+        request: &'a ApprovalRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ApprovalDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.timeout.is_zero() {
+                return Ok(ApprovalDecision::Denied {
+                    reason: "approval timed out".to_string(),
+                });
+            }
 
-        let message_id = self.send_approval_message(request).await?;
-        match self.poll_callback_query(message_id).await? {
-            Some(decision) if decision == "approve" => Ok(ApprovalDecision::Approved),
-            Some(decision) if decision == "deny" => Ok(ApprovalDecision::Denied {
-                reason: "denied by user".to_string(),
-            }),
-            Some(decision) => Ok(ApprovalDecision::Denied {
-                reason: format!("unrecognized approval action: {decision}"),
-            }),
-            None => Ok(ApprovalDecision::Denied {
-                reason: "approval timed out".to_string(),
-            }),
-        }
+            let message_id = self.send_approval_message(request).await?;
+            match self.poll_callback_query(message_id).await? {
+                Some(decision) if decision == "approve" => Ok(ApprovalDecision::Approved),
+                Some(decision) if decision == "deny" => Ok(ApprovalDecision::Denied {
+                    reason: "denied by user".to_string(),
+                }),
+                Some(decision) => Ok(ApprovalDecision::Denied {
+                    reason: format!("unrecognized approval action: {decision}"),
+                }),
+                None => Ok(ApprovalDecision::Denied {
+                    reason: "approval timed out".to_string(),
+                }),
+            }
+        })
     }
 }
 

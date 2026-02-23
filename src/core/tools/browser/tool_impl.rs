@@ -4,8 +4,9 @@ use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
 use crate::security::url_validation::validate_url_not_ssrf;
-use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::future::Future;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -372,7 +373,6 @@ impl BrowserTool {
     }
 }
 
-#[async_trait]
 impl Tool for BrowserTool {
     fn name(&self) -> &str {
         "browser"
@@ -468,56 +468,62 @@ impl Tool for BrowserTool {
         })
     }
 
-    async fn execute(&self, args: Value, _ctx: &ExecutionContext) -> anyhow::Result<ToolResult> {
-        // Security checks
-        if !self.security.can_act() {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Action blocked: autonomy is read-only".into()),
+    fn execute<'a>(
+        &'a self,
+        args: Value,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            // Security checks
+            if !self.security.can_act() {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Action blocked: autonomy is read-only".into()),
 
-                attachments: Vec::new(),
-            });
-        }
+                    attachments: Vec::new(),
+                });
+            }
 
-        if !self.security.record_action() {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Action blocked: rate limit exceeded".into()),
+            if !self.security.record_action() {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Action blocked: rate limit exceeded".into()),
 
-                attachments: Vec::new(),
-            });
-        }
+                    attachments: Vec::new(),
+                });
+            }
 
-        // Check if agent-browser is available
-        if !Self::is_available().await {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(
-                    "agent-browser CLI not found. Install with: npm install -g agent-browser"
-                        .into(),
-                ),
+            // Check if agent-browser is available
+            if !Self::is_available().await {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(
+                        "agent-browser CLI not found. Install with: npm install -g agent-browser"
+                            .into(),
+                    ),
 
-                attachments: Vec::new(),
-            });
-        }
+                    attachments: Vec::new(),
+                });
+            }
 
-        let action = args
-            .get("action")
-            .and_then(|value| value.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
+            let action = args
+                .get("action")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
 
-        match parse_browser_action(action, &args) {
-            Ok(parsed) => self.execute_action(parsed).await,
-            Err(_) if !is_known_browser_action(action) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Unknown action: {action}")),
-                attachments: Vec::new(),
-            }),
-            Err(error) => Err(error),
-        }
+            match parse_browser_action(action, &args) {
+                Ok(parsed) => self.execute_action(parsed).await,
+                Err(_) if !is_known_browser_action(action) => Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Unknown action: {action}")),
+                    attachments: Vec::new(),
+                }),
+                Err(error) => Err(error),
+            }
+        })
     }
 }

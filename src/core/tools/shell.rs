@@ -1,7 +1,8 @@
 use super::traits::{Tool, ToolResult};
 use crate::core::tools::middleware::ExecutionContext;
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 /// Maximum shell command execution time before kill.
@@ -23,7 +24,6 @@ impl ShellTool {
     }
 }
 
-#[async_trait]
 impl Tool for ShellTool {
     fn name(&self) -> &str {
         "shell"
@@ -46,90 +46,95 @@ impl Tool for ShellTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let command = args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'command' parameter"))?;
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let command = args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'command' parameter"))?;
 
-        // Execute with timeout to prevent hanging commands.
-        // Clear the environment to prevent leaking API keys and other secrets
-        // (CWE-200), then re-add only safe, functional variables.
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.arg("-c")
-            .arg(command)
-            .current_dir(&ctx.workspace_dir)
-            .env_clear();
+            // Execute with timeout to prevent hanging commands.
+            // Clear the environment to prevent leaking API keys and other secrets
+            // (CWE-200), then re-add only safe, functional variables.
+            let mut cmd = tokio::process::Command::new("sh");
+            cmd.arg("-c")
+                .arg(command)
+                .current_dir(&ctx.workspace_dir)
+                .env_clear();
 
-        for var in SAFE_ENV_VARS {
-            if let Ok(val) = std::env::var(var) {
-                cmd.env(var, val);
-            }
-        }
-
-        // Override TMPDIR to a controlled workspace-local directory
-        let controlled_tmp = ctx.workspace_dir.join(".asteroniris-tmp");
-        if !controlled_tmp.exists() {
-            std::fs::create_dir_all(&controlled_tmp)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&controlled_tmp, std::fs::Permissions::from_mode(0o700))?;
-            }
-        }
-        cmd.env("TMPDIR", &controlled_tmp);
-
-        let result =
-            tokio::time::timeout(Duration::from_secs(SHELL_TIMEOUT_SECS), cmd.output()).await;
-
-        match result {
-            Ok(Ok(output)) => {
-                let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-                // Truncate output to prevent OOM
-                if stdout.len() > MAX_OUTPUT_BYTES {
-                    stdout.truncate(stdout.floor_char_boundary(MAX_OUTPUT_BYTES));
-                    stdout.push_str("\n... [output truncated at 1MB]");
+            for var in SAFE_ENV_VARS {
+                if let Ok(val) = std::env::var(var) {
+                    cmd.env(var, val);
                 }
-                if stderr.len() > MAX_OUTPUT_BYTES {
-                    stderr.truncate(stderr.floor_char_boundary(MAX_OUTPUT_BYTES));
-                    stderr.push_str("\n... [stderr truncated at 1MB]");
-                }
+            }
 
-                Ok(ToolResult {
-                    success: output.status.success(),
-                    output: stdout,
-                    error: if stderr.is_empty() {
-                        None
-                    } else {
-                        Some(stderr)
-                    },
+            // Override TMPDIR to a controlled workspace-local directory
+            let controlled_tmp = ctx.workspace_dir.join(".asteroniris-tmp");
+            if !controlled_tmp.exists() {
+                std::fs::create_dir_all(&controlled_tmp)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(
+                        &controlled_tmp,
+                        std::fs::Permissions::from_mode(0o700),
+                    )?;
+                }
+            }
+            cmd.env("TMPDIR", &controlled_tmp);
+
+            let result =
+                tokio::time::timeout(Duration::from_secs(SHELL_TIMEOUT_SECS), cmd.output()).await;
+
+            match result {
+                Ok(Ok(output)) => {
+                    let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+                    // Truncate output to prevent OOM
+                    if stdout.len() > MAX_OUTPUT_BYTES {
+                        stdout.truncate(stdout.floor_char_boundary(MAX_OUTPUT_BYTES));
+                        stdout.push_str("\n... [output truncated at 1MB]");
+                    }
+                    if stderr.len() > MAX_OUTPUT_BYTES {
+                        stderr.truncate(stderr.floor_char_boundary(MAX_OUTPUT_BYTES));
+                        stderr.push_str("\n... [stderr truncated at 1MB]");
+                    }
+
+                    Ok(ToolResult {
+                        success: output.status.success(),
+                        output: stdout,
+                        error: if stderr.is_empty() {
+                            None
+                        } else {
+                            Some(stderr)
+                        },
+
+                        attachments: Vec::new(),
+                    })
+                }
+                Ok(Err(e)) => Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to execute command: {e}")),
 
                     attachments: Vec::new(),
-                })
+                }),
+                Err(_) => Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "Command timed out after {SHELL_TIMEOUT_SECS}s and was killed"
+                    )),
+
+                    attachments: Vec::new(),
+                }),
             }
-            Ok(Err(e)) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Failed to execute command: {e}")),
-
-                attachments: Vec::new(),
-            }),
-            Err(_) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Command timed out after {SHELL_TIMEOUT_SECS}s and was killed"
-                )),
-
-                attachments: Vec::new(),
-            }),
-        }
+        })
     }
 }
 

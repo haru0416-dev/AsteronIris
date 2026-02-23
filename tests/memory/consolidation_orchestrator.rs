@@ -14,9 +14,10 @@ use asteroniris::core::memory::{
 use asteroniris::core::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
-use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use tempfile::TempDir;
 use tokio::time::Instant;
 
@@ -24,16 +25,15 @@ struct FixedResponseProvider {
     response: String,
 }
 
-#[async_trait]
 impl Provider for FixedResponseProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> Result<String> {
-        Ok(self.response.clone())
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move { Ok(self.response.clone()) })
     }
 }
 
@@ -42,55 +42,83 @@ struct DelayedConsolidationMemory {
     delay: Duration,
 }
 
-#[async_trait]
 impl Memory for DelayedConsolidationMemory {
     fn name(&self) -> &str {
         self.inner.name()
     }
 
-    async fn health_check(&self) -> bool {
-        self.inner.health_check().await
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move { self.inner.health_check().await })
     }
 
-    async fn append_event(
+    fn append_event(
         &self,
         input: MemoryEventInput,
-    ) -> anyhow::Result<asteroniris::core::memory::MemoryEvent> {
-        if input.slot_key == CONSOLIDATION_SLOT_KEY {
-            tokio::time::sleep(self.delay).await;
-        }
-        self.inner.append_event(input).await
+    ) -> Pin<
+        Box<
+            dyn Future<Output = anyhow::Result<asteroniris::core::memory::MemoryEvent>> + Send + '_,
+        >,
+    > {
+        Box::pin(async move {
+            if input.slot_key == CONSOLIDATION_SLOT_KEY {
+                tokio::time::sleep(self.delay).await;
+            }
+            self.inner.append_event(input).await
+        })
     }
 
-    async fn recall_scoped(
+    fn recall_scoped(
         &self,
         query: RecallQuery,
-    ) -> anyhow::Result<Vec<asteroniris::core::memory::MemoryRecallItem>> {
-        self.inner.recall_scoped(query).await
+    ) -> Pin<
+        Box<
+            dyn Future<Output = anyhow::Result<Vec<asteroniris::core::memory::MemoryRecallItem>>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move { self.inner.recall_scoped(query).await })
     }
 
-    async fn resolve_slot(
-        &self,
-        entity_id: &str,
-        slot_key: &str,
-    ) -> anyhow::Result<Option<asteroniris::core::memory::BeliefSlot>> {
-        self.inner.resolve_slot(entity_id, slot_key).await
+    fn resolve_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = anyhow::Result<Option<asteroniris::core::memory::BeliefSlot>>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { self.inner.resolve_slot(entity_id, slot_key).await })
     }
 
-    async fn forget_slot(
-        &self,
-        entity_id: &str,
-        slot_key: &str,
+    fn forget_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
         mode: asteroniris::core::memory::ForgetMode,
-        reason: &str,
-    ) -> anyhow::Result<asteroniris::core::memory::ForgetOutcome> {
-        self.inner
-            .forget_slot(entity_id, slot_key, mode, reason)
-            .await
+        reason: &'a str,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = anyhow::Result<asteroniris::core::memory::ForgetOutcome>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.inner
+                .forget_slot(entity_id, slot_key, mode, reason)
+                .await
+        })
     }
 
-    async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
-        self.inner.count_events(entity_id).await
+    fn count_events<'a>(
+        &'a self,
+        entity_id: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + 'a>> {
+        Box::pin(async move { self.inner.count_events(entity_id).await })
     }
 }
 

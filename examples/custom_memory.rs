@@ -5,7 +5,6 @@
 //!
 //! Run: cargo run --example custom_memory
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -30,7 +29,6 @@ pub struct MemoryEntry {
     pub score: Option<f64>,
 }
 
-#[async_trait]
 pub trait Memory: Send + Sync {
     fn name(&self) -> &str;
     async fn store(&self, key: &str, content: &str, category: MemoryCategory)
@@ -62,7 +60,6 @@ impl InMemoryBackend {
     }
 }
 
-#[async_trait]
 impl Memory for InMemoryBackend {
     fn name(&self) -> &str {
         "in-memory"

@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use super::types::{Artifact, Axis, AxisScores, TasteContext, TextFormat};
 use crate::core::providers::{Provider, scrub_secret_patterns};
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 
 /// Result of critiquing an artifact (axis scores, raw response, confidence).
 pub struct CritiqueResult {
@@ -14,13 +15,12 @@ pub struct CritiqueResult {
     pub confidence: f64,
 }
 
-#[async_trait]
 pub(crate) trait UniversalCritic: Send + Sync {
-    async fn critique(
-        &self,
-        artifact: &Artifact,
-        ctx: &TasteContext,
-    ) -> anyhow::Result<CritiqueResult>;
+    fn critique<'a>(
+        &'a self,
+        artifact: &'a Artifact,
+        ctx: &'a TasteContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<CritiqueResult>> + Send + 'a>>;
 }
 
 pub struct LlmCritic {
@@ -141,26 +141,27 @@ impl LlmCritic {
     }
 }
 
-#[async_trait]
 impl UniversalCritic for LlmCritic {
-    async fn critique(
-        &self,
-        artifact: &Artifact,
-        ctx: &TasteContext,
-    ) -> anyhow::Result<CritiqueResult> {
-        let system_prompt = scrub_secret_patterns(&Self::build_system_prompt()).into_owned();
-        let user_message =
-            scrub_secret_patterns(&Self::build_user_message(artifact, ctx)).into_owned();
+    fn critique<'a>(
+        &'a self,
+        artifact: &'a Artifact,
+        ctx: &'a TasteContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<CritiqueResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let system_prompt = scrub_secret_patterns(&Self::build_system_prompt()).into_owned();
+            let user_message =
+                scrub_secret_patterns(&Self::build_user_message(artifact, ctx)).into_owned();
 
-        let response = self
-            .provider
-            .chat_with_system(Some(&system_prompt), &user_message, &self.model, 0.0)
-            .await?;
+            let response = self
+                .provider
+                .chat_with_system(Some(&system_prompt), &user_message, &self.model, 0.0)
+                .await?;
 
-        let scrubbed_response = scrub_secret_patterns(&response).into_owned();
-        let mut critique = Self::parse_critique_response(&scrubbed_response);
-        critique.raw_response = scrubbed_response;
-        Ok(critique)
+            let scrubbed_response = scrub_secret_patterns(&response).into_owned();
+            let mut critique = Self::parse_critique_response(&scrubbed_response);
+            critique.raw_response = scrubbed_response;
+            Ok(critique)
+        })
     }
 }
 

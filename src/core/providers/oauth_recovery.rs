@@ -1,6 +1,7 @@
 use super::{Provider, ProviderResponse, sanitize_api_error};
 use anyhow::Result;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
@@ -109,89 +110,94 @@ impl OAuthRecoveryProvider {
     }
 }
 
-#[async_trait]
 impl Provider for OAuthRecoveryProvider {
-    async fn warmup(&self) -> Result<()> {
-        let provider = self.inner.read().await.clone();
-        provider.warmup().await
+    fn warmup(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let provider = self.inner.read().await.clone();
+            provider.warmup().await
+        })
     }
 
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> Result<String> {
-        let provider = self.inner.read().await.clone();
-        let first_attempt = provider
-            .chat_with_system(system_prompt, message, model, temperature)
-            .await;
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let provider = self.inner.read().await.clone();
+            let first_attempt = provider
+                .chat_with_system(system_prompt, message, model, temperature)
+                .await;
 
-        let Err(first_error) = first_attempt else {
-            return first_attempt;
-        };
+            let Err(first_error) = first_attempt else {
+                return first_attempt;
+            };
 
-        if !Self::is_auth_error(&first_error) {
-            return Err(first_error);
-        }
-
-        match self.attempt_recovery().await {
-            Ok(true) => {
-                let provider = self.inner.read().await.clone();
-                provider
-                    .chat_with_system(system_prompt, message, model, temperature)
-                    .await
+            if !Self::is_auth_error(&first_error) {
+                return Err(first_error);
             }
-            Ok(false) => Err(first_error),
-            Err(recovery_error) => {
-                tracing::warn!(
-                    provider = %self.provider_name,
-                    "OAuth recovery failed: {}",
-                    sanitize_api_error(&recovery_error.to_string())
-                );
-                Err(first_error)
+
+            match self.attempt_recovery().await {
+                Ok(true) => {
+                    let provider = self.inner.read().await.clone();
+                    provider
+                        .chat_with_system(system_prompt, message, model, temperature)
+                        .await
+                }
+                Ok(false) => Err(first_error),
+                Err(recovery_error) => {
+                    tracing::warn!(
+                        provider = %self.provider_name,
+                        "OAuth recovery failed: {}",
+                        sanitize_api_error(&recovery_error.to_string())
+                    );
+                    Err(first_error)
+                }
             }
-        }
+        })
     }
 
-    async fn chat_with_system_full(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system_full<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> Result<ProviderResponse> {
-        let provider = self.inner.read().await.clone();
-        let first_attempt = provider
-            .chat_with_system_full(system_prompt, message, model, temperature)
-            .await;
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let provider = self.inner.read().await.clone();
+            let first_attempt = provider
+                .chat_with_system_full(system_prompt, message, model, temperature)
+                .await;
 
-        let Err(first_error) = first_attempt else {
-            return first_attempt;
-        };
+            let Err(first_error) = first_attempt else {
+                return first_attempt;
+            };
 
-        if !Self::is_auth_error(&first_error) {
-            return Err(first_error);
-        }
-
-        match self.attempt_recovery().await {
-            Ok(true) => {
-                let provider = self.inner.read().await.clone();
-                provider
-                    .chat_with_system_full(system_prompt, message, model, temperature)
-                    .await
+            if !Self::is_auth_error(&first_error) {
+                return Err(first_error);
             }
-            Ok(false) => Err(first_error),
-            Err(recovery_error) => {
-                tracing::warn!(
-                    provider = %self.provider_name,
-                    "OAuth recovery failed: {}",
-                    sanitize_api_error(&recovery_error.to_string())
-                );
-                Err(first_error)
+
+            match self.attempt_recovery().await {
+                Ok(true) => {
+                    let provider = self.inner.read().await.clone();
+                    provider
+                        .chat_with_system_full(system_prompt, message, model, temperature)
+                        .await
+                }
+                Ok(false) => Err(first_error),
+                Err(recovery_error) => {
+                    tracing::warn!(
+                        provider = %self.provider_name,
+                        "OAuth recovery failed: {}",
+                        sanitize_api_error(&recovery_error.to_string())
+                    );
+                    Err(first_error)
+                }
             }
-        }
+        })
     }
 }
 
@@ -203,31 +209,29 @@ mod tests {
 
     struct FailProvider;
 
-    #[async_trait]
     impl Provider for FailProvider {
-        async fn chat_with_system(
-            &self,
-            _system_prompt: Option<&str>,
-            _message: &str,
-            _model: &str,
+        fn chat_with_system<'a>(
+            &'a self,
+            _system_prompt: Option<&'a str>,
+            _message: &'a str,
+            _model: &'a str,
             _temperature: f64,
-        ) -> Result<String> {
-            bail!("401 unauthorized")
+        ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+            Box::pin(async move { bail!("401 unauthorized") })
         }
     }
 
     struct OkProvider;
 
-    #[async_trait]
     impl Provider for OkProvider {
-        async fn chat_with_system(
-            &self,
-            _system_prompt: Option<&str>,
-            _message: &str,
-            _model: &str,
+        fn chat_with_system<'a>(
+            &'a self,
+            _system_prompt: Option<&'a str>,
+            _message: &'a str,
+            _model: &'a str,
             _temperature: f64,
-        ) -> Result<String> {
-            Ok("ok".to_string())
+        ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+            Box::pin(async move { Ok("ok".to_string()) })
         }
     }
 

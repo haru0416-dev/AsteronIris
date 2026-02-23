@@ -1,5 +1,6 @@
 use super::{Provider, ProviderResponse};
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 /// Check if an error is non-retryable (client errors that won't resolve with retries).
@@ -58,142 +59,147 @@ impl ReliableProvider {
     }
 }
 
-#[async_trait]
 impl Provider for ReliableProvider {
-    async fn warmup(&self) -> anyhow::Result<()> {
-        for (name, provider) in &self.providers {
-            tracing::info!(provider = name, "Warming up provider connection pool");
-            if let Err(e) = provider.warmup().await {
-                tracing::warn!(provider = name, "Warmup failed (non-fatal): {e}");
+    fn warmup(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            for (name, provider) in &self.providers {
+                tracing::info!(provider = name, "Warming up provider connection pool");
+                if let Err(e) = provider.warmup().await {
+                    tracing::warn!(provider = name, "Warmup failed (non-fatal): {e}");
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
-        let mut failures = Vec::new();
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut failures = Vec::new();
 
-        for (provider_name, provider) in &self.providers {
-            let mut backoff_ms = self.base_backoff_ms;
+            for (provider_name, provider) in &self.providers {
+                let mut backoff_ms = self.base_backoff_ms;
 
-            for attempt in 0..=self.max_retries {
-                match provider
-                    .chat_with_system(system_prompt, message, model, temperature)
-                    .await
-                {
-                    Ok(resp) => {
-                        if attempt > 0 {
-                            tracing::info!(
-                                provider = provider_name,
-                                attempt,
-                                "Provider recovered after retries"
-                            );
+                for attempt in 0..=self.max_retries {
+                    match provider
+                        .chat_with_system(system_prompt, message, model, temperature)
+                        .await
+                    {
+                        Ok(resp) => {
+                            if attempt > 0 {
+                                tracing::info!(
+                                    provider = provider_name,
+                                    attempt,
+                                    "Provider recovered after retries"
+                                );
+                            }
+                            return Ok(resp);
                         }
-                        return Ok(resp);
-                    }
-                    Err(e) => {
-                        let non_retryable = is_non_retryable(&e);
-                        failures.push(format!(
-                            "{provider_name} attempt {}/{}: {e}",
-                            attempt + 1,
-                            self.max_retries + 1
-                        ));
+                        Err(e) => {
+                            let non_retryable = is_non_retryable(&e);
+                            failures.push(format!(
+                                "{provider_name} attempt {}/{}: {e}",
+                                attempt + 1,
+                                self.max_retries + 1
+                            ));
 
-                        if non_retryable {
-                            tracing::warn!(
-                                provider = provider_name,
-                                "Non-retryable error, switching provider"
-                            );
-                            break;
-                        }
+                            if non_retryable {
+                                tracing::warn!(
+                                    provider = provider_name,
+                                    "Non-retryable error, switching provider"
+                                );
+                                break;
+                            }
 
-                        if attempt < self.max_retries {
-                            tracing::warn!(
-                                provider = provider_name,
-                                attempt = attempt + 1,
-                                max_retries = self.max_retries,
-                                "Provider call failed, retrying"
-                            );
-                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                            backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                            if attempt < self.max_retries {
+                                tracing::warn!(
+                                    provider = provider_name,
+                                    attempt = attempt + 1,
+                                    max_retries = self.max_retries,
+                                    "Provider call failed, retrying"
+                                );
+                                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                                backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                            }
                         }
                     }
                 }
+
+                tracing::warn!(provider = provider_name, "Switching to fallback provider");
             }
 
-            tracing::warn!(provider = provider_name, "Switching to fallback provider");
-        }
-
-        anyhow::bail!("All providers failed. Attempts:\n{}", failures.join("\n"))
+            anyhow::bail!("All providers failed. Attempts:\n{}", failures.join("\n"))
+        })
     }
 
-    async fn chat_with_system_full(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system_full<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let mut failures = Vec::new();
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut failures = Vec::new();
 
-        for (provider_name, provider) in &self.providers {
-            let mut backoff_ms = self.base_backoff_ms;
+            for (provider_name, provider) in &self.providers {
+                let mut backoff_ms = self.base_backoff_ms;
 
-            for attempt in 0..=self.max_retries {
-                match provider
-                    .chat_with_system_full(system_prompt, message, model, temperature)
-                    .await
-                {
-                    Ok(resp) => {
-                        if attempt > 0 {
-                            tracing::info!(
-                                provider = provider_name,
-                                attempt,
-                                "Provider recovered after retries"
-                            );
+                for attempt in 0..=self.max_retries {
+                    match provider
+                        .chat_with_system_full(system_prompt, message, model, temperature)
+                        .await
+                    {
+                        Ok(resp) => {
+                            if attempt > 0 {
+                                tracing::info!(
+                                    provider = provider_name,
+                                    attempt,
+                                    "Provider recovered after retries"
+                                );
+                            }
+                            return Ok(resp);
                         }
-                        return Ok(resp);
-                    }
-                    Err(e) => {
-                        let non_retryable = is_non_retryable(&e);
-                        failures.push(format!(
-                            "{provider_name} attempt {}/{}: {e}",
-                            attempt + 1,
-                            self.max_retries + 1
-                        ));
+                        Err(e) => {
+                            let non_retryable = is_non_retryable(&e);
+                            failures.push(format!(
+                                "{provider_name} attempt {}/{}: {e}",
+                                attempt + 1,
+                                self.max_retries + 1
+                            ));
 
-                        if non_retryable {
-                            tracing::warn!(
-                                provider = provider_name,
-                                "Non-retryable error, switching provider"
-                            );
-                            break;
-                        }
+                            if non_retryable {
+                                tracing::warn!(
+                                    provider = provider_name,
+                                    "Non-retryable error, switching provider"
+                                );
+                                break;
+                            }
 
-                        if attempt < self.max_retries {
-                            tracing::warn!(
-                                provider = provider_name,
-                                attempt = attempt + 1,
-                                max_retries = self.max_retries,
-                                "Provider call failed, retrying"
-                            );
-                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                            backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                            if attempt < self.max_retries {
+                                tracing::warn!(
+                                    provider = provider_name,
+                                    attempt = attempt + 1,
+                                    max_retries = self.max_retries,
+                                    "Provider call failed, retrying"
+                                );
+                                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                                backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                            }
                         }
                     }
                 }
+
+                tracing::warn!(provider = provider_name, "Switching to fallback provider");
             }
 
-            tracing::warn!(provider = provider_name, "Switching to fallback provider");
-        }
-
-        anyhow::bail!("All providers failed. Attempts:\n{}", failures.join("\n"))
+            anyhow::bail!("All providers failed. Attempts:\n{}", failures.join("\n"))
+        })
     }
 }
 
@@ -210,20 +216,21 @@ mod tests {
         error: &'static str,
     }
 
-    #[async_trait]
     impl Provider for MockProvider {
-        async fn chat_with_system(
-            &self,
-            _system_prompt: Option<&str>,
-            _message: &str,
-            _model: &str,
+        fn chat_with_system<'a>(
+            &'a self,
+            _system_prompt: Option<&'a str>,
+            _message: &'a str,
+            _model: &'a str,
             _temperature: f64,
-        ) -> anyhow::Result<String> {
-            let attempt = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
-            if attempt <= self.fail_until_attempt {
-                anyhow::bail!(self.error);
-            }
-            Ok(self.response.to_string())
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+            Box::pin(async move {
+                let attempt = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt <= self.fail_until_attempt {
+                    anyhow::bail!(self.error);
+                }
+                Ok(self.response.to_string())
+            })
         }
     }
 

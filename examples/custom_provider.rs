@@ -4,13 +4,11 @@
 //! Copy this file, modify the API call, and register in `src/providers/mod.rs`.
 
 use anyhow::Result;
-use async_trait::async_trait;
 
 // In a real implementation, you'd import from the crate:
 // use asteroniris::providers::traits::Provider;
 
 /// Minimal Provider trait (mirrors src/providers/traits.rs)
-#[async_trait]
 pub trait Provider: Send + Sync {
     async fn chat(&self, message: &str, model: &str, temperature: f64) -> Result<String>;
 }
@@ -30,7 +28,6 @@ impl OllamaProvider {
     }
 }
 
-#[async_trait]
 impl Provider for OllamaProvider {
     async fn chat(&self, message: &str, model: &str, temperature: f64) -> Result<String> {
         let url = format!("{}/api/generate", self.base_url);

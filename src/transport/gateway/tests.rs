@@ -7,13 +7,14 @@ use crate::security::SecurityPolicy;
 use crate::security::pairing::{PairingGuard, hash_token};
 #[cfg(feature = "whatsapp")]
 use crate::transport::channels::WhatsAppChannel;
-use async_trait::async_trait;
 use axum::{
     body::Bytes,
     extract::{Query, State},
     http::HeaderMap,
     response::{IntoResponse, Json},
 };
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
@@ -30,17 +31,18 @@ struct CountingProvider {
     calls: Arc<AtomicUsize>,
 }
 
-#[async_trait]
 impl Provider for CountingProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok("ok".to_string())
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok("ok".to_string())
+        })
     }
 }
 

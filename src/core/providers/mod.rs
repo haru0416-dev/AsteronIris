@@ -30,8 +30,8 @@ pub use response::{
 pub use scrub::{api_error, sanitize_api_error, scrub_secret_patterns};
 #[allow(unused_imports)]
 pub use streaming::{
-    ChannelStreamSink, CliStreamSink, NullStreamSink, ProviderChatRequest, ProviderStream,
-    StreamCollector, StreamEvent, StreamSink, StreamingSecretScrubber,
+    ChannelStreamSink, CliStreamSink, NullStreamSink, ProviderStream, StreamCollector, StreamEvent,
+    StreamSink, StreamingSecretScrubber,
 };
 pub use traits::Provider;
 

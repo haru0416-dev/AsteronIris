@@ -1,7 +1,8 @@
 use crate::security::approval::{ApprovalBroker, ApprovalDecision, ApprovalRequest, RiskLevel};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
@@ -126,34 +127,38 @@ impl DiscordApprovalBroker {
     }
 }
 
-#[async_trait]
 impl ApprovalBroker for DiscordApprovalBroker {
-    async fn request_approval(&self, request: &ApprovalRequest) -> Result<ApprovalDecision> {
-        if self.timeout.is_zero() {
-            return Ok(ApprovalDecision::Denied {
-                reason: "approval timed out".to_string(),
-            });
-        }
-
-        let message_id = self.send_approval_embed(request).await?;
-        self.add_reactions(&message_id).await?;
-
-        let deadline = Instant::now() + self.timeout;
-        while Instant::now() < deadline {
-            if self.poll_reaction(&message_id, APPROVE_EMOJI).await? {
-                return Ok(ApprovalDecision::Approved);
-            }
-            if self.poll_reaction(&message_id, DENY_EMOJI).await? {
+    fn request_approval<'a>(
+        &'a self,
+        request: &'a ApprovalRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ApprovalDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.timeout.is_zero() {
                 return Ok(ApprovalDecision::Denied {
-                    reason: "denied by user".to_string(),
+                    reason: "approval timed out".to_string(),
                 });
             }
 
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
+            let message_id = self.send_approval_embed(request).await?;
+            self.add_reactions(&message_id).await?;
 
-        Ok(ApprovalDecision::Denied {
-            reason: "approval timed out".to_string(),
+            let deadline = Instant::now() + self.timeout;
+            while Instant::now() < deadline {
+                if self.poll_reaction(&message_id, APPROVE_EMOJI).await? {
+                    return Ok(ApprovalDecision::Approved);
+                }
+                if self.poll_reaction(&message_id, DENY_EMOJI).await? {
+                    return Ok(ApprovalDecision::Denied {
+                        reason: "denied by user".to_string(),
+                    });
+                }
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+
+            Ok(ApprovalDecision::Denied {
+                reason: "approval timed out".to_string(),
+            })
         })
     }
 }

@@ -1,13 +1,14 @@
 use super::*;
 use crate::core::providers::response::{ProviderResponse, StopReason};
-use crate::core::providers::streaming::{ProviderChatRequest, StreamEvent, StreamSink};
+use crate::core::providers::streaming::{StreamEvent, StreamSink};
 use crate::core::tools::middleware::{MiddlewareDecision, ToolMiddleware};
 use crate::core::tools::traits::{OutputAttachment, Tool};
 use crate::security::SecurityPolicy;
-use async_trait::async_trait;
 use futures_util::stream;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Mutex;
 
 #[derive(Debug)]
@@ -16,7 +17,6 @@ struct EchoTool;
 #[derive(Debug)]
 struct AttachmentTool;
 
-#[async_trait]
 impl Tool for EchoTool {
     fn name(&self) -> &str {
         "echo_tool"
@@ -30,18 +30,23 @@ impl Tool for EchoTool {
         json!({"type": "object"})
     }
 
-    async fn execute(&self, args: Value, _ctx: &ExecutionContext) -> anyhow::Result<ToolResult> {
-        Ok(ToolResult {
-            success: true,
-            output: args.to_string(),
-            error: None,
+    fn execute<'a>(
+        &'a self,
+        args: Value,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(ToolResult {
+                success: true,
+                output: args.to_string(),
+                error: None,
 
-            attachments: Vec::new(),
+                attachments: Vec::new(),
+            })
         })
     }
 }
 
-#[async_trait]
 impl Tool for AttachmentTool {
     fn name(&self) -> &str {
         "attachment_tool"
@@ -55,17 +60,23 @@ impl Tool for AttachmentTool {
         json!({"type": "object"})
     }
 
-    async fn execute(&self, args: Value, _ctx: &ExecutionContext) -> anyhow::Result<ToolResult> {
-        let index = args.get("index").and_then(Value::as_u64).unwrap_or(0);
-        Ok(ToolResult {
-            success: true,
-            output: format!("attachment {index}"),
-            error: None,
-            attachments: vec![OutputAttachment::from_path(
-                "image/png",
-                format!("/tmp/generated-{index}.png"),
-                Some(format!("generated-{index}.png")),
-            )],
+    fn execute<'a>(
+        &'a self,
+        args: Value,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let index = args.get("index").and_then(Value::as_u64).unwrap_or(0);
+            Ok(ToolResult {
+                success: true,
+                output: format!("attachment {index}"),
+                error: None,
+                attachments: vec![OutputAttachment::from_path(
+                    "image/png",
+                    format!("/tmp/generated-{index}.png"),
+                    Some(format!("generated-{index}.png")),
+                )],
+            })
         })
     }
 }
@@ -75,49 +86,53 @@ struct CountingMiddleware {
     count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-#[async_trait]
 impl ToolMiddleware for CountingMiddleware {
-    async fn before_execute(
-        &self,
-        _tool_name: &str,
-        _args: &Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision> {
-        self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(MiddlewareDecision::Continue)
+    fn before_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _args: &'a Value,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(MiddlewareDecision::Continue)
+        })
     }
 
-    async fn after_execute(
-        &self,
-        _tool_name: &str,
-        _result: &mut ToolResult,
-        _ctx: &ExecutionContext,
-    ) {
+    fn after_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _result: &'a mut ToolResult,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {})
     }
 }
 
 #[derive(Debug)]
 struct RateLimitMiddleware;
 
-#[async_trait]
 impl ToolMiddleware for RateLimitMiddleware {
-    async fn before_execute(
-        &self,
-        _tool_name: &str,
-        _args: &Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<MiddlewareDecision> {
-        Ok(MiddlewareDecision::Block(
-            "blocked by security policy: entity action limit exceeded for 'test'".to_string(),
-        ))
+    fn before_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _args: &'a Value,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(MiddlewareDecision::Block(
+                "blocked by security policy: entity action limit exceeded for 'test'".to_string(),
+            ))
+        })
     }
 
-    async fn after_execute(
-        &self,
-        _tool_name: &str,
-        _result: &mut ToolResult,
-        _ctx: &ExecutionContext,
-    ) {
+    fn after_execute<'a>(
+        &'a self,
+        _tool_name: &'a str,
+        _result: &'a mut ToolResult,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {})
     }
 }
 
@@ -125,33 +140,34 @@ struct MockProvider {
     responses: Mutex<VecDeque<ProviderResponse>>,
 }
 
-#[async_trait]
 impl Provider for MockProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        Ok(String::new())
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move { Ok(String::new()) })
     }
 
-    async fn chat_with_tools(
-        &self,
-        _system_prompt: Option<&str>,
-        _messages: &[ProviderMessage],
-        _tools: &[ToolSpec],
-        _model: &str,
+    fn chat_with_tools<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _messages: &'a [ProviderMessage],
+        _tools: &'a [ToolSpec],
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let mut guard = self
-            .responses
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Ok(guard
-            .pop_front()
-            .unwrap_or_else(|| ProviderResponse::text_only("done".to_string())))
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut guard = self
+                .responses
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(guard
+                .pop_front()
+                .unwrap_or_else(|| ProviderResponse::text_only("done".to_string())))
+        })
     }
 
     fn supports_tool_calling(&self) -> bool {
@@ -163,44 +179,55 @@ struct MockStreamingProvider {
     events: Vec<StreamEvent>,
 }
 
-#[async_trait]
 impl Provider for MockStreamingProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        Ok(String::new())
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move { Ok(String::new()) })
     }
 
-    async fn chat_with_tools(
-        &self,
-        _system_prompt: Option<&str>,
-        _messages: &[ProviderMessage],
-        _tools: &[ToolSpec],
-        _model: &str,
+    fn chat_with_tools<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _messages: &'a [ProviderMessage],
+        _tools: &'a [ToolSpec],
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        Ok(ProviderResponse::text_only("fallback".to_string()))
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move { Ok(ProviderResponse::text_only("fallback".to_string())) })
     }
 
     fn supports_streaming(&self) -> bool {
         true
     }
 
-    async fn chat_with_tools_stream(
-        &self,
-        _req: ProviderChatRequest,
-    ) -> anyhow::Result<crate::core::providers::streaming::ProviderStream> {
-        let items = self
-            .events
-            .iter()
-            .cloned()
-            .map(Ok::<_, anyhow::Error>)
-            .collect::<Vec<_>>();
-        Ok(Box::pin(stream::iter(items)))
+    fn chat_with_tools_stream<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _messages: &'a [ProviderMessage],
+        _tools: &'a [ToolSpec],
+        _model: &'a str,
+        _temperature: f64,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = anyhow::Result<crate::core::providers::streaming::ProviderStream>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let items = self
+                .events
+                .iter()
+                .cloned()
+                .map(Ok::<_, anyhow::Error>)
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(items)) as crate::core::providers::streaming::ProviderStream)
+        })
     }
 }
 
@@ -210,26 +237,30 @@ struct RecordingSink {
     deltas: Mutex<Vec<String>>,
 }
 
-#[async_trait]
 impl StreamSink for RecordingSink {
-    async fn on_event(&self, event: &StreamEvent) {
-        let label = match event {
-            StreamEvent::ResponseStart { .. } => "response_start",
-            StreamEvent::TextDelta { .. } => "text_delta",
-            StreamEvent::ToolCallDelta { .. } => "tool_call_delta",
-            StreamEvent::ToolCallComplete { .. } => "tool_call_complete",
-            StreamEvent::Done { .. } => "done",
-        };
-        self.labels
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(label.to_string());
-        if let StreamEvent::TextDelta { text } = event {
-            self.deltas
+    fn on_event<'a>(
+        &'a self,
+        event: &'a StreamEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let label = match event {
+                StreamEvent::ResponseStart { .. } => "response_start",
+                StreamEvent::TextDelta { .. } => "text_delta",
+                StreamEvent::ToolCallDelta { .. } => "tool_call_delta",
+                StreamEvent::ToolCallComplete { .. } => "tool_call_complete",
+                StreamEvent::Done { .. } => "done",
+            };
+            self.labels
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(text.clone());
-        }
+                .push(label.to_string());
+            if let StreamEvent::TextDelta { text } = event {
+                self.deltas
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(text.clone());
+            }
+        })
     }
 }
 

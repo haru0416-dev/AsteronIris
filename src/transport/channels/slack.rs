@@ -2,8 +2,9 @@ use super::attachments::media_attachment_url;
 use super::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
 use crate::transport::channels::policy::{AllowlistMatch, is_allowed_user};
 use anyhow::Context;
-use async_trait::async_trait;
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use uuid::Uuid;
 
 /// Slack channel — polls conversations.history via Web API
@@ -70,7 +71,6 @@ impl SlackChannel {
     }
 }
 
-#[async_trait]
 impl Channel for SlackChannel {
     fn name(&self) -> &str {
         "slack"
@@ -80,206 +80,223 @@ impl Channel for SlackChannel {
         3000
     }
 
-    async fn send(&self, message: &str, channel: &str) -> anyhow::Result<()> {
-        let body = serde_json::json!({
-            "channel": channel,
-            "text": message
-        });
+    fn send<'a>(
+        &'a self,
+        message: &'a str,
+        channel: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let body = serde_json::json!({
+                "channel": channel,
+                "text": message
+            });
 
-        let resp = self
-            .client
-            .post("https://slack.com/api/chat.postMessage")
-            .bearer_auth(&self.bot_token)
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
-
-        if !status.is_success() {
-            anyhow::bail!("Slack chat.postMessage failed ({status}): {body}");
-        }
-
-        // Slack returns 200 for most app-level errors; check JSON "ok" field
-        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-        if parsed.get("ok") == Some(&serde_json::Value::Bool(false)) {
-            let err = parsed
-                .get("error")
-                .and_then(|e| e.as_str())
-                .unwrap_or("unknown");
-            anyhow::bail!("Slack chat.postMessage failed: {err}");
-        }
-
-        Ok(())
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let channel_id = self
-            .channel_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Slack channel_id required for listening"))?;
-
-        let bot_user_id = self.get_bot_user_id().await.unwrap_or_default();
-        let mut last_ts = String::new();
-
-        tracing::info!("Slack channel listening on #{channel_id}...");
-
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-            let mut params = vec![("channel", channel_id.clone()), ("limit", "10".to_string())];
-            if !last_ts.is_empty() {
-                params.push(("oldest", last_ts.clone()));
-            }
-
-            let resp = match self
+            let resp = self
                 .client
-                .get("https://slack.com/api/conversations.history")
+                .post("https://slack.com/api/chat.postMessage")
                 .bearer_auth(&self.bot_token)
-                .query(&params)
+                .json(&body)
                 .send()
+                .await?;
+
+            let status = resp.status();
+            let body = resp
+                .text()
                 .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Slack poll error: {e}");
-                    continue;
+                .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+
+            if !status.is_success() {
+                anyhow::bail!("Slack chat.postMessage failed ({status}): {body}");
+            }
+
+            // Slack returns 200 for most app-level errors; check JSON "ok" field
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+            if parsed.get("ok") == Some(&serde_json::Value::Bool(false)) {
+                let err = parsed
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("unknown");
+                anyhow::bail!("Slack chat.postMessage failed: {err}");
+            }
+
+            Ok(())
+        })
+    }
+
+    fn listen<'a>(
+        &'a self,
+        tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let channel_id = self
+                .channel_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("Slack channel_id required for listening"))?;
+
+            let bot_user_id = self.get_bot_user_id().await.unwrap_or_default();
+            let mut last_ts = String::new();
+
+            tracing::info!("Slack channel listening on #{channel_id}...");
+
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+                let mut params = vec![("channel", channel_id.clone()), ("limit", "10".to_string())];
+                if !last_ts.is_empty() {
+                    params.push(("oldest", last_ts.clone()));
                 }
-            };
 
-            let data: serde_json::Value = match resp.json().await {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("Slack parse error: {e}");
-                    continue;
-                }
-            };
-
-            if let Some(messages) = data.get("messages").and_then(|m| m.as_array()) {
-                // Messages come newest-first, reverse to process oldest first
-                for msg in messages.iter().rev() {
-                    let ts = msg.get("ts").and_then(|t| t.as_str()).unwrap_or("");
-                    let user = msg
-                        .get("user")
-                        .and_then(|u| u.as_str())
-                        .unwrap_or("unknown");
-                    let text = msg.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                    let attachments = Self::parse_files(msg);
-
-                    // Skip bot's own messages
-                    if user == bot_user_id {
+                let resp = match self
+                    .client
+                    .get("https://slack.com/api/conversations.history")
+                    .bearer_auth(&self.bot_token)
+                    .query(&params)
+                    .send()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!("Slack poll error: {e}");
                         continue;
                     }
+                };
 
-                    // Sender validation
-                    if !self.is_user_allowed(user) {
-                        tracing::warn!("Slack: ignoring message from unauthorized user: {user}");
+                let data: serde_json::Value = match resp.json().await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!("Slack parse error: {e}");
                         continue;
                     }
+                };
 
-                    // Skip empty or already-seen
-                    if (text.is_empty() && attachments.is_empty()) || ts <= last_ts.as_str() {
-                        continue;
-                    }
+                if let Some(messages) = data.get("messages").and_then(|m| m.as_array()) {
+                    // Messages come newest-first, reverse to process oldest first
+                    for msg in messages.iter().rev() {
+                        let ts = msg.get("ts").and_then(|t| t.as_str()).unwrap_or("");
+                        let user = msg
+                            .get("user")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("unknown");
+                        let text = msg.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                        let attachments = Self::parse_files(msg);
 
-                    last_ts = ts.to_string();
+                        // Skip bot's own messages
+                        if user == bot_user_id {
+                            continue;
+                        }
 
-                    let channel_msg = ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
-                        sender: channel_id.clone(),
-                        content: text.to_string(),
-                        channel: "slack".to_string(),
-                        conversation_id: None,
-                        thread_id: None,
-                        reply_to: None,
-                        message_id: None,
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        attachments,
-                    };
+                        // Sender validation
+                        if !self.is_user_allowed(user) {
+                            tracing::warn!(
+                                "Slack: ignoring message from unauthorized user: {user}"
+                            );
+                            continue;
+                        }
 
-                    if tx.send(channel_msg).await.is_err() {
-                        return Ok(());
+                        // Skip empty or already-seen
+                        if (text.is_empty() && attachments.is_empty()) || ts <= last_ts.as_str() {
+                            continue;
+                        }
+
+                        last_ts = ts.to_string();
+
+                        let channel_msg = ChannelMessage {
+                            id: Uuid::new_v4().to_string(),
+                            sender: channel_id.clone(),
+                            content: text.to_string(),
+                            channel: "slack".to_string(),
+                            conversation_id: None,
+                            thread_id: None,
+                            reply_to: None,
+                            message_id: None,
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            attachments,
+                        };
+
+                        if tx.send(channel_msg).await.is_err() {
+                            return Ok(());
+                        }
                     }
                 }
             }
-        }
+        })
     }
 
-    async fn health_check(&self) -> bool {
-        self.client
-            .get("https://slack.com/api/auth.test")
-            .bearer_auth(&self.bot_token)
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-    }
-
-    async fn send_media(
-        &self,
-        attachment: &MediaAttachment,
-        recipient: &str,
-    ) -> anyhow::Result<()> {
-        let bytes = match &attachment.data {
-            MediaData::Url(media_url) => self
-                .client
-                .get(media_url)
+    fn health_check<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            self.client
+                .get("https://slack.com/api/auth.test")
                 .bearer_auth(&self.bot_token)
                 .send()
                 .await
-                .context("download Slack media before upload")?
-                .bytes()
+                .map(|r| r.status().is_success())
+                .unwrap_or(false)
+        })
+    }
+
+    fn send_media<'a>(
+        &'a self,
+        attachment: &'a MediaAttachment,
+        recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let bytes = match &attachment.data {
+                MediaData::Url(media_url) => self
+                    .client
+                    .get(media_url)
+                    .bearer_auth(&self.bot_token)
+                    .send()
+                    .await
+                    .context("download Slack media before upload")?
+                    .bytes()
+                    .await
+                    .context("read Slack media bytes")?
+                    .to_vec(),
+                MediaData::Bytes(raw_bytes) => raw_bytes.clone(),
+            };
+
+            let filename = attachment
+                .filename
+                .clone()
+                .unwrap_or_else(|| "attachment".to_string());
+            let file_part = reqwest::multipart::Part::bytes(bytes).file_name(filename);
+            let form = reqwest::multipart::Form::new()
+                .text("channels", recipient.to_string())
+                .part("file", file_part);
+
+            let resp = self
+                .client
+                .post("https://slack.com/api/files.upload")
+                .bearer_auth(&self.bot_token)
+                .multipart(form)
+                .send()
                 .await
-                .context("read Slack media bytes")?
-                .to_vec(),
-            MediaData::Bytes(raw_bytes) => raw_bytes.clone(),
-        };
+                .context("send Slack files.upload request")?;
 
-        let filename = attachment
-            .filename
-            .clone()
-            .unwrap_or_else(|| "attachment".to_string());
-        let file_part = reqwest::multipart::Part::bytes(bytes).file_name(filename);
-        let form = reqwest::multipart::Form::new()
-            .text("channels", recipient.to_string())
-            .part("file", file_part);
+            let status = resp.status();
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
 
-        let resp = self
-            .client
-            .post("https://slack.com/api/files.upload")
-            .bearer_auth(&self.bot_token)
-            .multipart(form)
-            .send()
-            .await
-            .context("send Slack files.upload request")?;
+            if !status.is_success() {
+                anyhow::bail!("Slack files.upload failed ({status}): {body}");
+            }
 
-        let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+            let parsed: Value = serde_json::from_str(&body).unwrap_or_default();
+            if parsed.get("ok") == Some(&Value::Bool(false)) {
+                let err = parsed
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                anyhow::bail!("Slack files.upload failed: {err}");
+            }
 
-        if !status.is_success() {
-            anyhow::bail!("Slack files.upload failed ({status}): {body}");
-        }
-
-        let parsed: Value = serde_json::from_str(&body).unwrap_or_default();
-        if parsed.get("ok") == Some(&Value::Bool(false)) {
-            let err = parsed
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            anyhow::bail!("Slack files.upload failed: {err}");
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 }
 

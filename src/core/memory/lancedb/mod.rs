@@ -11,7 +11,8 @@ use super::traits::{
 };
 
 use anyhow::Context;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 
@@ -216,44 +217,54 @@ impl Drop for LanceDbMemory {
     }
 }
 
-#[async_trait]
 impl Memory for LanceDbMemory {
     fn name(&self) -> &str {
         LanceDbMemory::name(self)
     }
 
-    async fn health_check(&self) -> bool {
-        LanceDbMemory::health_check(self).await
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move { LanceDbMemory::health_check(self).await })
     }
 
-    async fn append_event(&self, input: MemoryEventInput) -> anyhow::Result<MemoryEvent> {
-        LanceDbMemory::append_event(self, input).await
-    }
-
-    async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
-        LanceDbMemory::recall_scoped(self, query).await
-    }
-
-    async fn resolve_slot(
+    fn append_event(
         &self,
-        entity_id: &str,
-        slot_key: &str,
-    ) -> anyhow::Result<Option<BeliefSlot>> {
-        LanceDbMemory::resolve_slot(self, entity_id, slot_key).await
+        input: MemoryEventInput,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MemoryEvent>> + Send + '_>> {
+        Box::pin(async move { LanceDbMemory::append_event(self, input).await })
     }
 
-    async fn forget_slot(
+    fn recall_scoped(
         &self,
-        entity_id: &str,
-        slot_key: &str,
+        query: RecallQuery,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<MemoryRecallItem>>> + Send + '_>> {
+        Box::pin(async move { LanceDbMemory::recall_scoped(self, query).await })
+    }
+
+    fn resolve_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<BeliefSlot>>> + Send + 'a>> {
+        Box::pin(async move { LanceDbMemory::resolve_slot(self, entity_id, slot_key).await })
+    }
+
+    fn forget_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
         mode: ForgetMode,
-        reason: &str,
-    ) -> anyhow::Result<ForgetOutcome> {
-        LanceDbMemory::forget_slot(self, entity_id, slot_key, mode, reason).await
+        reason: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ForgetOutcome>> + Send + 'a>> {
+        Box::pin(async move {
+            LanceDbMemory::forget_slot(self, entity_id, slot_key, mode, reason).await
+        })
     }
 
-    async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
-        LanceDbMemory::count_events(self, entity_id).await
+    fn count_events<'a>(
+        &'a self,
+        entity_id: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + 'a>> {
+        Box::pin(async move { LanceDbMemory::count_events(self, entity_id).await })
     }
 }
 

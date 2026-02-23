@@ -116,30 +116,32 @@ mod tests {
     use crate::core::providers::Provider;
     use crate::core::subagents::roles::{RoleAssignment, RoleConfig};
     use crate::core::subagents::{SubagentRuntimeConfig, TEST_RUNTIME_LOCK, configure_runtime};
-    use async_trait::async_trait;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::Arc;
 
     struct DispatchTestProvider;
 
-    #[async_trait]
     impl Provider for DispatchTestProvider {
-        async fn chat_with_system(
-            &self,
-            _system_prompt: Option<&str>,
-            message: &str,
-            _model: &str,
+        fn chat_with_system<'a>(
+            &'a self,
+            _system_prompt: Option<&'a str>,
+            message: &'a str,
+            _model: &'a str,
             _temperature: f64,
-        ) -> anyhow::Result<String> {
-            if message.contains("fail") {
-                anyhow::bail!("forced failure");
-            }
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+            Box::pin(async move {
+                if message.contains("fail") {
+                    anyhow::bail!("forced failure");
+                }
 
-            if let Some(ms_text) = message.strip_prefix("sleep:") {
-                let millis = ms_text.parse::<u64>().unwrap_or(0);
-                tokio::time::sleep(Duration::from_millis(millis)).await;
-            }
+                if let Some(ms_text) = message.strip_prefix("sleep:") {
+                    let millis = ms_text.parse::<u64>().unwrap_or(0);
+                    tokio::time::sleep(Duration::from_millis(millis)).await;
+                }
 
-            Ok(format!("subagent:{message}"))
+                Ok(format!("subagent:{message}"))
+            })
         }
     }
 

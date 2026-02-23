@@ -1,7 +1,8 @@
 use super::traits::{Tool, ToolResult};
 use crate::core::tools::middleware::ExecutionContext;
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 
 /// Open approved HTTPS URLs in Brave Browser (no scraping, no DOM automation).
 pub struct BrowserOpenTool {
@@ -50,7 +51,6 @@ impl BrowserOpenTool {
     }
 }
 
-#[async_trait]
 impl Tool for BrowserOpenTool {
     fn name(&self) -> &str {
         "browser_open"
@@ -73,45 +73,47 @@ impl Tool for BrowserOpenTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let url = args
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?;
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let url = args
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?;
 
-        let url = match self.validate_url(url) {
-            Ok(v) => v,
-            Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(e.to_string()),
+            let url = match self.validate_url(url) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(e.to_string()),
+
+                        attachments: Vec::new(),
+                    });
+                }
+            };
+
+            match open_in_brave(&url).await {
+                Ok(()) => Ok(ToolResult {
+                    success: true,
+                    output: format!("Opened in Brave: {url}"),
+                    error: None,
 
                     attachments: Vec::new(),
-                });
+                }),
+                Err(e) => Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to open Brave Browser: {e}")),
+
+                    attachments: Vec::new(),
+                }),
             }
-        };
-
-        match open_in_brave(&url).await {
-            Ok(()) => Ok(ToolResult {
-                success: true,
-                output: format!("Opened in Brave: {url}"),
-                error: None,
-
-                attachments: Vec::new(),
-            }),
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Failed to open Brave Browser: {e}")),
-
-                attachments: Vec::new(),
-            }),
-        }
+        })
     }
 }
 

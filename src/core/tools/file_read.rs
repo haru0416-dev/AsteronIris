@@ -1,8 +1,9 @@
 use super::common::{failed_tool_result, workspace_path_property};
 use super::traits::{Tool, ToolResult};
 use crate::core::tools::middleware::ExecutionContext;
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use tokio::io::AsyncReadExt;
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
@@ -16,7 +17,6 @@ impl FileReadTool {
     }
 }
 
-#[async_trait]
 impl Tool for FileReadTool {
     fn name(&self) -> &str {
         "file_read"
@@ -36,69 +36,71 @@ impl Tool for FileReadTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let path = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
 
-        let full_path = ctx.workspace_dir.join(path);
+            let full_path = ctx.workspace_dir.join(path);
 
-        // Resolve path before reading to block symlink escapes.
-        let resolved_path = match tokio::fs::canonicalize(&full_path).await {
-            Ok(p) => p,
-            Err(e) => {
+            // Resolve path before reading to block symlink escapes.
+            let resolved_path = match tokio::fs::canonicalize(&full_path).await {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok(failed_tool_result(format!(
+                        "Failed to resolve file path: {e}"
+                    )));
+                }
+            };
+
+            let mut file = match tokio::fs::File::open(&resolved_path).await {
+                Ok(file) => file,
+                Err(e) => {
+                    return Ok(failed_tool_result(format!("Failed to read file: {e}")));
+                }
+            };
+
+            // Check file size AFTER canonicalization to prevent TOCTOU symlink bypass
+            let metadata = match file.metadata().await {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    return Ok(failed_tool_result(format!(
+                        "Failed to read file metadata: {e}"
+                    )));
+                }
+            };
+            if metadata.len() > MAX_FILE_SIZE {
                 return Ok(failed_tool_result(format!(
-                    "Failed to resolve file path: {e}"
+                    "File too large: {} bytes (limit: {MAX_FILE_SIZE} bytes)",
+                    metadata.len()
                 )));
             }
-        };
 
-        let mut file = match tokio::fs::File::open(&resolved_path).await {
-            Ok(file) => file,
-            Err(e) => {
+            #[allow(clippy::cast_possible_truncation)]
+            let mut bytes = Vec::with_capacity(metadata.len() as usize);
+            if let Err(e) = file.read_to_end(&mut bytes).await {
                 return Ok(failed_tool_result(format!("Failed to read file: {e}")));
             }
-        };
 
-        // Check file size AFTER canonicalization to prevent TOCTOU symlink bypass
-        let metadata = match file.metadata().await {
-            Ok(metadata) => metadata,
-            Err(e) => {
-                return Ok(failed_tool_result(format!(
-                    "Failed to read file metadata: {e}"
-                )));
+            match String::from_utf8(bytes) {
+                Ok(contents) => Ok(ToolResult {
+                    success: true,
+                    output: contents,
+                    error: None,
+
+                    attachments: Vec::new(),
+                }),
+                Err(_) => Ok(failed_tool_result(
+                    "Failed to read file: file is not valid UTF-8",
+                )),
             }
-        };
-        if metadata.len() > MAX_FILE_SIZE {
-            return Ok(failed_tool_result(format!(
-                "File too large: {} bytes (limit: {MAX_FILE_SIZE} bytes)",
-                metadata.len()
-            )));
-        }
-
-        #[allow(clippy::cast_possible_truncation)]
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        if let Err(e) = file.read_to_end(&mut bytes).await {
-            return Ok(failed_tool_result(format!("Failed to read file: {e}")));
-        }
-
-        match String::from_utf8(bytes) {
-            Ok(contents) => Ok(ToolResult {
-                success: true,
-                output: contents,
-                error: None,
-
-                attachments: Vec::new(),
-            }),
-            Err(_) => Ok(failed_tool_result(
-                "Failed to read file: file is not valid UTF-8",
-            )),
-        }
+        })
     }
 }
 

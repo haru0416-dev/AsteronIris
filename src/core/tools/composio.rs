@@ -8,10 +8,11 @@
 
 use super::traits::{Tool, ToolResult};
 use crate::core::tools::middleware::ExecutionContext;
-use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 
 const COMPOSIO_API_BASE: &str = "https://backend.composio.dev/api/v2";
 
@@ -250,7 +251,6 @@ impl ComposioTool {
     }
 }
 
-#[async_trait]
 impl Tool for ComposioTool {
     fn name(&self) -> &str {
         "composio"
@@ -265,31 +265,33 @@ impl Tool for ComposioTool {
         composio_parameters_schema()
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let action = args
-            .get("action")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let action = args
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
 
-        let entity_id = args
-            .get("entity_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default");
+            let entity_id = args
+                .get("entity_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
 
-        match action {
-            "list" => Ok(self
-                .handle_list_action(args.get("app").and_then(|v| v.as_str()))
-                .await),
-            "execute" => self.handle_execute_action(&args, entity_id).await,
-            "connect" => self.handle_connect_action(&args, entity_id).await,
-            _ => Ok(error_tool_result(format!(
-                "Unknown action '{action}'. Use 'list', 'execute', or 'connect'."
-            ))),
-        }
+            match action {
+                "list" => Ok(self
+                    .handle_list_action(args.get("app").and_then(|v| v.as_str()))
+                    .await),
+                "execute" => self.handle_execute_action(&args, entity_id).await,
+                "connect" => self.handle_connect_action(&args, entity_id).await,
+                _ => Ok(error_tool_result(format!(
+                    "Unknown action '{action}'. Use 'list', 'execute', or 'connect'."
+                ))),
+            }
+        })
     }
 }
 

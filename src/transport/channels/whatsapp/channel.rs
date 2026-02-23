@@ -1,5 +1,6 @@
 use super::super::traits::{Channel, ChannelMessage};
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use uuid::Uuid;
 
 /// `WhatsApp` channel — uses `WhatsApp` Business Cloud API
@@ -137,7 +138,6 @@ impl WhatsAppChannel {
     }
 }
 
-#[async_trait]
 impl Channel for WhatsAppChannel {
     fn name(&self) -> &str {
         "whatsapp"
@@ -147,71 +147,84 @@ impl Channel for WhatsAppChannel {
         4096
     }
 
-    async fn send(&self, message: &str, recipient: &str) -> anyhow::Result<()> {
-        // WhatsApp Cloud API: POST to /v18.0/{phone_number_id}/messages
-        let url = format!(
-            "https://graph.facebook.com/v18.0/{}/messages",
-            self.phone_number_id
-        );
+    fn send<'a>(
+        &'a self,
+        message: &'a str,
+        recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // WhatsApp Cloud API: POST to /v18.0/{phone_number_id}/messages
+            let url = format!(
+                "https://graph.facebook.com/v18.0/{}/messages",
+                self.phone_number_id
+            );
 
-        // Normalize recipient (remove leading + if present for API)
-        let to = recipient.strip_prefix('+').unwrap_or(recipient);
+            // Normalize recipient (remove leading + if present for API)
+            let to = recipient.strip_prefix('+').unwrap_or(recipient);
 
-        let body = serde_json::json!({
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": to,
-            "type": "text",
-            "text": {
-                "preview_url": false,
-                "body": message
+            let body = serde_json::json!({
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": to,
+                "type": "text",
+                "text": {
+                    "preview_url": false,
+                    "body": message
+                }
+            });
+
+            let resp = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.access_token))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let error_body = resp.text().await.unwrap_or_default();
+                tracing::error!("WhatsApp send failed: {status} — {error_body}");
+                anyhow::bail!("WhatsApp API error: {status}");
             }
-        });
 
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.access_token))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let error_body = resp.text().await.unwrap_or_default();
-            tracing::error!("WhatsApp send failed: {status} — {error_body}");
-            anyhow::bail!("WhatsApp API error: {status}");
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        // WhatsApp uses webhooks (push-based), not polling.
-        // Messages are received via the gateway's /whatsapp endpoint.
-        // This method keeps the channel "alive" but doesn't actively poll.
-        tracing::info!(
-            "WhatsApp channel active (webhook mode). \
-            Configure Meta webhook to POST to your gateway's /whatsapp endpoint."
-        );
+    fn listen<'a>(
+        &'a self,
+        _tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // WhatsApp uses webhooks (push-based), not polling.
+            // Messages are received via the gateway's /whatsapp endpoint.
+            // This method keeps the channel "alive" but doesn't actively poll.
+            tracing::info!(
+                "WhatsApp channel active (webhook mode). \
+                Configure Meta webhook to POST to your gateway's /whatsapp endpoint."
+            );
 
-        // Keep the task alive — it will be cancelled when the channel shuts down
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-        }
+            // Keep the task alive — it will be cancelled when the channel shuts down
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        })
     }
 
-    async fn health_check(&self) -> bool {
-        // Check if we can reach the WhatsApp API
-        let url = format!("https://graph.facebook.com/v18.0/{}", self.phone_number_id);
+    fn health_check<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            // Check if we can reach the WhatsApp API
+            let url = format!("https://graph.facebook.com/v18.0/{}", self.phone_number_id);
 
-        self.client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.access_token))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+            self.client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.access_token))
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false)
+        })
     }
 }

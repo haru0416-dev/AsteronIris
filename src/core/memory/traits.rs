@@ -1,4 +1,5 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 
 pub use super::memory_types::{
     BeliefSlot, CapabilitySupport, ForgetArtifact, ForgetArtifactCheck, ForgetArtifactObservation,
@@ -8,42 +9,55 @@ pub use super::memory_types::{
     PrivacyLevel, RecallQuery, SignalTier, SourceKind,
 };
 
-#[async_trait]
 pub trait Memory: Send + Sync {
     fn name(&self) -> &str;
-    async fn health_check(&self) -> bool;
-    async fn append_event(&self, input: MemoryEventInput) -> anyhow::Result<MemoryEvent>;
-    async fn append_inference_event(
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>>;
+    fn append_event(
+        &self,
+        input: MemoryEventInput,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MemoryEvent>> + Send + '_>>;
+    fn append_inference_event(
         &self,
         event: MemoryInferenceEvent,
-    ) -> anyhow::Result<MemoryEvent> {
-        self.append_event(event.into_memory_event_input()).await
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MemoryEvent>> + Send + '_>> {
+        Box::pin(async move { self.append_event(event.into_memory_event_input()).await })
     }
-    async fn append_inference_events(
+    fn append_inference_events(
         &self,
         events: Vec<MemoryInferenceEvent>,
-    ) -> anyhow::Result<Vec<MemoryEvent>> {
-        let mut persisted = Vec::with_capacity(events.len());
-        for event in events {
-            persisted.push(self.append_inference_event(event).await?);
-        }
-        Ok(persisted)
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<MemoryEvent>>> + Send + '_>> {
+        Box::pin(async move {
+            let mut persisted = Vec::with_capacity(events.len());
+            for event in events {
+                persisted.push(self.append_inference_event(event).await?);
+            }
+            Ok(persisted)
+        })
     }
-    async fn recall_scoped(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>>;
-    async fn recall_phased(&self, query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
-        self.recall_scoped(query).await
+    fn recall_scoped(
+        &self,
+        query: RecallQuery,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<MemoryRecallItem>>> + Send + '_>>;
+    fn recall_phased(
+        &self,
+        query: RecallQuery,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<MemoryRecallItem>>> + Send + '_>> {
+        Box::pin(async move { self.recall_scoped(query).await })
     }
-    async fn resolve_slot(
-        &self,
-        entity_id: &str,
-        slot_key: &str,
-    ) -> anyhow::Result<Option<BeliefSlot>>;
-    async fn forget_slot(
-        &self,
-        entity_id: &str,
-        slot_key: &str,
+    fn resolve_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<BeliefSlot>>> + Send + 'a>>;
+    fn forget_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
         mode: ForgetMode,
-        reason: &str,
-    ) -> anyhow::Result<ForgetOutcome>;
-    async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize>;
+        reason: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ForgetOutcome>> + Send + 'a>>;
+    fn count_events<'a>(
+        &'a self,
+        entity_id: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + 'a>>;
 }

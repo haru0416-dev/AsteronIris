@@ -2,8 +2,9 @@ use crate::core::planner::{Plan, PlanStep, StepAction, StepStatus};
 use crate::core::tools::ToolRegistry;
 use crate::core::tools::middleware::ExecutionContext;
 use anyhow::Result;
-use async_trait::async_trait;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct PlanExecutor;
@@ -21,32 +22,36 @@ impl ToolStepRunner {
     }
 }
 
-#[async_trait]
 impl StepRunner for ToolStepRunner {
-    async fn run_step(&self, step: &PlanStep) -> Result<StepOutput> {
-        match &step.action {
-            StepAction::ToolCall { tool_name, args } => {
-                let result = self
-                    .registry
-                    .execute(tool_name, args.clone(), &self.ctx)
-                    .await?;
-                Ok(StepOutput {
-                    success: result.success,
-                    output: result.output,
-                    error: result.error,
-                })
+    fn run_step<'a>(
+        &'a self,
+        step: &'a PlanStep,
+    ) -> Pin<Box<dyn Future<Output = Result<StepOutput>> + Send + 'a>> {
+        Box::pin(async move {
+            match &step.action {
+                StepAction::ToolCall { tool_name, args } => {
+                    let result = self
+                        .registry
+                        .execute(tool_name, args.clone(), &self.ctx)
+                        .await?;
+                    Ok(StepOutput {
+                        success: result.success,
+                        output: result.output,
+                        error: result.error,
+                    })
+                }
+                StepAction::Prompt { text } => Ok(StepOutput {
+                    success: true,
+                    output: format!("[prompt] {text}"),
+                    error: None,
+                }),
+                StepAction::Checkpoint { label } => Ok(StepOutput {
+                    success: true,
+                    output: format!("[checkpoint] {label}"),
+                    error: None,
+                }),
             }
-            StepAction::Prompt { text } => Ok(StepOutput {
-                success: true,
-                output: format!("[prompt] {text}"),
-                error: None,
-            }),
-            StepAction::Checkpoint { label } => Ok(StepOutput {
-                success: true,
-                output: format!("[checkpoint] {label}"),
-                error: None,
-            }),
-        }
+        })
     }
 }
 
@@ -66,9 +71,11 @@ pub struct StepOutput {
     pub error: Option<String>,
 }
 
-#[async_trait]
 pub trait StepRunner: Send + Sync {
-    async fn run_step(&self, step: &PlanStep) -> Result<StepOutput>;
+    fn run_step<'a>(
+        &'a self,
+        step: &'a PlanStep,
+    ) -> Pin<Box<dyn Future<Output = Result<StepOutput>> + Send + 'a>>;
 }
 
 impl PlanExecutor {
@@ -174,8 +181,9 @@ mod tests {
         DagContract, DagEdge, DagNode, Plan, PlanStep, StepAction, StepStatus,
     };
     use anyhow::bail;
-    use async_trait::async_trait;
     use serde_json::json;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::Mutex;
 
     struct MockRunner {
@@ -203,23 +211,27 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl StepRunner for MockRunner {
-        async fn run_step(&self, step: &PlanStep) -> Result<StepOutput> {
-            self.calls.lock().unwrap().push(step.id.clone());
+        fn run_step<'a>(
+            &'a self,
+            step: &'a PlanStep,
+        ) -> Pin<Box<dyn Future<Output = Result<StepOutput>> + Send + 'a>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push(step.id.clone());
 
-            if self.fail_with_error && step.id == "A" {
-                bail!("runner transport error");
-            }
+                if self.fail_with_error && step.id == "A" {
+                    bail!("runner transport error");
+                }
 
-            if let Some(outcome) = self.outcomes.get(&step.id) {
-                return Ok(outcome.clone());
-            }
+                if let Some(outcome) = self.outcomes.get(&step.id) {
+                    return Ok(outcome.clone());
+                }
 
-            Ok(StepOutput {
-                success: true,
-                output: format!("ok:{}", step.id),
-                error: None,
+                Ok(StepOutput {
+                    success: true,
+                    output: format!("ok:{}", step.id),
+                    error: None,
+                })
             })
         }
     }
@@ -433,7 +445,6 @@ mod tests {
 
     struct EchoTool;
 
-    #[async_trait]
     impl Tool for EchoTool {
         fn name(&self) -> &str {
             "echo"
@@ -447,20 +458,24 @@ mod tests {
             json!({"type": "object", "properties": {"msg": {"type": "string"}}})
         }
 
-        async fn execute(
-            &self,
+        fn execute<'a>(
+            &'a self,
             args: serde_json::Value,
-            _ctx: &ExecutionContext,
-        ) -> anyhow::Result<ToolResult> {
-            let msg = args
-                .get("msg")
-                .and_then(|v| v.as_str())
-                .unwrap_or("(empty)");
-            Ok(ToolResult {
-                success: true,
-                output: msg.to_string(),
-                error: None,
-                attachments: Vec::new(),
+            _ctx: &'a ExecutionContext,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<ToolResult>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                let msg = args
+                    .get("msg")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(empty)");
+                Ok(ToolResult {
+                    success: true,
+                    output: msg.to_string(),
+                    error: None,
+                    attachments: Vec::new(),
+                })
             })
         }
     }

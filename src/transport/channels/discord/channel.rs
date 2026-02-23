@@ -3,7 +3,8 @@ use crate::transport::channels::attachments::media_attachment_url;
 use crate::transport::channels::policy::{AllowlistMatch, is_allowed_user};
 use crate::transport::channels::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
 use anyhow::Context;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -285,7 +286,6 @@ impl DiscordChannel {
     }
 }
 
-#[async_trait]
 impl Channel for DiscordChannel {
     fn name(&self) -> &str {
         "discord"
@@ -295,98 +295,120 @@ impl Channel for DiscordChannel {
         MAX_MESSAGE_LENGTH
     }
 
-    async fn send(&self, message: &str, channel_id: &str) -> anyhow::Result<()> {
-        self.http
-            .send_message(channel_id, message)
-            .await
-            .map(|_| ())
+    fn send<'a>(
+        &'a self,
+        message: &'a str,
+        channel_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.http
+                .send_message(channel_id, message)
+                .await
+                .map(|_| ())
+        })
     }
 
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let gateway = DiscordGateway::new(
-            self.config.bot_token.clone(),
-            self.intents(),
-            Arc::clone(&self.gateway_state),
-            self.build_presence(),
-        );
+    fn listen<'a>(
+        &'a self,
+        tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let gateway = DiscordGateway::new(
+                self.config.bot_token.clone(),
+                self.intents(),
+                Arc::clone(&self.gateway_state),
+                self.build_presence(),
+            );
 
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<GatewayEvent>(100);
+            let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<GatewayEvent>(100);
 
-        let mut gateway_handle = {
-            let http = DiscordHttpClient::new(&self.config.bot_token);
-            tokio::spawn(async move { gateway.connect_and_listen(&http, &event_tx).await })
-        };
+            let mut gateway_handle = {
+                let http = DiscordHttpClient::new(&self.config.bot_token);
+                tokio::spawn(async move { gateway.connect_and_listen(&http, &event_tx).await })
+            };
 
-        loop {
-            tokio::select! {
-                event = event_rx.recv() => {
-                    let Some(event) = event else {
-                        break;
-                    };
-                    self.handle_gateway_event(event, &tx).await;
-                }
-                result = &mut gateway_handle => {
-                    match result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => return Err(e),
-                        Err(e) => anyhow::bail!("Discord gateway task panicked: {e}"),
+            loop {
+                tokio::select! {
+                    event = event_rx.recv() => {
+                        let Some(event) = event else {
+                            break;
+                        };
+                        self.handle_gateway_event(event, &tx).await;
                     }
-                    break;
+                    result = &mut gateway_handle => {
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => return Err(e),
+                            Err(e) => anyhow::bail!("Discord gateway task panicked: {e}"),
+                        }
+                        break;
+                    }
                 }
             }
-        }
 
-        Ok(())
+            Ok(())
+        })
     }
 
-    async fn send_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        self.http.send_typing(recipient).await
+    fn send_typing<'a>(
+        &'a self,
+        recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move { self.http.send_typing(recipient).await })
     }
 
-    async fn send_media(
-        &self,
-        attachment: &MediaAttachment,
-        recipient: &str,
-    ) -> anyhow::Result<()> {
-        let bytes = match &attachment.data {
-            MediaData::Url(media_url) => reqwest::Client::new()
-                .get(media_url)
-                .send()
+    fn send_media<'a>(
+        &'a self,
+        attachment: &'a MediaAttachment,
+        recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let bytes = match &attachment.data {
+                MediaData::Url(media_url) => reqwest::Client::new()
+                    .get(media_url)
+                    .send()
+                    .await
+                    .context("download media for Discord upload")?
+                    .bytes()
+                    .await
+                    .context("read media bytes")?
+                    .to_vec(),
+                MediaData::Bytes(b) => b.clone(),
+            };
+            let filename = attachment
+                .filename
+                .as_deref()
+                .unwrap_or("attachment")
+                .to_string();
+            self.http
+                .send_media(recipient, bytes, &filename, &attachment.mime_type)
                 .await
-                .context("download media for Discord upload")?
-                .bytes()
+        })
+    }
+
+    fn edit_message<'a>(
+        &'a self,
+        channel_id: &'a str,
+        message_id: &'a str,
+        content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.http
+                .edit_message(channel_id, message_id, content)
                 .await
-                .context("read media bytes")?
-                .to_vec(),
-            MediaData::Bytes(b) => b.clone(),
-        };
-        let filename = attachment
-            .filename
-            .as_deref()
-            .unwrap_or("attachment")
-            .to_string();
-        self.http
-            .send_media(recipient, bytes, &filename, &attachment.mime_type)
-            .await
+        })
     }
 
-    async fn edit_message(
-        &self,
-        channel_id: &str,
-        message_id: &str,
-        content: &str,
-    ) -> anyhow::Result<()> {
-        self.http
-            .edit_message(channel_id, message_id, content)
-            .await
+    fn delete_message<'a>(
+        &'a self,
+        channel_id: &'a str,
+        message_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move { self.http.delete_message(channel_id, message_id).await })
     }
 
-    async fn delete_message(&self, channel_id: &str, message_id: &str) -> anyhow::Result<()> {
-        self.http.delete_message(channel_id, message_id).await
-    }
-
-    async fn health_check(&self) -> bool {
-        self.http.get_current_user().await.is_ok()
+    fn health_check<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move { self.http.get_current_user().await.is_ok() })
     }
 }
 

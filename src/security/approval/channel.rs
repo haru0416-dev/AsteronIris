@@ -2,7 +2,8 @@
 use super::discord::DiscordApprovalBroker;
 use super::telegram::TelegramApprovalBroker;
 use super::{ApprovalBroker, ApprovalDecision, ApprovalRequest};
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,25 +38,26 @@ impl TextReplyApprovalBroker {
     }
 }
 
-#[async_trait]
 impl ApprovalBroker for TextReplyApprovalBroker {
-    async fn request_approval(
-        &self,
-        request: &ApprovalRequest,
-    ) -> anyhow::Result<ApprovalDecision> {
-        tracing::info!(
-            channel = %self.channel_name,
-            tool = %request.tool_name,
-            risk = ?request.risk_level,
-            timeout_secs = self.timeout.as_secs(),
-            "tool approval requested via channel (auto-deny until interactive approval implemented)"
-        );
+    fn request_approval<'a>(
+        &'a self,
+        request: &'a ApprovalRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ApprovalDecision>> + Send + 'a>> {
+        Box::pin(async move {
+            tracing::info!(
+                channel = %self.channel_name,
+                tool = %request.tool_name,
+                risk = ?request.risk_level,
+                timeout_secs = self.timeout.as_secs(),
+                "tool approval requested via channel (auto-deny until interactive approval implemented)"
+            );
 
-        Ok(ApprovalDecision::Denied {
-            reason: format!(
-                "Channel '{}' approval not yet implemented. Set autonomy_level to 'full' or 'read_only' in config.",
-                self.channel_name
-            ),
+            Ok(ApprovalDecision::Denied {
+                reason: format!(
+                    "Channel '{}' approval not yet implemented. Set autonomy_level to 'full' or 'read_only' in config.",
+                    self.channel_name
+                ),
+            })
         })
     }
 }

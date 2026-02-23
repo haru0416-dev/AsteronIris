@@ -1,7 +1,7 @@
 use crate::core::providers::response::{
     ContentBlock, MessageRole, ProviderMessage, ProviderResponse, StopReason,
 };
-use crate::core::providers::streaming::{ProviderChatRequest, StreamCollector};
+use crate::core::providers::streaming::StreamCollector;
 use crate::core::providers::traits::Provider;
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::registry::ToolRegistry;
@@ -161,14 +161,15 @@ impl ToolLoop {
         input: ChatOnceInput<'_>,
     ) -> anyhow::Result<ProviderResponse> {
         if provider.supports_streaming() {
-            let req = ProviderChatRequest {
-                system_prompt: input.system_prompt.map(String::from),
-                messages: input.messages.to_vec(),
-                tools: input.tool_specs.to_vec(),
-                model: input.model.to_string(),
-                temperature: input.temperature,
-            };
-            let mut stream = provider.chat_with_tools_stream(req).await?;
+            let mut stream = provider
+                .chat_with_tools_stream(
+                    input.system_prompt,
+                    input.messages,
+                    input.tool_specs,
+                    input.model,
+                    input.temperature,
+                )
+                .await?;
             let mut collector = StreamCollector::new();
             while let Some(event_result) = stream.next().await {
                 let event = event_result?;

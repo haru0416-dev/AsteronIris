@@ -7,17 +7,18 @@ use crate::core::providers::{
     ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
     build_provider_client, scrub_secret_patterns,
     sse::{SseBuffer, parse_data_lines},
-    streaming::{ProviderChatRequest, ProviderStream},
+    streaming::ProviderStream,
     tool_convert::{ToolFields, map_tools_optional},
     traits::Provider,
 };
-use async_trait::async_trait;
 use directories::UserDirs;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 mod types;
 use types::{
@@ -434,19 +435,18 @@ impl GeminiProvider {
 
     async fn chat_with_tools_stream_impl(
         &self,
-        req: ProviderChatRequest,
+        system_prompt: Option<&str>,
+        messages: &[ProviderMessage],
+        tools: &[crate::core::tools::traits::ToolSpec],
+        model: &str,
+        temperature: f64,
     ) -> anyhow::Result<ProviderStream> {
         use crate::core::providers::streaming::StreamEvent;
         use futures_util::StreamExt;
 
-        let request = Self::build_tools_request(
-            req.system_prompt.as_deref(),
-            &req.messages,
-            &req.tools,
-            req.temperature,
-        );
+        let request = Self::build_tools_request(system_prompt, messages, tools, temperature);
 
-        let response = self.call_api_streaming(&req.model, &request).await?;
+        let response = self.call_api_streaming(model, &request).await?;
         let mut byte_stream = response.bytes_stream();
 
         let stream = async_stream::try_stream! {
@@ -596,96 +596,101 @@ impl Part {
     }
 }
 
-#[async_trait]
 impl Provider for GeminiProvider {
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
-        let result = self
-            .call_api(system_prompt, message, model, temperature)
-            .await?;
-        Self::extract_text(&result)
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let result = self
+                .call_api(system_prompt, message, model, temperature)
+                .await?;
+            Self::extract_text(&result)
+        })
     }
 
-    async fn chat_with_system_full(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system_full<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let result = self
-            .call_api(system_prompt, message, model, temperature)
-            .await?;
-        let text = Self::extract_text(&result)?;
-        let mut provider_response = if let Some(usage) = result.usage_metadata {
-            ProviderResponse::with_usage(
-                text,
-                usage.prompt_token_count,
-                usage.candidates_token_count,
-            )
-        } else {
-            ProviderResponse::text_only(text)
-        };
-        if let Some(model_version) = result.model_version {
-            provider_response = provider_response.with_model(model_version);
-        }
-        Ok(provider_response)
-    }
-
-    async fn chat_with_tools(
-        &self,
-        system_prompt: Option<&str>,
-        messages: &[ProviderMessage],
-        tools: &[crate::core::tools::traits::ToolSpec],
-        model: &str,
-        temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let request = Self::build_tools_request(system_prompt, messages, tools, temperature);
-        let result = self.call_api_with_request(model, &request).await?;
-
-        let candidate = result
-            .candidates
-            .as_ref()
-            .and_then(|candidates| candidates.first())
-            .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))?;
-
-        let content_blocks = Self::parse_content_blocks(&candidate.content.parts);
-        let text = {
-            let mut out = String::new();
-            for block in &content_blocks {
-                if let ContentBlock::Text { text: t } = block {
-                    if !out.is_empty() {
-                        out.push('\n');
-                    }
-                    out.push_str(t);
-                }
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let result = self
+                .call_api(system_prompt, message, model, temperature)
+                .await?;
+            let text = Self::extract_text(&result)?;
+            let mut provider_response = if let Some(usage) = result.usage_metadata {
+                ProviderResponse::with_usage(
+                    text,
+                    usage.prompt_token_count,
+                    usage.candidates_token_count,
+                )
+            } else {
+                ProviderResponse::text_only(text)
+            };
+            if let Some(model_version) = result.model_version {
+                provider_response = provider_response.with_model(model_version);
             }
-            out
-        };
+            Ok(provider_response)
+        })
+    }
 
-        let mut provider_response = if let Some(usage) = result.usage_metadata {
-            ProviderResponse::with_usage(
-                text,
-                usage.prompt_token_count,
-                usage.candidates_token_count,
-            )
-        } else {
-            ProviderResponse::text_only(text)
-        };
+    fn chat_with_tools<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [crate::core::tools::traits::ToolSpec],
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let request = Self::build_tools_request(system_prompt, messages, tools, temperature);
+            let result = self.call_api_with_request(model, &request).await?;
 
-        provider_response.content_blocks = content_blocks;
-        provider_response.stop_reason = Some(Self::map_stop_reason(candidate));
+            let candidate = result
+                .candidates
+                .as_ref()
+                .and_then(|candidates| candidates.first())
+                .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))?;
 
-        if let Some(model_version) = result.model_version {
-            provider_response = provider_response.with_model(model_version);
-        }
+            let content_blocks = Self::parse_content_blocks(&candidate.content.parts);
+            let text = {
+                let mut out = String::new();
+                for block in &content_blocks {
+                    if let ContentBlock::Text { text: t } = block {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(t);
+                    }
+                }
+                out
+            };
 
-        Ok(provider_response)
+            let mut provider_response = if let Some(usage) = result.usage_metadata {
+                ProviderResponse::with_usage(
+                    text,
+                    usage.prompt_token_count,
+                    usage.candidates_token_count,
+                )
+            } else {
+                ProviderResponse::text_only(text)
+            };
+
+            provider_response.content_blocks = content_blocks;
+            provider_response.stop_reason = Some(Self::map_stop_reason(candidate));
+
+            if let Some(model_version) = result.model_version {
+                provider_response = provider_response.with_model(model_version);
+            }
+
+            Ok(provider_response)
+        })
     }
 
     fn supports_tool_calling(&self) -> bool {
@@ -700,11 +705,18 @@ impl Provider for GeminiProvider {
         true
     }
 
-    async fn chat_with_tools_stream(
-        &self,
-        req: ProviderChatRequest,
-    ) -> anyhow::Result<ProviderStream> {
-        self.chat_with_tools_stream_impl(req).await
+    fn chat_with_tools_stream<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [crate::core::tools::traits::ToolSpec],
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderStream>> + Send + 'a>> {
+        Box::pin(async move {
+            self.chat_with_tools_stream_impl(system_prompt, messages, tools, model, temperature)
+                .await
+        })
     }
 }
 

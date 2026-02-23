@@ -4,9 +4,10 @@ use crate::core::providers::{
     traits::{Provider, messages_to_text},
 };
 use crate::core::tools::traits::ToolSpec;
-use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 
 pub struct OllamaProvider {
     base_url: String,
@@ -115,58 +116,64 @@ impl OllamaProvider {
     }
 }
 
-#[async_trait]
 impl Provider for OllamaProvider {
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
-        let chat_response = self
-            .call_api(system_prompt, message, model, temperature)
-            .await?;
-        Ok(chat_response.message.content)
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let chat_response = self
+                .call_api(system_prompt, message, model, temperature)
+                .await?;
+            Ok(chat_response.message.content)
+        })
     }
 
-    async fn chat_with_system_full(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system_full<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let chat_response = self
-            .call_api(system_prompt, message, model, temperature)
-            .await?;
-        let text = chat_response.message.content;
-        let mut provider_response =
-            match (chat_response.prompt_eval_count, chat_response.eval_count) {
-                (Some(input_tokens), Some(output_tokens)) => {
-                    ProviderResponse::with_usage(text, input_tokens, output_tokens)
-                }
-                _ => ProviderResponse::text_only(text),
-            };
-        if let Some(api_model) = chat_response.model {
-            provider_response = provider_response.with_model(api_model);
-        }
-        Ok(provider_response)
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let chat_response = self
+                .call_api(system_prompt, message, model, temperature)
+                .await?;
+            let text = chat_response.message.content;
+            let mut provider_response =
+                match (chat_response.prompt_eval_count, chat_response.eval_count) {
+                    (Some(input_tokens), Some(output_tokens)) => {
+                        ProviderResponse::with_usage(text, input_tokens, output_tokens)
+                    }
+                    _ => ProviderResponse::text_only(text),
+                };
+            if let Some(api_model) = chat_response.model {
+                provider_response = provider_response.with_model(api_model);
+            }
+            Ok(provider_response)
+        })
     }
 
-    async fn chat_with_tools(
-        &self,
-        system_prompt: Option<&str>,
-        messages: &[ProviderMessage],
-        tools: &[ToolSpec],
-        model: &str,
+    fn chat_with_tools<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [ToolSpec],
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let (augmented_prompt, text) = Self::prepare_fallback_input(system_prompt, messages, tools);
-        let response = self
-            .chat_with_system_full(Some(&augmented_prompt), &text, model, temperature)
-            .await?;
-        Ok(build_fallback_response(response, tools))
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let (augmented_prompt, text) =
+                Self::prepare_fallback_input(system_prompt, messages, tools);
+            let response = self
+                .chat_with_system_full(Some(&augmented_prompt), &text, model, temperature)
+                .await?;
+            Ok(build_fallback_response(response, tools))
+        })
     }
 }
 

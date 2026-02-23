@@ -6,8 +6,9 @@ use crate::core::memory::{
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::traits::{Tool, ToolResult};
 use crate::security::writeback_guard::enforce_tool_memory_write_policy;
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 /// Let the agent store memories — its own brain writes
@@ -101,7 +102,6 @@ impl MemoryStoreTool {
     }
 }
 
-#[async_trait]
 impl Tool for MemoryStoreTool {
     fn name(&self) -> &str {
         "memory_store"
@@ -182,112 +182,114 @@ impl Tool for MemoryStoreTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let entity_id = args
-            .get("entity_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&ctx.entity_id);
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let entity_id = args
+                .get("entity_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&ctx.entity_id);
 
-        let value = args
-            .get("value")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'value' parameter"))?;
+            let value = args
+                .get("value")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'value' parameter"))?;
 
-        let slot_key = args
-            .get("slot_key")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'slot_key' parameter"))?
-            .to_string();
+            let slot_key = args
+                .get("slot_key")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'slot_key' parameter"))?
+                .to_string();
 
-        let event_type = args
-            .get("event_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("fact_added")
-            .parse::<MemoryEventType>()?;
+            let event_type = args
+                .get("event_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("fact_added")
+                .parse::<MemoryEventType>()?;
 
-        let source = match args.get("source").and_then(|v| v.as_str()) {
-            Some("explicit_user") => MemorySource::ExplicitUser,
-            Some("tool_verified") => MemorySource::ToolVerified,
-            Some("inferred") => MemorySource::Inferred,
-            _ => MemorySource::System,
-        };
+            let source = match args.get("source").and_then(|v| v.as_str()) {
+                Some("explicit_user") => MemorySource::ExplicitUser,
+                Some("tool_verified") => MemorySource::ToolVerified,
+                Some("inferred") => MemorySource::Inferred,
+                _ => MemorySource::System,
+            };
 
-        let layer = Self::parse_layer(&args)?;
+            let layer = Self::parse_layer(&args)?;
 
-        let privacy_level = match args.get("privacy_level").and_then(|v| v.as_str()) {
-            Some("public") => PrivacyLevel::Public,
-            Some("secret") => PrivacyLevel::Secret,
-            _ => PrivacyLevel::Private,
-        };
+            let privacy_level = match args.get("privacy_level").and_then(|v| v.as_str()) {
+                Some("public") => PrivacyLevel::Public,
+                Some("secret") => PrivacyLevel::Secret,
+                _ => PrivacyLevel::Private,
+            };
 
-        let confidence = args
-            .get("confidence")
-            .and_then(serde_json::Value::as_f64)
-            .map(|value| value.clamp(0.0, 1.0));
+            let confidence = args
+                .get("confidence")
+                .and_then(serde_json::Value::as_f64)
+                .map(|value| value.clamp(0.0, 1.0));
 
-        let importance = args
-            .get("importance")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.5)
-            .clamp(0.0, 1.0);
+            let importance = args
+                .get("importance")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.5)
+                .clamp(0.0, 1.0);
 
-        let provenance = Self::parse_provenance(&args)?;
+            let provenance = Self::parse_provenance(&args)?;
 
-        let mut input = MemoryEventInput::new(
-            entity_id,
-            slot_key,
-            event_type,
-            value,
-            source,
-            privacy_level,
-        )
-        .with_layer(layer)
-        .with_importance(importance);
-
-        if let Some(confidence) = confidence {
-            input = input.with_confidence(confidence);
-        }
-
-        let source_ref = args
-            .get("source_ref")
-            .and_then(|v| v.as_str())
-            .map_or_else(|| "tool.memory_store".to_string(), ToString::to_string);
-
-        input = input
-            .with_source_kind(SourceKind::Manual)
-            .with_source_ref(source_ref);
-
-        if let Some(provenance) = provenance {
-            input = input.with_provenance(provenance);
-        } else {
-            input = input.with_provenance(MemoryProvenance::source_reference(
+            let mut input = MemoryEventInput::new(
+                entity_id,
+                slot_key,
+                event_type,
+                value,
                 source,
-                "tool.memory_store",
-            ));
-        }
+                privacy_level,
+            )
+            .with_layer(layer)
+            .with_importance(importance);
 
-        enforce_tool_memory_write_policy(&input)?;
+            if let Some(confidence) = confidence {
+                input = input.with_confidence(confidence);
+            }
 
-        match self.memory.append_event(input).await {
-            Ok(event) => Ok(ToolResult {
-                success: true,
-                output: format!("Stored memory event: {}", event.event_id),
-                error: None,
+            let source_ref = args
+                .get("source_ref")
+                .and_then(|v| v.as_str())
+                .map_or_else(|| "tool.memory_store".to_string(), ToString::to_string);
 
-                attachments: Vec::new(),
-            }),
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Failed to store memory: {e}")),
+            input = input
+                .with_source_kind(SourceKind::Manual)
+                .with_source_ref(source_ref);
 
-                attachments: Vec::new(),
-            }),
-        }
+            if let Some(provenance) = provenance {
+                input = input.with_provenance(provenance);
+            } else {
+                input = input.with_provenance(MemoryProvenance::source_reference(
+                    source,
+                    "tool.memory_store",
+                ));
+            }
+
+            enforce_tool_memory_write_policy(&input)?;
+
+            match self.memory.append_event(input).await {
+                Ok(event) => Ok(ToolResult {
+                    success: true,
+                    output: format!("Stored memory event: {}", event.event_id),
+                    error: None,
+
+                    attachments: Vec::new(),
+                }),
+                Err(e) => Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to store memory: {e}")),
+
+                    attachments: Vec::new(),
+                }),
+            }
+        })
     }
 }
 

@@ -1,10 +1,11 @@
 #![allow(dead_code, clippy::needless_lifetimes, clippy::cast_precision_loss)]
 
 use std::fmt;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use tempfile::TempDir;
 
 use asteroniris::core::memory::embeddings::EmbeddingProvider;
@@ -60,7 +61,6 @@ impl DeterministicEmbeddingProvider {
     }
 }
 
-#[async_trait]
 impl EmbeddingProvider for DeterministicEmbeddingProvider {
     fn name(&self) -> &str {
         "memory-test-harness"
@@ -70,16 +70,21 @@ impl EmbeddingProvider for DeterministicEmbeddingProvider {
         self.dims
     }
 
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-        let mut vectors = Vec::with_capacity(texts.len());
-        for text in texts {
-            let mut vector = Vec::with_capacity(self.dims);
-            for idx in 0..self.dims {
-                vector.push(self.embed_value(text, idx));
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [&'a str],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut vectors = Vec::with_capacity(texts.len());
+            for text in texts {
+                let mut vector = Vec::with_capacity(self.dims);
+                for idx in 0..self.dims {
+                    vector.push(self.embed_value(text, idx));
+                }
+                vectors.push(vector);
             }
-            vectors.push(vector);
-        }
-        Ok(vectors)
+            Ok(vectors)
+        })
     }
 }
 

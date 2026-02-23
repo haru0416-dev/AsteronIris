@@ -1,6 +1,6 @@
 use super::{
-    ChannelStreamSink, CliStreamSink, NullStreamSink, ProviderChatRequest, StreamCollector,
-    StreamEvent, StreamSink, StreamingSecretScrubber,
+    ChannelStreamSink, CliStreamSink, NullStreamSink, StreamCollector, StreamEvent, StreamSink,
+    StreamingSecretScrubber,
 };
 use crate::core::providers::response::{
     ContentBlock, ProviderMessage, ProviderResponse, StopReason,
@@ -240,23 +240,6 @@ async fn channel_stream_sink_ignores_response_start() {
     .await;
 
     assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn provider_chat_request_clone() {
-    let request = ProviderChatRequest {
-        system_prompt: Some("system".to_string()),
-        messages: vec![ProviderMessage::user("hello")],
-        tools: vec![],
-        model: "test-model".to_string(),
-        temperature: 0.7,
-    };
-
-    let clone = request.clone();
-    assert_eq!(clone.system_prompt, request.system_prompt);
-    assert_eq!(clone.messages.len(), request.messages.len());
-    assert_eq!(clone.model, request.model);
-    assert_eq!(clone.temperature, request.temperature);
 }
 
 #[test]

@@ -162,7 +162,6 @@ mod tests {
         ApprovalBroker, ApprovalDecision, ApprovalRequest, GrantScope, PermissionGrant,
         PermissionStore, RiskLevel, SecurityPolicy,
     };
-    use async_trait::async_trait;
     use serde_json::json;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -171,7 +170,6 @@ mod tests {
     #[derive(Debug)]
     struct TestTool;
 
-    #[async_trait]
     impl Tool for TestTool {
         fn name(&self) -> &str {
             "test_tool"
@@ -185,17 +183,21 @@ mod tests {
             json!({"type": "object"})
         }
 
-        async fn execute(
-            &self,
+        fn execute<'a>(
+            &'a self,
             _args: Value,
-            _ctx: &ExecutionContext,
-        ) -> anyhow::Result<ToolResult> {
-            Ok(ToolResult {
-                success: true,
-                output: "ok".to_string(),
-                error: None,
+            _ctx: &'a ExecutionContext,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<ToolResult>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                Ok(ToolResult {
+                    success: true,
+                    output: "ok".to_string(),
+                    error: None,
 
-                attachments: Vec::new(),
+                    attachments: Vec::new(),
+                })
             })
         }
     }
@@ -203,50 +205,56 @@ mod tests {
     #[derive(Debug)]
     struct BlockAllMiddleware;
 
-    #[async_trait]
     impl ToolMiddleware for BlockAllMiddleware {
-        async fn before_execute(
-            &self,
-            _tool_name: &str,
-            _args: &Value,
-            _ctx: &ExecutionContext,
-        ) -> anyhow::Result<MiddlewareDecision> {
-            Ok(MiddlewareDecision::Block("blocked".to_string()))
+        fn before_execute<'a>(
+            &'a self,
+            _tool_name: &'a str,
+            _args: &'a Value,
+            _ctx: &'a ExecutionContext,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>,
+        > {
+            Box::pin(async move { Ok(MiddlewareDecision::Block("blocked".to_string())) })
         }
 
-        async fn after_execute(
-            &self,
-            _tool_name: &str,
-            _result: &mut ToolResult,
-            _ctx: &ExecutionContext,
-        ) {
+        fn after_execute<'a>(
+            &'a self,
+            _tool_name: &'a str,
+            _result: &'a mut ToolResult,
+            _ctx: &'a ExecutionContext,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {})
         }
     }
 
     #[derive(Debug)]
     struct RequireApprovalMiddleware;
 
-    #[async_trait]
     impl ToolMiddleware for RequireApprovalMiddleware {
-        async fn before_execute(
-            &self,
-            _tool_name: &str,
-            _args: &Value,
-            _ctx: &ExecutionContext,
-        ) -> anyhow::Result<MiddlewareDecision> {
-            Ok(MiddlewareDecision::RequireApproval(ActionIntent::new(
-                "shell",
-                "discord:user-1",
-                json!({"args_summary": "cargo test"}),
-            )))
+        fn before_execute<'a>(
+            &'a self,
+            _tool_name: &'a str,
+            _args: &'a Value,
+            _ctx: &'a ExecutionContext,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<MiddlewareDecision>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                Ok(MiddlewareDecision::RequireApproval(ActionIntent::new(
+                    "shell",
+                    "discord:user-1",
+                    json!({"args_summary": "cargo test"}),
+                )))
+            })
         }
 
-        async fn after_execute(
-            &self,
-            _tool_name: &str,
-            _result: &mut ToolResult,
-            _ctx: &ExecutionContext,
-        ) {
+        fn after_execute<'a>(
+            &'a self,
+            _tool_name: &'a str,
+            _result: &'a mut ToolResult,
+            _ctx: &'a ExecutionContext,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {})
         }
     }
 
@@ -257,19 +265,22 @@ mod tests {
         last_request: Arc<Mutex<Option<ApprovalRequest>>>,
     }
 
-    #[async_trait]
     impl ApprovalBroker for CountingBroker {
-        async fn request_approval(
-            &self,
-            request: &ApprovalRequest,
-        ) -> anyhow::Result<ApprovalDecision> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            let mut slot = self
-                .last_request
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *slot = Some(request.clone());
-            Ok(self.decision.clone())
+        fn request_approval<'a>(
+            &'a self,
+            request: &'a ApprovalRequest,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<ApprovalDecision>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let mut slot = self
+                    .last_request
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *slot = Some(request.clone());
+                Ok(self.decision.clone())
+            })
         }
     }
 

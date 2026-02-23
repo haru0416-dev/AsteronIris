@@ -1,9 +1,10 @@
 use crate::core::memory::{Memory, RecallQuery};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::traits::{Tool, ToolResult};
-use async_trait::async_trait;
 use serde_json::json;
 use std::fmt::Write;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 /// Let the agent search its own memory
@@ -43,7 +44,6 @@ impl MemoryRecallTool {
     }
 }
 
-#[async_trait]
 impl Tool for MemoryRecallTool {
     fn name(&self) -> &str {
         "memory_recall"
@@ -87,60 +87,62 @@ impl Tool for MemoryRecallTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let request = match Self::build_recall_request(&args, ctx) {
-            Ok(request) => request,
-            Err(error) => {
-                if error.to_string().starts_with("blocked by security policy:") {
-                    return Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!("Memory recall failed: {error}")),
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let request = match Self::build_recall_request(&args, ctx) {
+                Ok(request) => request,
+                Err(error) => {
+                    if error.to_string().starts_with("blocked by security policy:") {
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some(format!("Memory recall failed: {error}")),
 
-                        attachments: Vec::new(),
-                    });
+                            attachments: Vec::new(),
+                        });
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-        };
+            };
 
-        match self.memory.recall_scoped(request).await {
-            Ok(entries) if entries.is_empty() => Ok(ToolResult {
-                success: true,
-                output: "No memories found matching that query.".into(),
-                error: None,
-
-                attachments: Vec::new(),
-            }),
-            Ok(entries) => {
-                let mut output = format!("Found {} memories:\n", entries.len());
-                for entry in &entries {
-                    let score = format!(" [{:.0}%]", entry.score * 100.0);
-                    let _ = writeln!(
-                        output,
-                        "- [{}:{}] {}{score}",
-                        entry.entity_id, entry.slot_key, entry.value
-                    );
-                }
-                Ok(ToolResult {
+            match self.memory.recall_scoped(request).await {
+                Ok(entries) if entries.is_empty() => Ok(ToolResult {
                     success: true,
-                    output,
+                    output: "No memories found matching that query.".into(),
                     error: None,
-                    attachments: Vec::new(),
-                })
-            }
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Memory recall failed: {e}")),
 
-                attachments: Vec::new(),
-            }),
-        }
+                    attachments: Vec::new(),
+                }),
+                Ok(entries) => {
+                    let mut output = format!("Found {} memories:\n", entries.len());
+                    for entry in &entries {
+                        let score = format!(" [{:.0}%]", entry.score * 100.0);
+                        let _ = writeln!(
+                            output,
+                            "- [{}:{}] {}{score}",
+                            entry.entity_id, entry.slot_key, entry.value
+                        );
+                    }
+                    Ok(ToolResult {
+                        success: true,
+                        output,
+                        error: None,
+                        attachments: Vec::new(),
+                    })
+                }
+                Err(e) => Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Memory recall failed: {e}")),
+
+                    attachments: Vec::new(),
+                }),
+            }
+        })
     }
 }
 

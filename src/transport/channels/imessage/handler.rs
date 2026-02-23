@@ -2,13 +2,13 @@ use super::IMessageChannel;
 use super::auth::{escape_applescript, is_valid_imessage_target};
 use crate::transport::channels::traits::{Channel, ChannelMessage};
 use anyhow::Context;
-use async_trait::async_trait;
 use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use tokio::sync::mpsc;
 
-#[async_trait]
 impl Channel for IMessageChannel {
     fn name(&self) -> &str {
         "imessage"
@@ -18,119 +18,132 @@ impl Channel for IMessageChannel {
         20_000
     }
 
-    async fn send(&self, message: &str, target: &str) -> anyhow::Result<()> {
-        // Defense-in-depth: validate target format before any interpolation
-        if !is_valid_imessage_target(target) {
-            anyhow::bail!(
-                "Invalid iMessage target: must be a phone number (+1234567890) or email (user@example.com)"
-            );
-        }
+    fn send<'a>(
+        &'a self,
+        message: &'a str,
+        target: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // Defense-in-depth: validate target format before any interpolation
+            if !is_valid_imessage_target(target) {
+                anyhow::bail!(
+                    "Invalid iMessage target: must be a phone number (+1234567890) or email (user@example.com)"
+                );
+            }
 
-        // SECURITY: Escape both message AND target to prevent AppleScript injection
-        // See: CWE-78 (OS Command Injection)
-        let escaped_msg = escape_applescript(message);
-        let escaped_target = escape_applescript(target);
+            // SECURITY: Escape both message AND target to prevent AppleScript injection
+            // See: CWE-78 (OS Command Injection)
+            let escaped_msg = escape_applescript(message);
+            let escaped_target = escape_applescript(target);
 
-        let script = format!(
-            r#"tell application "Messages"
+            let script = format!(
+                r#"tell application "Messages"
     set targetService to 1st account whose service type = iMessage
     set targetBuddy to participant "{escaped_target}" of targetService
     send "{escaped_msg}" to targetBuddy
 end tell"#
-        );
+            );
 
-        let output = tokio::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()
-            .await
-            .context("run iMessage AppleScript command")?;
+            let output = tokio::process::Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .output()
+                .await
+                .context("run iMessage AppleScript command")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("iMessage send failed: {stderr}");
-        }
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("iMessage send failed: {stderr}");
+            }
 
-        Ok(())
+            Ok(())
+        })
     }
 
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        tracing::info!("iMessage channel listening (AppleScript bridge)...");
+    fn listen<'a>(
+        &'a self,
+        tx: mpsc::Sender<ChannelMessage>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            tracing::info!("iMessage channel listening (AppleScript bridge)...");
 
-        // Query the Messages SQLite database for new messages
-        // The database is at ~/Library/Messages/chat.db
-        let db_path = UserDirs::new()
-            .map(|u| u.home_dir().join("Library/Messages/chat.db"))
-            .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+            // Query the Messages SQLite database for new messages
+            // The database is at ~/Library/Messages/chat.db
+            let db_path = UserDirs::new()
+                .map(|u| u.home_dir().join("Library/Messages/chat.db"))
+                .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
 
-        if !db_path.exists() {
-            anyhow::bail!(
-                "Messages database not found at {}. Ensure Messages.app is set up and Full Disk Access is granted.",
-                db_path.display()
-            );
-        }
+            if !db_path.exists() {
+                anyhow::bail!(
+                    "Messages database not found at {}. Ensure Messages.app is set up and Full Disk Access is granted.",
+                    db_path.display()
+                );
+            }
 
-        // Track the last ROWID we've seen
-        let mut last_rowid = get_max_rowid(&db_path).await.unwrap_or(0);
+            // Track the last ROWID we've seen
+            let mut last_rowid = get_max_rowid(&db_path).await.unwrap_or(0);
 
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(self.poll_interval_secs)).await;
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(self.poll_interval_secs)).await;
 
-            let new_messages = fetch_new_messages(&db_path, last_rowid).await;
+                let new_messages = fetch_new_messages(&db_path, last_rowid).await;
 
-            match new_messages {
-                Ok(messages) => {
-                    for (rowid, sender, text) in messages {
-                        if rowid > last_rowid {
-                            last_rowid = rowid;
-                        }
+                match new_messages {
+                    Ok(messages) => {
+                        for (rowid, sender, text) in messages {
+                            if rowid > last_rowid {
+                                last_rowid = rowid;
+                            }
 
-                        if !self.is_contact_allowed(&sender) {
-                            continue;
-                        }
+                            if !self.is_contact_allowed(&sender) {
+                                continue;
+                            }
 
-                        if text.trim().is_empty() {
-                            continue;
-                        }
+                            if text.trim().is_empty() {
+                                continue;
+                            }
 
-                        let msg = ChannelMessage {
-                            id: rowid.to_string(),
-                            sender,
-                            content: text,
-                            channel: "imessage".to_string(),
-                            conversation_id: None,
-                            thread_id: None,
-                            reply_to: None,
-                            message_id: None,
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs(),
-                            attachments: Vec::new(),
-                        };
+                            let msg = ChannelMessage {
+                                id: rowid.to_string(),
+                                sender,
+                                content: text,
+                                channel: "imessage".to_string(),
+                                conversation_id: None,
+                                thread_id: None,
+                                reply_to: None,
+                                message_id: None,
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                                attachments: Vec::new(),
+                            };
 
-                        if tx.send(msg).await.is_err() {
-                            return Ok(());
+                            if tx.send(msg).await.is_err() {
+                                return Ok(());
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::warn!("iMessage poll error: {e}");
+                    Err(e) => {
+                        tracing::warn!("iMessage poll error: {e}");
+                    }
                 }
             }
-        }
+        })
     }
 
-    async fn health_check(&self) -> bool {
-        if !cfg!(target_os = "macos") {
-            return false;
-        }
+    fn health_check<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            if !cfg!(target_os = "macos") {
+                return false;
+            }
 
-        let db_path = UserDirs::new()
-            .map(|u| u.home_dir().join("Library/Messages/chat.db"))
-            .unwrap_or_default();
+            let db_path = UserDirs::new()
+                .map(|u| u.home_dir().join("Library/Messages/chat.db"))
+                .unwrap_or_default();
 
-        db_path.exists()
+            db_path.exists()
+        })
     }
 }
 

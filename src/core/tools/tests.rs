@@ -3,8 +3,9 @@ use crate::config::schema::{McpConfig, McpServerConfig, McpTransport, ToolEntry,
 use crate::config::{BrowserConfig, MemoryConfig};
 use crate::core::memory::Memory;
 use crate::security::SecurityPolicy;
-use async_trait::async_trait;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -47,7 +48,6 @@ struct MockTool {
     description: String,
 }
 
-#[async_trait]
 impl Tool for MockTool {
     fn name(&self) -> &str {
         &self.name
@@ -61,17 +61,19 @@ impl Tool for MockTool {
         serde_json::json!({"type": "object", "properties": {}})
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         _args: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        Ok(ToolResult {
-            success: true,
-            output: String::new(),
-            error: None,
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(ToolResult {
+                success: true,
+                output: String::new(),
+                error: None,
 
-            attachments: Vec::new(),
+                attachments: Vec::new(),
+            })
         })
     }
 }

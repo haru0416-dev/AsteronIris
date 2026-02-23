@@ -1,11 +1,12 @@
 use crate::core::memory::{BeliefSlot, ForgetMode, Memory, PrivacyLevel};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::traits::{Tool, ToolResult};
-use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
@@ -276,7 +277,6 @@ impl MemoryGovernanceTool {
     }
 }
 
-#[async_trait]
 impl Tool for MemoryGovernanceTool {
     fn name(&self) -> &str {
         "memory_governance"
@@ -343,89 +343,91 @@ impl Tool for MemoryGovernanceTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let action = Self::parse_action(&args)?;
-        let actor = Self::parse_actor(&args)?;
-        let entity_id = Self::parse_entity_id(&args)?;
-        let scope_keys = Self::parse_scope_keys(&args)?;
-        let include_sensitive = Self::parse_include_sensitive(&args);
-        let policy_context = &ctx.tenant_context;
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let action = Self::parse_action(&args)?;
+            let actor = Self::parse_actor(&args)?;
+            let entity_id = Self::parse_entity_id(&args)?;
+            let scope_keys = Self::parse_scope_keys(&args)?;
+            let include_sensitive = Self::parse_include_sensitive(&args);
+            let policy_context = &ctx.tenant_context;
 
-        if let Err(error) = policy_context.enforce_recall_scope(&entity_id) {
+            if let Err(error) = policy_context.enforce_recall_scope(&entity_id) {
+                let audit_record_path = self
+                    .append_audit_record(
+                        &actor,
+                        &action,
+                        &entity_id,
+                        &scope_keys,
+                        ("denied", error),
+                        &ctx.workspace_dir,
+                    )
+                    .await?;
+                return Ok(ToolResult {
+                    success: false,
+                    output: json!({
+                        "audit_record_path": audit_record_path,
+                        "action": action.as_str(),
+                        "entity_id": entity_id,
+                        "scope": { "slot_keys": scope_keys },
+                    })
+                    .to_string(),
+                    error: Some(error.to_string()),
+
+                    attachments: Vec::new(),
+                });
+            }
+
+            let payload = match action {
+                GovernanceAction::Inspect => {
+                    self.run_inspect(&entity_id, &scope_keys, include_sensitive)
+                        .await?
+                }
+                GovernanceAction::Export => {
+                    self.run_export(&entity_id, &scope_keys, include_sensitive)
+                        .await?
+                }
+                GovernanceAction::Delete => {
+                    let mode = Self::parse_mode(&args);
+                    let reason = args
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("governance_request");
+                    self.run_delete(&entity_id, &scope_keys, mode, reason)
+                        .await?
+                }
+            };
+
             let audit_record_path = self
                 .append_audit_record(
                     &actor,
                     &action,
                     &entity_id,
                     &scope_keys,
-                    ("denied", error),
+                    ("allowed", "governance action completed"),
                     &ctx.workspace_dir,
                 )
                 .await?;
-            return Ok(ToolResult {
-                success: false,
-                output: json!({
-                    "audit_record_path": audit_record_path,
-                    "action": action.as_str(),
-                    "entity_id": entity_id,
-                    "scope": { "slot_keys": scope_keys },
-                })
-                .to_string(),
-                error: Some(error.to_string()),
+
+            let output = json!({
+                "action": action.as_str(),
+                "entity_id": entity_id,
+                "scope": { "slot_keys": scope_keys },
+                "result": payload,
+                "audit_record_path": audit_record_path,
+            });
+
+            Ok(ToolResult {
+                success: true,
+                output: output.to_string(),
+                error: None,
 
                 attachments: Vec::new(),
-            });
-        }
-
-        let payload = match action {
-            GovernanceAction::Inspect => {
-                self.run_inspect(&entity_id, &scope_keys, include_sensitive)
-                    .await?
-            }
-            GovernanceAction::Export => {
-                self.run_export(&entity_id, &scope_keys, include_sensitive)
-                    .await?
-            }
-            GovernanceAction::Delete => {
-                let mode = Self::parse_mode(&args);
-                let reason = args
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("governance_request");
-                self.run_delete(&entity_id, &scope_keys, mode, reason)
-                    .await?
-            }
-        };
-
-        let audit_record_path = self
-            .append_audit_record(
-                &actor,
-                &action,
-                &entity_id,
-                &scope_keys,
-                ("allowed", "governance action completed"),
-                &ctx.workspace_dir,
-            )
-            .await?;
-
-        let output = json!({
-            "action": action.as_str(),
-            "entity_id": entity_id,
-            "scope": { "slot_keys": scope_keys },
-            "result": payload,
-            "audit_record_path": audit_record_path,
-        });
-
-        Ok(ToolResult {
-            success: true,
-            output: output.to_string(),
-            error: None,
-
-            attachments: Vec::new(),
+            })
         })
     }
 }

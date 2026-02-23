@@ -2,13 +2,14 @@ use crate::core::providers::{
     ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
     build_provider_client, scrub_secret_patterns,
     sse::{SseBuffer, parse_event_data_pairs},
-    streaming::{ProviderChatRequest, ProviderStream},
+    streaming::ProviderStream,
     tool_convert::{ToolFields, map_tools_optional},
     traits::Provider,
 };
 use crate::core::tools::traits::ToolSpec;
-use async_trait::async_trait;
 use reqwest::Client;
+use std::future::Future;
+use std::pin::Pin;
 
 mod types;
 use types::{
@@ -309,16 +310,19 @@ impl AnthropicProvider {
 
     async fn chat_with_tools_stream_impl(
         &self,
-        req: ProviderChatRequest,
+        system_prompt: Option<&str>,
+        messages: &[ProviderMessage],
+        tools: &[ToolSpec],
+        model: &str,
+        temperature: f64,
     ) -> anyhow::Result<ProviderStream> {
         use futures_util::StreamExt;
 
-        let anthropic_messages: Vec<Message> = req
-            .messages
+        let anthropic_messages: Vec<Message> = messages
             .iter()
             .map(Self::provider_message_to_message)
             .collect();
-        let anthropic_tools = map_tools_optional(&req.tools, |tool| {
+        let anthropic_tools = map_tools_optional(tools, |tool| {
             let fields = ToolFields::from_tool_with_description(
                 tool,
                 scrub_secret_patterns(&tool.description).into_owned(),
@@ -332,14 +336,12 @@ impl AnthropicProvider {
         });
 
         let request = ChatRequest {
-            model: req.model,
+            model: model.to_string(),
             max_tokens: 4096,
-            system: req
-                .system_prompt
-                .map(|system| scrub_secret_patterns(&system).into_owned()),
+            system: system_prompt.map(|system| scrub_secret_patterns(system).into_owned()),
             messages: anthropic_messages,
             tools: anthropic_tools,
-            temperature: req.temperature,
+            temperature,
             stream: Some(true),
         };
 
@@ -374,95 +376,101 @@ impl AnthropicProvider {
     }
 }
 
-#[async_trait]
 impl Provider for AnthropicProvider {
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
-        let chat_response = self
-            .call_api(system_prompt, message, model, temperature)
-            .await?;
-        Self::extract_text(&chat_response)
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let chat_response = self
+                .call_api(system_prompt, message, model, temperature)
+                .await?;
+            Self::extract_text(&chat_response)
+        })
     }
 
-    async fn chat_with_system_full(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system_full<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let chat_response = self
-            .call_api(system_prompt, message, model, temperature)
-            .await?;
-        let text = Self::extract_text(&chat_response)?;
-        let mut provider_response = if let Some(usage) = chat_response.usage {
-            ProviderResponse::with_usage(text, usage.input_tokens, usage.output_tokens)
-        } else {
-            ProviderResponse::text_only(text)
-        };
-        if let Some(api_model) = chat_response.model {
-            provider_response = provider_response.with_model(api_model);
-        }
-        Ok(provider_response)
-    }
-
-    async fn chat_with_tools(
-        &self,
-        system_prompt: Option<&str>,
-        messages: &[ProviderMessage],
-        tools: &[ToolSpec],
-        model: &str,
-        temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let anthropic_messages = messages
-            .iter()
-            .map(Self::provider_message_to_message)
-            .collect();
-        let anthropic_tools = map_tools_optional(tools, |tool| {
-            let fields = ToolFields::from_tool_with_description(
-                tool,
-                scrub_secret_patterns(&tool.description).into_owned(),
-            );
-
-            AnthropicToolDef {
-                name: fields.name,
-                description: fields.description,
-                input_schema: fields.parameters,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let chat_response = self
+                .call_api(system_prompt, message, model, temperature)
+                .await?;
+            let text = Self::extract_text(&chat_response)?;
+            let mut provider_response = if let Some(usage) = chat_response.usage {
+                ProviderResponse::with_usage(text, usage.input_tokens, usage.output_tokens)
+            } else {
+                ProviderResponse::text_only(text)
+            };
+            if let Some(api_model) = chat_response.model {
+                provider_response = provider_response.with_model(api_model);
             }
-        });
+            Ok(provider_response)
+        })
+    }
 
-        let request = ChatRequest {
-            model: model.to_string(),
-            max_tokens: 4096,
-            system: system_prompt.map(|system| scrub_secret_patterns(system).into_owned()),
-            messages: anthropic_messages,
-            tools: anthropic_tools,
-            temperature,
-            stream: None,
-        };
-        let chat_response = self.call_api_with_request(&request).await?;
+    fn chat_with_tools<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [ToolSpec],
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let anthropic_messages = messages
+                .iter()
+                .map(Self::provider_message_to_message)
+                .collect();
+            let anthropic_tools = map_tools_optional(tools, |tool| {
+                let fields = ToolFields::from_tool_with_description(
+                    tool,
+                    scrub_secret_patterns(&tool.description).into_owned(),
+                );
 
-        let content_blocks = Self::parse_content_blocks(&chat_response.content);
-        let text = Self::text_from_content_blocks(&content_blocks).unwrap_or_default();
+                AnthropicToolDef {
+                    name: fields.name,
+                    description: fields.description,
+                    input_schema: fields.parameters,
+                }
+            });
 
-        let mut provider_response = if let Some(usage) = chat_response.usage {
-            ProviderResponse::with_usage(text, usage.input_tokens, usage.output_tokens)
-        } else {
-            ProviderResponse::text_only(text)
-        };
-        provider_response.content_blocks = content_blocks;
-        provider_response.stop_reason = Self::map_stop_reason(chat_response.stop_reason.as_deref());
+            let request = ChatRequest {
+                model: model.to_string(),
+                max_tokens: 4096,
+                system: system_prompt.map(|system| scrub_secret_patterns(system).into_owned()),
+                messages: anthropic_messages,
+                tools: anthropic_tools,
+                temperature,
+                stream: None,
+            };
+            let chat_response = self.call_api_with_request(&request).await?;
 
-        if let Some(api_model) = chat_response.model {
-            provider_response = provider_response.with_model(api_model);
-        }
+            let content_blocks = Self::parse_content_blocks(&chat_response.content);
+            let text = Self::text_from_content_blocks(&content_blocks).unwrap_or_default();
 
-        Ok(provider_response)
+            let mut provider_response = if let Some(usage) = chat_response.usage {
+                ProviderResponse::with_usage(text, usage.input_tokens, usage.output_tokens)
+            } else {
+                ProviderResponse::text_only(text)
+            };
+            provider_response.content_blocks = content_blocks;
+            provider_response.stop_reason =
+                Self::map_stop_reason(chat_response.stop_reason.as_deref());
+
+            if let Some(api_model) = chat_response.model {
+                provider_response = provider_response.with_model(api_model);
+            }
+
+            Ok(provider_response)
+        })
     }
 
     fn supports_tool_calling(&self) -> bool {
@@ -477,11 +485,18 @@ impl Provider for AnthropicProvider {
         true
     }
 
-    async fn chat_with_tools_stream(
-        &self,
-        req: ProviderChatRequest,
-    ) -> anyhow::Result<ProviderStream> {
-        self.chat_with_tools_stream_impl(req).await
+    fn chat_with_tools_stream<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [ToolSpec],
+        model: &'a str,
+        temperature: f64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderStream>> + Send + 'a>> {
+        Box::pin(async move {
+            self.chat_with_tools_stream_impl(system_prompt, messages, tools, model, temperature)
+                .await
+        })
     }
 }
 

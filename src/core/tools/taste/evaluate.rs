@@ -2,8 +2,9 @@ use crate::core::taste::engine::TasteEngine;
 use crate::core::taste::types::{Artifact, TasteContext, TextFormat};
 use crate::core::tools::middleware::ExecutionContext;
 use crate::core::tools::traits::{Tool, ToolResult};
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct TasteEvaluateTool {
@@ -57,7 +58,6 @@ impl TasteEvaluateTool {
     }
 }
 
-#[async_trait]
 impl Tool for TasteEvaluateTool {
     fn name(&self) -> &str {
         "taste_evaluate"
@@ -114,66 +114,68 @@ impl Tool for TasteEvaluateTool {
         })
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let Some(artifact_value) = args.get("artifact") else {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Missing 'artifact' parameter".to_string()),
-                attachments: vec![],
-            });
-        };
-
-        let artifact = match Self::parse_artifact(artifact_value) {
-            Ok(a) => a,
-            Err(e) => {
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(artifact_value) = args.get("artifact") else {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(e.to_string()),
+                    error: Some("Missing 'artifact' parameter".to_string()),
                     attachments: vec![],
                 });
-            }
-        };
+            };
 
-        let taste_ctx = match Self::parse_context(args.get("context")) {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(e.to_string()),
-                    attachments: vec![],
-                });
-            }
-        };
+            let artifact = match Self::parse_artifact(artifact_value) {
+                Ok(a) => a,
+                Err(e) => {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(e.to_string()),
+                        attachments: vec![],
+                    });
+                }
+            };
 
-        match self.engine.evaluate(&artifact, &taste_ctx).await {
-            Ok(report) => match serde_json::to_string(&report) {
-                Ok(json_string) => Ok(ToolResult {
-                    success: true,
-                    output: json_string,
-                    error: None,
-                    attachments: vec![],
-                }),
+            let taste_ctx = match Self::parse_context(args.get("context")) {
+                Ok(c) => c,
+                Err(e) => {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(e.to_string()),
+                        attachments: vec![],
+                    });
+                }
+            };
+
+            match self.engine.evaluate(&artifact, &taste_ctx).await {
+                Ok(report) => match serde_json::to_string(&report) {
+                    Ok(json_string) => Ok(ToolResult {
+                        success: true,
+                        output: json_string,
+                        error: None,
+                        attachments: vec![],
+                    }),
+                    Err(e) => Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("Failed to serialize report: {e}")),
+                        attachments: vec![],
+                    }),
+                },
                 Err(e) => Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(format!("Failed to serialize report: {e}")),
+                    error: Some(e.to_string()),
                     attachments: vec![],
                 }),
-            },
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(e.to_string()),
-                attachments: vec![],
-            }),
-        }
+            }
+        })
     }
 }
 
@@ -185,34 +187,40 @@ mod tests {
     };
     use crate::security::SecurityPolicy;
     use std::collections::BTreeMap;
+    use std::future::Future;
+    use std::pin::Pin;
 
     struct MockTasteEngine;
 
-    #[async_trait]
     impl TasteEngine for MockTasteEngine {
-        async fn evaluate(
-            &self,
-            _artifact: &Artifact,
-            _ctx: &TasteContext,
-        ) -> anyhow::Result<TasteReport> {
-            let mut axis = BTreeMap::new();
-            axis.insert(Axis::Coherence, 0.8);
-            axis.insert(Axis::Hierarchy, 0.7);
-            axis.insert(Axis::Intentionality, 0.9);
-            Ok(TasteReport {
-                axis,
-                domain: Domain::Text,
-                suggestions: vec![Suggestion::General {
-                    title: "Improve structure".into(),
-                    rationale: "Would benefit from clearer sections".into(),
-                    priority: Priority::Medium,
-                }],
-                raw_critique: None,
+        fn evaluate<'a>(
+            &'a self,
+            _artifact: &'a Artifact,
+            _ctx: &'a TasteContext,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<TasteReport>> + Send + 'a>> {
+            Box::pin(async move {
+                let mut axis = BTreeMap::new();
+                axis.insert(Axis::Coherence, 0.8);
+                axis.insert(Axis::Hierarchy, 0.7);
+                axis.insert(Axis::Intentionality, 0.9);
+                Ok(TasteReport {
+                    axis,
+                    domain: Domain::Text,
+                    suggestions: vec![Suggestion::General {
+                        title: "Improve structure".into(),
+                        rationale: "Would benefit from clearer sections".into(),
+                        priority: Priority::Medium,
+                    }],
+                    raw_critique: None,
+                })
             })
         }
 
-        async fn compare(&self, _comparison: &PairComparison) -> anyhow::Result<()> {
-            Ok(())
+        fn compare<'a>(
+            &'a self,
+            _comparison: &'a PairComparison,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+            Box::pin(async move { Ok(()) })
         }
 
         fn enabled(&self) -> bool {

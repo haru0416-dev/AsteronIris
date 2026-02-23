@@ -1,5 +1,6 @@
-use async_trait::async_trait;
 use std::env;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -60,7 +61,6 @@ impl DeterministicEmbedding {
     }
 }
 
-#[async_trait]
 impl EmbeddingProvider for DeterministicEmbedding {
     fn name(&self) -> &str {
         "deterministic_integration"
@@ -70,18 +70,23 @@ impl EmbeddingProvider for DeterministicEmbedding {
         self.dims
     }
 
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-        let mut out = Vec::with_capacity(texts.len());
-        for &t in texts {
-            let base = Self::fnv1a64(self.seed, t.as_bytes());
-            let mut v = Vec::with_capacity(self.dims);
-            for i in 0..self.dims {
-                let mixed = Self::splitmix64(base ^ (i as u64));
-                v.push(Self::u64_to_unit_f32(mixed));
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [&'a str],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut out = Vec::with_capacity(texts.len());
+            for &t in texts {
+                let base = Self::fnv1a64(self.seed, t.as_bytes());
+                let mut v = Vec::with_capacity(self.dims);
+                for i in 0..self.dims {
+                    let mixed = Self::splitmix64(base ^ (i as u64));
+                    v.push(Self::u64_to_unit_f32(mixed));
+                }
+                out.push(v);
             }
-            out.push(v);
-        }
-        Ok(out)
+            Ok(out)
+        })
     }
 }
 

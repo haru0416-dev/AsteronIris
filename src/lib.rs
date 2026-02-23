@@ -1,5 +1,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(
+    async_fn_in_trait,
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
     clippy::unnecessary_literal_bound,

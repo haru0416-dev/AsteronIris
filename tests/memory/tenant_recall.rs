@@ -15,8 +15,9 @@ use asteroniris::security::policy::{
     TenantPolicyContext,
 };
 
-use async_trait::async_trait;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -41,20 +42,21 @@ impl CaptureProvider {
     }
 }
 
-#[async_trait]
 impl Provider for CaptureProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        message: &str,
-        _model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        *self
-            .last_message
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message.to_string());
-        Ok(self.reply.clone())
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            *self
+                .last_message
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message.to_string());
+            Ok(self.reply.clone())
+        })
     }
 }
 

@@ -2,7 +2,7 @@
 
 use super::{Scout, ScoutResult, ScoutSource, dedup, owner_from_url, urlencoding};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
+
 use tracing::debug;
 
 pub struct ClawHubScout {
@@ -138,7 +138,6 @@ impl ClawHubScout {
     }
 }
 
-#[async_trait]
 impl Scout for ClawHubScout {
     async fn discover(&self) -> Result<Vec<ScoutResult>> {
         let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);

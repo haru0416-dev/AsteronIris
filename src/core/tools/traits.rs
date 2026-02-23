@@ -1,9 +1,10 @@
 use crate::core::tools::middleware::ExecutionContext;
 use crate::security::{ActionPolicyVerdict, ExternalActionExecution, SecurityPolicy};
-use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
@@ -62,7 +63,6 @@ pub struct ToolSpec {
 }
 
 /// Core tool trait — implement for any capability
-#[async_trait]
 pub trait Tool: Send + Sync {
     /// Tool name (used in LLM function calling)
     fn name(&self) -> &str;
@@ -74,11 +74,11 @@ pub trait Tool: Send + Sync {
     fn parameters_schema(&self) -> serde_json::Value;
 
     /// Execute the tool with given arguments
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult>;
+        ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>>;
 
     /// Get the full spec for LLM registration
     fn spec(&self) -> ToolSpec {
@@ -133,15 +133,14 @@ pub struct ActionResult {
     pub audit_record_path: Option<String>,
 }
 
-#[async_trait]
 pub trait ActionOperator: Send + Sync {
     fn name(&self) -> &str;
 
-    async fn apply(
-        &self,
-        intent: &ActionIntent,
-        verdict: Option<&ActionPolicyVerdict>,
-    ) -> anyhow::Result<ActionResult>;
+    fn apply<'a>(
+        &'a self,
+        intent: &'a ActionIntent,
+        verdict: Option<&'a ActionPolicyVerdict>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ActionResult>> + Send + 'a>>;
 }
 
 pub struct NoopOperator {
@@ -194,31 +193,32 @@ impl NoopOperator {
     }
 }
 
-#[async_trait]
 impl ActionOperator for NoopOperator {
     fn name(&self) -> &str {
         "noop"
     }
 
-    async fn apply(
-        &self,
-        intent: &ActionIntent,
-        verdict: Option<&ActionPolicyVerdict>,
-    ) -> anyhow::Result<ActionResult> {
-        let verdict = verdict.ok_or_else(|| anyhow::anyhow!("policy verdict required"))?;
+    fn apply<'a>(
+        &'a self,
+        intent: &'a ActionIntent,
+        verdict: Option<&'a ActionPolicyVerdict>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ActionResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let verdict = verdict.ok_or_else(|| anyhow::anyhow!("policy verdict required"))?;
 
-        let message = if verdict.allowed {
-            "external action execution is disabled by default"
-        } else {
-            verdict.reason.as_str()
-        };
+            let message = if verdict.allowed {
+                "external action execution is disabled by default"
+            } else {
+                verdict.reason.as_str()
+            };
 
-        let audit_record_path = Some(self.append_audit_record(intent, verdict, message).await?);
+            let audit_record_path = Some(self.append_audit_record(intent, verdict, message).await?);
 
-        Ok(ActionResult {
-            executed: false,
-            message: message.to_string(),
-            audit_record_path,
+            Ok(ActionResult {
+                executed: false,
+                message: message.to_string(),
+                audit_record_path,
+            })
         })
     }
 }

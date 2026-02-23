@@ -11,8 +11,9 @@ use crate::core::providers::{
 };
 use crate::core::tools::traits::ToolSpec;
 use anyhow::Context;
-use async_trait::async_trait;
 use reqwest::Client;
+use std::future::Future;
+use std::pin::Pin;
 use types::{
     ChatRequest, ChatResponse, Message, ResponsesInput, ResponsesRequest, ResponsesResponse,
     extract_chat_text, extract_responses_sse_text, extract_responses_text,
@@ -261,44 +262,50 @@ impl OpenAiCompatibleProvider {
     }
 }
 
-#[async_trait]
 impl Provider for OpenAiCompatibleProvider {
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<String> {
-        self.chat_with_system_internal(system_prompt, message, model, temperature)
-            .await
-            .map(|response| response.text)
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.chat_with_system_internal(system_prompt, message, model, temperature)
+                .await
+                .map(|response| response.text)
+        })
     }
 
-    async fn chat_with_system_full(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
+    fn chat_with_system_full<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        message: &'a str,
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        self.chat_with_system_internal(system_prompt, message, model, temperature)
-            .await
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            self.chat_with_system_internal(system_prompt, message, model, temperature)
+                .await
+        })
     }
 
-    async fn chat_with_tools(
-        &self,
-        system_prompt: Option<&str>,
-        messages: &[ProviderMessage],
-        tools: &[ToolSpec],
-        model: &str,
+    fn chat_with_tools<'a>(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [ProviderMessage],
+        tools: &'a [ToolSpec],
+        model: &'a str,
         temperature: f64,
-    ) -> anyhow::Result<ProviderResponse> {
-        let (augmented_prompt, text) = Self::prepare_fallback_input(system_prompt, messages, tools);
-        let response = self
-            .chat_with_system_full(Some(&augmented_prompt), &text, model, temperature)
-            .await?;
-        Ok(build_fallback_response(response, tools))
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let (augmented_prompt, text) =
+                Self::prepare_fallback_input(system_prompt, messages, tools);
+            let response = self
+                .chat_with_system_full(Some(&augmented_prompt), &text, model, temperature)
+                .await?;
+            Ok(build_fallback_response(response, tools))
+        })
     }
 }
 

@@ -110,7 +110,7 @@ Merge from same crate: `use serde::{Deserialize, Serialize};`
 
 ### Async & Constructors
 
-- `#[async_trait]` for async trait methods. `Arc<dyn Trait>` across async boundaries. Tokio `rt-multi-thread`.
+- dyn-safe async trait: `fn method(&self) -> Pin<Box<dyn Future<Output = R> + Send + '_>>`, impl: `Box::pin(async move { ... })`. Non-dyn traits: native `async fn in trait`. `Arc<dyn Trait>` across async boundaries. Tokio `rt-multi-thread`.
 - Rust 2024 edition: `if let` chains are used (e.g. `if let Some(x) = opt && cond`).
 - `fn new(...)` with `impl Into<String>` for string params.
 - Builder: `fn with_field(mut self, value: T) -> Self`. Named constructors for variants.
