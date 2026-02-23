@@ -309,3 +309,233 @@ mod domain_tests {
         assert_eq!(axes.len(), 3);
     }
 }
+
+mod pipeline_tests {
+    use super::*;
+
+    /// Full TasteReport with all 3 axes, all suggestion types (General/Text/Ui),
+    /// and raw_critique populated — verifies thorough serialize/deserialize fidelity.
+    #[test]
+    fn taste_report_full_pipeline_roundtrip() {
+        let report = TasteReport {
+            axis: all_axes_scores(0.8, 0.7, 0.9),
+            domain: Domain::Text,
+            suggestions: vec![
+                Suggestion::General {
+                    title: "add introduction".into(),
+                    rationale: "missing context for the reader".into(),
+                    priority: Priority::High,
+                },
+                Suggestion::Text {
+                    op: TextOp::RestructureArgument,
+                    rationale: "argument flow is non-linear".into(),
+                    priority: Priority::Medium,
+                },
+                Suggestion::Ui {
+                    op: UiOp::AddContrast,
+                    rationale: "low contrast between heading and body".into(),
+                    priority: Priority::Low,
+                },
+            ],
+            raw_critique: Some("Overall good but needs structural improvements.".into()),
+        };
+
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let recovered: TasteReport = serde_json::from_str(&json).unwrap();
+
+        // All 3 axes present with correct values
+        assert_eq!(recovered.axis.len(), 3);
+        assert!((recovered.axis[&Axis::Coherence] - 0.8).abs() < f64::EPSILON);
+        assert!((recovered.axis[&Axis::Hierarchy] - 0.7).abs() < f64::EPSILON);
+        assert!((recovered.axis[&Axis::Intentionality] - 0.9).abs() < f64::EPSILON);
+
+        // All axis values in [0,1]
+        for &score in recovered.axis.values() {
+            assert!((0.0..=1.0).contains(&score), "score {score} not in [0,1]");
+        }
+
+        // Domain preserved
+        assert_eq!(recovered.domain, Domain::Text);
+
+        // 3 suggestion variants
+        assert_eq!(recovered.suggestions.len(), 3);
+        assert!(matches!(&recovered.suggestions[0], Suggestion::General { priority: Priority::High, .. }));
+        assert!(matches!(&recovered.suggestions[1], Suggestion::Text { op: TextOp::RestructureArgument, .. }));
+        assert!(matches!(&recovered.suggestions[2], Suggestion::Ui { op: UiOp::AddContrast, .. }));
+
+        // raw_critique preserved
+        assert_eq!(
+            recovered.raw_critique.as_deref(),
+            Some("Overall good but needs structural improvements.")
+        );
+    }
+
+    /// PairComparison with Winner::Tie and Winner::Abstain round-trips through JSON
+    /// with fully populated TasteContext — verifies nested context fidelity.
+    #[test]
+    fn pair_comparison_tie_and_abstain_full_context() {
+        let rich_ctx = TasteContext {
+            domain: Domain::Ui,
+            genre: Some("dashboard".into()),
+            purpose: Some("executive summary".into()),
+            audience: Some("C-suite executives".into()),
+            constraints: vec!["max 3 columns".into(), "mobile-first".into()],
+            extra: {
+                let mut m = serde_json::Map::new();
+                m.insert("brand".into(), serde_json::json!("acme"));
+                m.insert("version".into(), serde_json::json!(2));
+                m
+            },
+        };
+
+        for winner in [Winner::Tie, Winner::Abstain] {
+            let pc = PairComparison {
+                domain: Domain::Ui,
+                ctx: rich_ctx.clone(),
+                left_id: "dashboard_v1".into(),
+                right_id: "dashboard_v2".into(),
+                winner: winner.clone(),
+                rationale: Some("equally compelling layouts".into()),
+                created_at_ms: 1_700_000_000_000,
+            };
+
+            let json = serde_json::to_string(&pc).unwrap();
+            let recovered: PairComparison = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(recovered.winner, winner);
+            assert_eq!(recovered.left_id, "dashboard_v1");
+            assert_eq!(recovered.right_id, "dashboard_v2");
+            assert_eq!(recovered.domain, Domain::Ui);
+            assert_eq!(recovered.created_at_ms, 1_700_000_000_000);
+            assert_eq!(recovered.rationale.as_deref(), Some("equally compelling layouts"));
+
+            // Nested context fields
+            assert_eq!(recovered.ctx.domain, Domain::Ui);
+            assert_eq!(recovered.ctx.genre.as_deref(), Some("dashboard"));
+            assert_eq!(recovered.ctx.purpose.as_deref(), Some("executive summary"));
+            assert_eq!(recovered.ctx.audience.as_deref(), Some("C-suite executives"));
+            assert_eq!(recovered.ctx.constraints.len(), 2);
+            assert_eq!(recovered.ctx.constraints[0], "max 3 columns");
+            assert_eq!(recovered.ctx.constraints[1], "mobile-first");
+            assert_eq!(recovered.ctx.extra.len(), 2);
+            assert_eq!(recovered.ctx.extra["brand"], serde_json::json!("acme"));
+            assert_eq!(recovered.ctx.extra["version"], serde_json::json!(2));
+        }
+    }
+
+    /// TasteContext with every optional field populated and extra map entries
+    /// round-trips through JSON — verifies no fields are silently dropped.
+    #[test]
+    fn taste_context_all_fields_populated_roundtrip() {
+        let ctx = TasteContext {
+            domain: Domain::Text,
+            genre: Some("technical blog post".into()),
+            purpose: Some("explain async Rust patterns".into()),
+            audience: Some("intermediate Rust developers".into()),
+            constraints: vec![
+                "under 2000 words".into(),
+                "include code examples".into(),
+                "no unsafe".into(),
+            ],
+            extra: {
+                let mut m = serde_json::Map::new();
+                m.insert("tone".into(), serde_json::json!("approachable"));
+                m.insert("code_ratio".into(), serde_json::json!(0.3));
+                m.insert("tags".into(), serde_json::json!(["rust", "async", "tokio"]));
+                m
+            },
+        };
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        let recovered: TasteContext = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(recovered.domain, Domain::Text);
+        assert_eq!(recovered.genre.as_deref(), Some("technical blog post"));
+        assert_eq!(recovered.purpose.as_deref(), Some("explain async Rust patterns"));
+        assert_eq!(recovered.audience.as_deref(), Some("intermediate Rust developers"));
+        assert_eq!(recovered.constraints.len(), 3);
+        assert_eq!(recovered.constraints[2], "no unsafe");
+
+        // Extra map preserves all types: string, number, array
+        assert_eq!(recovered.extra.len(), 3);
+        assert_eq!(recovered.extra["tone"], serde_json::json!("approachable"));
+        assert!((recovered.extra["code_ratio"].as_f64().unwrap() - 0.3).abs() < f64::EPSILON);
+        assert_eq!(
+            recovered.extra["tags"],
+            serde_json::json!(["rust", "async", "tokio"])
+        );
+    }
+
+    /// Suggestion::General with each Priority variant (High, Medium, Low)
+    /// round-trips correctly — verifies tagged-enum + priority serde.
+    #[test]
+    fn suggestion_general_all_priority_levels() {
+        let priorities = [
+            (Priority::High, "high"),
+            (Priority::Medium, "medium"),
+            (Priority::Low, "low"),
+        ];
+
+        for (priority, expected_str) in priorities {
+            let suggestion = Suggestion::General {
+                title: format!("suggestion at {expected_str} priority"),
+                rationale: format!("rationale for {expected_str}"),
+                priority: priority.clone(),
+            };
+
+            let json = serde_json::to_string(&suggestion).unwrap();
+
+            // Verify JSON contains correct tagged kind and priority
+            assert!(json.contains("\"kind\":\"general\""), "missing kind tag");
+            assert!(
+                json.contains(&format!("\"priority\":\"{expected_str}\"")),
+                "priority {expected_str} not found in JSON: {json}"
+            );
+
+            let recovered: Suggestion = serde_json::from_str(&json).unwrap();
+            if let Suggestion::General {
+                title,
+                rationale,
+                priority: recovered_priority,
+            } = recovered
+            {
+                assert_eq!(title, format!("suggestion at {expected_str} priority"));
+                assert_eq!(rationale, format!("rationale for {expected_str}"));
+                assert_eq!(recovered_priority, priority);
+            } else {
+                panic!("expected Suggestion::General, got different variant");
+            }
+        }
+    }
+
+    /// AxisScores BTreeMap ordering remains stable (Coherence < Hierarchy < Intentionality)
+    /// after JSON round-trip — verifies BTreeMap key ordering survives serialization.
+    #[test]
+    fn axis_scores_ordering_stable_after_json_roundtrip() {
+        let scores = all_axes_scores(0.1, 0.5, 0.9);
+
+        let json = serde_json::to_string(&scores).unwrap();
+        let recovered: AxisScores = serde_json::from_str(&json).unwrap();
+
+        // BTreeMap maintains Ord-based ordering after deserialization
+        let keys: Vec<&Axis> = recovered.keys().collect();
+        assert_eq!(keys.len(), 3);
+        assert_eq!(*keys[0], Axis::Coherence);
+        assert_eq!(*keys[1], Axis::Hierarchy);
+        assert_eq!(*keys[2], Axis::Intentionality);
+
+        // Values preserved at correct positions
+        assert!((recovered[&Axis::Coherence] - 0.1).abs() < f64::EPSILON);
+        assert!((recovered[&Axis::Hierarchy] - 0.5).abs() < f64::EPSILON);
+        assert!((recovered[&Axis::Intentionality] - 0.9).abs() < f64::EPSILON);
+
+        // Verify JSON key order matches (serde_json serializes BTreeMap in key order)
+        let coherence_pos = json.find("coherence").unwrap();
+        let hierarchy_pos = json.find("hierarchy").unwrap();
+        let intentionality_pos = json.find("intentionality").unwrap();
+        assert!(
+            coherence_pos < hierarchy_pos && hierarchy_pos < intentionality_pos,
+            "JSON key order not alphabetical: C@{coherence_pos} H@{hierarchy_pos} I@{intentionality_pos}"
+        );
+    }
+}
