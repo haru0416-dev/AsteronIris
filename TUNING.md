@@ -34,6 +34,6 @@ src/ のチューニング進捗を記録する。
 | Q2 | `providers/compatible/mod.rs` | `"NOT_FOUND_FALLBACK::"` センチネル文字列 → typed error | 中 | — |
 | Q3 | `memory/sqlite/repository.rs` `append_event` | 266行巨大関数 → フェーズ別分割 | 中 | — |
 | Q4 | `transport/channels/message_handler.rs` | `handle_channel_message` 278行 → 5ヘルパー分解 | 中 | — |
-| Q5 | `core/agent/loop_/mod.rs` | thin facade 規約違反 → ロジックを別ファイルへ | 低 | — |
-| Q6 | `discord/mod.rs`, `whatsapp/mod.rs` | mod.rs に実装コード → `channel.rs` へ移動 | 低 | — |
-| Q7 | `security/writeback_guard/policy.rs` | 本番 `.expect()` → `?` に置換 | 低 | — |
+| Q5 | `core/agent/loop_/mod.rs` | thin facade 規約違反 → ロジックを `run.rs` へ | 低 | done |
+| Q6 | `discord/mod.rs`, `whatsapp/mod.rs` | mod.rs に実装コード → `channel.rs` へ移動 | 低 | done |
+| Q7 | `security/writeback_guard/policy.rs` | 本番 `.expect()` → `?` に置換 | 低 | done |

@@ -5,6 +5,7 @@ use crate::core::providers::Provider;
 use crate::core::tools::ToolRegistry;
 use crate::security::SecurityPolicy;
 use crate::security::pairing::{PairingGuard, hash_token};
+#[cfg(feature = "whatsapp")]
 use crate::transport::channels::WhatsAppChannel;
 use async_trait::async_trait;
 use axum::{
@@ -65,6 +66,7 @@ fn webhook_body_requires_message_field() {
     assert!(parsed.is_err());
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_query_fields_are_optional() {
     let q = WhatsAppVerifyQuery {
@@ -85,6 +87,7 @@ fn app_state_is_clone() {
 // WhatsApp Signature Verification Tests (CWE-345 Prevention)
 // ══════════════════════════════════════════════════════════
 
+#[cfg(feature = "whatsapp")]
 fn compute_whatsapp_signature_hex(secret: &str, body: &[u8]) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
@@ -94,10 +97,12 @@ fn compute_whatsapp_signature_hex(secret: &str, body: &[u8]) -> String {
     hex::encode(mac.finalize().into_bytes())
 }
 
+#[cfg(feature = "whatsapp")]
 fn compute_whatsapp_signature_header(secret: &str, body: &[u8]) -> String {
     format!("sha256={}", compute_whatsapp_signature_hex(secret, body))
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_valid() {
     // Test with known values
@@ -113,6 +118,7 @@ fn whatsapp_signature_valid() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_invalid_wrong_secret() {
     let app_secret = "correct_secret";
@@ -128,6 +134,7 @@ fn whatsapp_signature_invalid_wrong_secret() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_invalid_wrong_body() {
     let app_secret = "test_secret";
@@ -144,6 +151,7 @@ fn whatsapp_signature_invalid_wrong_body() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_missing_prefix() {
     let app_secret = "test_secret";
@@ -159,6 +167,7 @@ fn whatsapp_signature_missing_prefix() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_empty_header() {
     let app_secret = "test_secret";
@@ -167,6 +176,7 @@ fn whatsapp_signature_empty_header() {
     assert!(!verify_whatsapp_signature(app_secret, body, ""));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_invalid_hex() {
     let app_secret = "test_secret";
@@ -182,6 +192,7 @@ fn whatsapp_signature_invalid_hex() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_empty_body() {
     let app_secret = "test_secret";
@@ -196,6 +207,7 @@ fn whatsapp_signature_empty_body() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_unicode_body() {
     let app_secret = "test_secret";
@@ -210,6 +222,7 @@ fn whatsapp_signature_unicode_body() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_json_payload() {
     let app_secret = "my_app_secret_from_meta";
@@ -224,6 +237,7 @@ fn whatsapp_signature_json_payload() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_case_sensitive_prefix() {
     let app_secret = "test_secret";
@@ -240,6 +254,7 @@ fn whatsapp_signature_case_sensitive_prefix() {
     assert!(verify_whatsapp_signature(app_secret, body, &correct_prefix));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_truncated_hex() {
     let app_secret = "test_secret";
@@ -256,6 +271,7 @@ fn whatsapp_signature_truncated_hex() {
     ));
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_extra_bytes() {
     let app_secret = "test_secret";
@@ -305,7 +321,9 @@ async fn webhook_policy_blocks_when_action_limit_is_exhausted() {
         auto_save: false,
         webhook_secret: Some(Arc::from("test-secret")),
         pairing: Arc::new(PairingGuard::new(false, &[], None)),
+        #[cfg(feature = "whatsapp")]
         whatsapp: None,
+        #[cfg(feature = "whatsapp")]
         whatsapp_app_secret: None,
         defense_mode: GatewayDefenseMode::Enforce,
         defense_kill_switch: false,
@@ -355,7 +373,9 @@ async fn webhook_audit_mode_still_blocks_missing_bearer_when_paired() {
         auto_save: false,
         webhook_secret: None,
         pairing: Arc::new(PairingGuard::new(true, &[hash_token("valid-token")], None)),
+        #[cfg(feature = "whatsapp")]
         whatsapp: None,
+        #[cfg(feature = "whatsapp")]
         whatsapp_app_secret: None,
         defense_mode: GatewayDefenseMode::Audit,
         defense_kill_switch: false,
@@ -439,7 +459,9 @@ fn effective_defense_mode_kill_switch_forces_audit() {
         auto_save: false,
         webhook_secret: None,
         pairing: Arc::new(PairingGuard::new(false, &[], None)),
+        #[cfg(feature = "whatsapp")]
         whatsapp: None,
+        #[cfg(feature = "whatsapp")]
         whatsapp_app_secret: None,
         defense_mode: GatewayDefenseMode::Enforce,
         defense_kill_switch: true,
@@ -489,6 +511,7 @@ fn webhook_autosave_event_fields() {
     assert!((event.importance - 0.5).abs() < f64::EPSILON);
 }
 
+#[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_autosave_event_includes_sender() {
     let event = autosave::gateway_whatsapp_autosave_event(
@@ -523,7 +546,9 @@ fn make_test_state(pairing: PairingGuard) -> AppState {
         auto_save: false,
         webhook_secret: None,
         pairing: Arc::new(pairing),
+        #[cfg(feature = "whatsapp")]
         whatsapp: None,
+        #[cfg(feature = "whatsapp")]
         whatsapp_app_secret: None,
         defense_mode: GatewayDefenseMode::Enforce,
         defense_kill_switch: false,
@@ -620,6 +645,7 @@ async fn handle_health_reflects_paired_when_tokens_exist() {
 // WhatsApp verify handler tests
 // ══════════════════════════════════════════════════════════
 
+#[cfg(feature = "whatsapp")]
 fn make_whatsapp_state() -> AppState {
     let tmp = TempDir::new().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -652,6 +678,7 @@ fn make_whatsapp_state() -> AppState {
     }
 }
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_verify_returns_challenge_on_valid() {
     let state = make_whatsapp_state();
@@ -672,6 +699,7 @@ async fn whatsapp_verify_returns_challenge_on_valid() {
     assert_eq!(std::str::from_utf8(&body).unwrap(), "challenge123");
 }
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_verify_rejects_wrong_token() {
     let state = make_whatsapp_state();
@@ -688,6 +716,7 @@ async fn whatsapp_verify_rejects_wrong_token() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_verify_rejects_wrong_mode() {
     let state = make_whatsapp_state();
@@ -704,6 +733,7 @@ async fn whatsapp_verify_rejects_wrong_mode() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_verify_rejects_missing_challenge() {
     let state = make_whatsapp_state();
@@ -720,6 +750,7 @@ async fn whatsapp_verify_rejects_missing_challenge() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_verify_returns_404_when_not_configured() {
     let state = make_test_state(PairingGuard::new(false, &[], None));
@@ -740,6 +771,7 @@ async fn whatsapp_verify_returns_404_when_not_configured() {
 // WhatsApp message handler tests
 // ══════════════════════════════════════════════════════════
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_message_404_when_not_configured() {
     let state = make_test_state(PairingGuard::new(false, &[], None));
@@ -754,6 +786,7 @@ async fn whatsapp_message_404_when_not_configured() {
     assert!(json["error"].as_str().unwrap().contains("not configured"));
 }
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_message_rejects_invalid_signature() {
     let state = make_whatsapp_state();
@@ -765,6 +798,7 @@ async fn whatsapp_message_rejects_invalid_signature() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_message_rejects_invalid_json() {
     let state = make_whatsapp_state();
@@ -778,6 +812,7 @@ async fn whatsapp_message_rejects_invalid_json() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_message_ack_empty_messages() {
     let state = make_whatsapp_state();

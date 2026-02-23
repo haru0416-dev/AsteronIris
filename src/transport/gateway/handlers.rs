@@ -5,6 +5,7 @@ use crate::core::tools::middleware::ExecutionContext;
 use crate::security::pairing::constant_time_eq;
 use crate::security::policy::TenantPolicyContext;
 use crate::security::writeback_guard::enforce_external_autosave_write_policy;
+#[cfg(feature = "whatsapp")]
 use crate::transport::channels::{Channel, WhatsAppChannel};
 use crate::utils::text::truncate_with_ellipsis;
 use axum::{
@@ -15,16 +16,20 @@ use axum::{
 };
 use std::sync::Arc;
 
+#[cfg(feature = "whatsapp")]
+use super::WhatsAppVerifyQuery;
+#[cfg(feature = "whatsapp")]
+use super::autosave::gateway_whatsapp_autosave_event;
 use super::autosave::{
     gateway_autosave_entity_id, gateway_runtime_policy_context, gateway_webhook_autosave_event,
-    gateway_whatsapp_autosave_event,
 };
 use super::defense::{
     PolicyViolation, apply_external_ingress_policy, must_enforce_auth_violation,
     policy_accounting_response, policy_violation_response,
 };
+#[cfg(feature = "whatsapp")]
 use super::signature::verify_whatsapp_signature;
-use super::{AppState, WebhookBody, WhatsAppVerifyQuery};
+use super::{AppState, WebhookBody};
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     headers
@@ -93,6 +98,7 @@ async fn run_gateway_tool_loop(
     Ok(result)
 }
 
+#[cfg(feature = "whatsapp")]
 fn whatsapp_not_configured_response() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::NOT_FOUND,
@@ -100,6 +106,7 @@ fn whatsapp_not_configured_response() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
+#[cfg(feature = "whatsapp")]
 fn invalid_whatsapp_signature_response() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::UNAUTHORIZED,
@@ -107,6 +114,7 @@ fn invalid_whatsapp_signature_response() -> (StatusCode, Json<serde_json::Value>
     )
 }
 
+#[cfg(feature = "whatsapp")]
 fn invalid_whatsapp_payload_response() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::BAD_REQUEST,
@@ -114,16 +122,19 @@ fn invalid_whatsapp_payload_response() -> (StatusCode, Json<serde_json::Value>) 
     )
 }
 
+#[cfg(feature = "whatsapp")]
 fn whatsapp_ack_response() -> (StatusCode, Json<serde_json::Value>) {
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
 
+#[cfg(feature = "whatsapp")]
 async fn send_whatsapp_reply_or_log(wa: &WhatsAppChannel, sender: &str, message: &str) {
     if let Err(error) = wa.send_chunked(message, sender).await {
         tracing::error!("Failed to send WhatsApp reply: {error}");
     }
 }
 
+#[cfg(feature = "whatsapp")]
 async fn process_whatsapp_message(
     state: &AppState,
     wa: &WhatsAppChannel,
@@ -382,6 +393,7 @@ pub(super) async fn handle_webhook(
 }
 
 /// GET /whatsapp — Meta webhook verification
+#[cfg(feature = "whatsapp")]
 pub(super) async fn handle_whatsapp_verify(
     State(state): State<AppState>,
     Query(params): Query<WhatsAppVerifyQuery>,
@@ -408,6 +420,7 @@ pub(super) async fn handle_whatsapp_verify(
 }
 
 /// POST /whatsapp — incoming message webhook
+#[cfg(feature = "whatsapp")]
 pub(super) async fn handle_whatsapp_message(
     State(state): State<AppState>,
     headers: HeaderMap,

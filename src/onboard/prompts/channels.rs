@@ -11,7 +11,7 @@ use crate::ui::style as ui;
 use super::super::view::print_bullet;
 
 #[allow(clippy::too_many_lines)]
-pub fn setup_channels() -> Result<ChannelsConfig> {
+pub async fn setup_channels() -> Result<ChannelsConfig> {
     print_bullet(&t!("onboard.channels.intro"));
     print_bullet(&t!("onboard.channels.cli_always"));
     println!();
@@ -107,12 +107,12 @@ pub fn setup_channels() -> Result<ChannelsConfig> {
             .interact()?;
 
         match choice {
-            0 => setup_telegram(&mut config)?,
-            1 => setup_discord(&mut config)?,
-            2 => setup_slack(&mut config)?,
+            0 => setup_telegram(&mut config).await?,
+            1 => setup_discord(&mut config).await?,
+            2 => setup_slack(&mut config).await?,
             3 => setup_imessage(&mut config)?,
-            4 => setup_matrix(&mut config)?,
-            5 => setup_whatsapp(&mut config)?,
+            4 => setup_matrix(&mut config).await?,
+            5 => setup_whatsapp(&mut config).await?,
             6 => setup_irc(&mut config)?,
             7 => setup_webhook(&mut config)?,
             _ => break,
@@ -135,7 +135,7 @@ pub fn setup_channels() -> Result<ChannelsConfig> {
     Ok(config)
 }
 
-fn setup_telegram(config: &mut ChannelsConfig) -> Result<()> {
+async fn setup_telegram(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
@@ -161,11 +161,11 @@ fn setup_telegram(config: &mut ChannelsConfig) -> Result<()> {
 
     // Test connection
     print!("  › {}... ", t!("onboard.channels.testing"));
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let url = format!("https://api.telegram.org/bot{token}/getMe");
-    match client.get(&url).send() {
+    match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => {
-            let data: serde_json::Value = resp.json().unwrap_or_default();
+            let data: serde_json::Value = resp.json().await.unwrap_or_default();
             let bot_name = data
                 .get("result")
                 .and_then(|r| r.get("username"))
@@ -210,7 +210,7 @@ fn setup_telegram(config: &mut ChannelsConfig) -> Result<()> {
     Ok(())
 }
 
-fn setup_discord(config: &mut ChannelsConfig) -> Result<()> {
+async fn setup_discord(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
@@ -233,14 +233,15 @@ fn setup_discord(config: &mut ChannelsConfig) -> Result<()> {
     }
 
     print!("  › {}... ", t!("onboard.channels.testing"));
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     match client
         .get("https://discord.com/api/v10/users/@me")
         .header("Authorization", format!("Bot {token}"))
         .send()
+        .await
     {
         Ok(resp) if resp.status().is_success() => {
-            let data: serde_json::Value = resp.json().unwrap_or_default();
+            let data: serde_json::Value = resp.json().await.unwrap_or_default();
             let bot_name = data
                 .get("username")
                 .and_then(serde_json::Value::as_str)
@@ -292,7 +293,7 @@ fn setup_discord(config: &mut ChannelsConfig) -> Result<()> {
     Ok(())
 }
 
-fn setup_slack(config: &mut ChannelsConfig) -> Result<()> {
+async fn setup_slack(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
@@ -314,14 +315,15 @@ fn setup_slack(config: &mut ChannelsConfig) -> Result<()> {
     }
 
     print!("  › {}... ", t!("onboard.channels.testing"));
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     match client
         .get("https://slack.com/api/auth.test")
         .bearer_auth(&token)
         .send()
+        .await
     {
         Ok(resp) if resp.status().is_success() => {
-            let data: serde_json::Value = resp.json().unwrap_or_default();
+            let data: serde_json::Value = resp.json().await.unwrap_or_default();
             let ok = data
                 .get("ok")
                 .and_then(serde_json::Value::as_bool)
@@ -445,7 +447,7 @@ fn setup_imessage(config: &mut ChannelsConfig) -> Result<()> {
     Ok(())
 }
 
-fn setup_matrix(config: &mut ChannelsConfig) -> Result<()> {
+async fn setup_matrix(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
@@ -483,14 +485,15 @@ fn setup_matrix(config: &mut ChannelsConfig) -> Result<()> {
 
     let hs = homeserver.trim_end_matches('/');
     print!("  › {}... ", t!("onboard.channels.testing"));
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     match client
         .get(format!("{hs}/_matrix/client/v3/account/whoami"))
         .header("Authorization", format!("Bearer {access_token}"))
         .send()
+        .await
     {
         Ok(resp) if resp.status().is_success() => {
-            let data: serde_json::Value = resp.json().unwrap_or_default();
+            let data: serde_json::Value = resp.json().await.unwrap_or_default();
             let user_id = data
                 .get("user_id")
                 .and_then(serde_json::Value::as_str)
@@ -533,7 +536,7 @@ fn setup_matrix(config: &mut ChannelsConfig) -> Result<()> {
     Ok(())
 }
 
-fn setup_whatsapp(config: &mut ChannelsConfig) -> Result<()> {
+async fn setup_whatsapp(config: &mut ChannelsConfig) -> Result<()> {
     println!();
     println!(
         "  {} {}",
@@ -583,7 +586,7 @@ fn setup_whatsapp(config: &mut ChannelsConfig) -> Result<()> {
         .interact_text()?;
 
     print!("  › {}... ", t!("onboard.channels.testing"));
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let url = format!(
         "https://graph.facebook.com/v18.0/{}",
         phone_number_id.trim()
@@ -592,6 +595,7 @@ fn setup_whatsapp(config: &mut ChannelsConfig) -> Result<()> {
         .get(&url)
         .header("Authorization", format!("Bearer {}", access_token.trim()))
         .send()
+        .await
     {
         Ok(resp) if resp.status().is_success() => {
             println!(

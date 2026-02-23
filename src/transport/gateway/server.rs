@@ -1,6 +1,6 @@
-use super::handlers::{
-    handle_health, handle_pair, handle_webhook, handle_whatsapp_message, handle_whatsapp_verify,
-};
+use super::handlers::{handle_health, handle_pair, handle_webhook};
+#[cfg(feature = "whatsapp")]
+use super::handlers::{handle_whatsapp_message, handle_whatsapp_verify};
 use super::openai_compat_handler::handle_chat_completions;
 use super::replay_guard::ReplayGuard;
 use super::websocket::ws_handler;
@@ -14,6 +14,7 @@ use crate::core::tools::ToolRegistry;
 use crate::security::auth::AuthBroker;
 use crate::security::pairing::{PairingGuard, is_public_bind};
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
+#[cfg(feature = "whatsapp")]
 use crate::transport::channels::WhatsAppChannel;
 use anyhow::{Context, Result};
 use axum::{
@@ -160,6 +161,7 @@ fn resolve_webhook_secret(config: &Config) -> Option<Arc<str>> {
         .map(Arc::from)
 }
 
+#[cfg(feature = "whatsapp")]
 fn build_whatsapp_channel(config: &Config) -> Option<Arc<WhatsAppChannel>> {
     config.channels_config.whatsapp.as_ref().map(|whatsapp| {
         Arc::new(WhatsAppChannel::new(
@@ -176,8 +178,6 @@ fn build_gateway_state(
     resources: GatewayResources,
     pairing: Arc<PairingGuard>,
     webhook_secret: Option<Arc<str>>,
-    whatsapp_channel: Option<Arc<WhatsAppChannel>>,
-    whatsapp_app_secret: Option<Arc<str>>,
 ) -> AppState {
     AppState {
         provider: resources.provider,
@@ -192,8 +192,10 @@ fn build_gateway_state(
         auto_save: config.memory.auto_save,
         webhook_secret,
         pairing,
-        whatsapp: whatsapp_channel,
-        whatsapp_app_secret,
+        #[cfg(feature = "whatsapp")]
+        whatsapp: build_whatsapp_channel(config),
+        #[cfg(feature = "whatsapp")]
+        whatsapp_app_secret: resolve_whatsapp_app_secret(config),
         defense_mode: config.gateway.defense_mode,
         defense_kill_switch: config.gateway.defense_kill_switch,
         security: resources.security,
@@ -217,9 +219,11 @@ pub async fn run_gateway_with_listener(
 
     let resources = build_gateway_resources(&config, &auth_broker)?;
     let webhook_secret = resolve_webhook_secret(&config);
-    let whatsapp_channel = build_whatsapp_channel(&config);
 
-    let whatsapp_app_secret = resolve_whatsapp_app_secret(&config);
+    #[cfg(feature = "whatsapp")]
+    let whatsapp_enabled = config.channels_config.whatsapp.is_some();
+    #[cfg(not(feature = "whatsapp"))]
+    let whatsapp_enabled = false;
 
     let pairing = Arc::new(PairingGuard::new(
         config.gateway.require_pairing,
@@ -234,21 +238,14 @@ pub async fn run_gateway_with_listener(
     print_gateway_banner(
         &display_addr,
         tunnel_url.as_deref(),
-        whatsapp_channel.is_some(),
+        whatsapp_enabled,
         &pairing,
         webhook_secret.is_some(),
     );
 
     crate::runtime::diagnostics::health::mark_component_ok("gateway");
 
-    let state = build_gateway_state(
-        &config,
-        resources,
-        pairing,
-        webhook_secret,
-        whatsapp_channel,
-        whatsapp_app_secret,
-    );
+    let state = build_gateway_state(&config, resources, pairing, webhook_secret);
 
     let app = build_app(state, &config.gateway.cors_origins);
     axum::serve(listener, app)
@@ -259,6 +256,7 @@ pub async fn run_gateway_with_listener(
 }
 
 // Priority: environment variable > config file.
+#[cfg(feature = "whatsapp")]
 fn resolve_whatsapp_app_secret(config: &Config) -> Option<Arc<str>> {
     std::env::var("ASTERONIRIS_WHATSAPP_APP_SECRET")
         .ok()
@@ -338,14 +336,19 @@ fn print_gateway_banner(
 }
 
 fn build_app(state: AppState, cors_origins: &[String]) -> Router {
-    let mut app = Router::new()
+    let app = Router::new()
         .route("/health", get(handle_health))
         .route("/pair", post(handle_pair))
         .route("/webhook", post(handle_webhook))
         .route("/ws", get(ws_handler))
-        .route("/v1/chat/completions", post(handle_chat_completions))
+        .route("/v1/chat/completions", post(handle_chat_completions));
+
+    #[cfg(feature = "whatsapp")]
+    let app = app
         .route("/whatsapp", get(handle_whatsapp_verify))
-        .route("/whatsapp", post(handle_whatsapp_message))
+        .route("/whatsapp", post(handle_whatsapp_message));
+
+    let mut app = app
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
         .layer(TimeoutLayer::with_status_code(

@@ -18,7 +18,7 @@ use super::scaffold::scaffold_workspace;
 use super::view::{print_step, print_summary, print_welcome_banner};
 
 /// Run the interactive wizard. Uses TUI if stdout is a terminal, falls back to dialoguer CLI.
-pub fn run_wizard(install_daemon_flag: bool) -> Result<(Config, bool)> {
+pub async fn run_wizard(install_daemon_flag: bool) -> Result<(Config, bool)> {
     // Detect locale before anything else
     if let Ok(lang) = std::env::var("ASTERONIRIS_LANG")
         && !lang.is_empty()
@@ -42,11 +42,11 @@ pub fn run_wizard(install_daemon_flag: bool) -> Result<(Config, bool)> {
         }
     }
 
-    run_wizard_cli(install_daemon_flag)
+    run_wizard_cli(install_daemon_flag).await
 }
 
 /// CLI-based wizard using dialoguer (fallback for non-TTY or TUI failure).
-fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
+async fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
     print_welcome_banner();
 
     print_step(1, 8, &t!("onboard.step.workspace"));
@@ -56,7 +56,7 @@ fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
     let (provider, api_key, model, oauth_source) = setup_provider()?;
 
     print_step(3, 8, &t!("onboard.step.channels"));
-    let channels_config = setup_channels()?;
+    let channels_config = setup_channels().await?;
 
     print_step(4, 8, &t!("onboard.step.tunnel"));
     let tunnel_config = setup_tunnel()?;
@@ -207,7 +207,7 @@ fn offer_launch_channels(config: &Config) -> Result<bool> {
 }
 
 /// Interactive repair flow: rerun channel setup only without redoing full onboarding.
-pub fn run_channels_repair_wizard() -> Result<(Config, bool)> {
+pub async fn run_channels_repair_wizard() -> Result<(Config, bool)> {
     print_welcome_banner();
     println!("  {}", ui::header(t!("onboard.repair.title")));
     println!();
@@ -215,7 +215,7 @@ pub fn run_channels_repair_wizard() -> Result<(Config, bool)> {
     let mut config = Config::load_or_init()?;
 
     print_step(1, 1, &t!("onboard.step.channels"));
-    config.channels_config = setup_channels()?;
+    config.channels_config = setup_channels().await?;
     config.save()?;
 
     println!();

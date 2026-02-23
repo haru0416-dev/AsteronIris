@@ -57,9 +57,14 @@ impl Clone for ActionTracker {
 }
 
 #[derive(Debug)]
+struct RateLimiterState {
+    global_actions: Vec<Instant>,
+    per_entity: HashMap<String, Vec<Instant>>,
+}
+
+#[derive(Debug)]
 pub struct EntityRateLimiter {
-    global: ActionTracker,
-    per_entity: Mutex<HashMap<String, ActionTracker>>,
+    state: Mutex<RateLimiterState>,
     global_max: u32,
     per_entity_max: u32,
 }
@@ -73,35 +78,44 @@ pub enum RateLimitError {
 impl EntityRateLimiter {
     pub fn new(global_max: u32, per_entity_max: u32) -> Self {
         Self {
-            global: ActionTracker::new(),
-            per_entity: Mutex::new(HashMap::new()),
+            state: Mutex::new(RateLimiterState {
+                global_actions: Vec::new(),
+                per_entity: HashMap::new(),
+            }),
             global_max,
             per_entity_max,
         }
     }
 
     pub fn check_and_record(&self, entity_id: &str) -> Result<(), RateLimitError> {
-        if self.global.count() >= usize::try_from(self.global_max).unwrap_or(usize::MAX) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cutoff = Instant::now()
+            .checked_sub(std::time::Duration::from_secs(3600))
+            .unwrap_or_else(Instant::now);
+
+        state.global_actions.retain(|t| *t > cutoff);
+        if state.global_actions.len() >= usize::try_from(self.global_max).unwrap_or(usize::MAX) {
             return Err(RateLimitError::GlobalExhausted);
         }
 
-        let mut per_entity = self
-            .per_entity
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        let tracker = per_entity
-            .entry(entity_id.to_string())
-            .or_insert_with(ActionTracker::new);
-
-        if tracker.count() >= usize::try_from(self.per_entity_max).unwrap_or(usize::MAX) {
-            return Err(RateLimitError::EntityExhausted {
-                entity_id: entity_id.to_string(),
-            });
+        {
+            let entity_actions = state.per_entity.entry(entity_id.to_string()).or_default();
+            entity_actions.retain(|t| *t > cutoff);
+            if entity_actions.len() >= usize::try_from(self.per_entity_max).unwrap_or(usize::MAX) {
+                return Err(RateLimitError::EntityExhausted {
+                    entity_id: entity_id.to_string(),
+                });
+            }
         }
 
-        self.global.record();
-        tracker.record();
+        let now = Instant::now();
+        state.global_actions.push(now);
+        if let Some(actions) = state.per_entity.get_mut(entity_id) {
+            actions.push(now);
+        }
         Ok(())
     }
 }

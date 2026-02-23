@@ -33,6 +33,7 @@ pub(super) fn gateway_webhook_autosave_event(entity_id: &str, summary: String) -
     ))
 }
 
+#[cfg(feature = "whatsapp")]
 pub(super) fn gateway_whatsapp_autosave_event(
     entity_id: &str,
     sender: &str,

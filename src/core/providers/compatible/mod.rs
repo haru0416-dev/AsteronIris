@@ -92,6 +92,11 @@ impl OpenAiCompatibleProvider {
     }
 }
 
+enum ChatCompletionsOutcome {
+    Ok(ChatResponse),
+    NotFound(String),
+}
+
 impl OpenAiCompatibleProvider {
     fn apply_auth_header(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some((name, value)) = &self.cached_auth {
@@ -147,7 +152,10 @@ impl OpenAiCompatibleProvider {
         Ok(ProviderResponse::text_only(text))
     }
 
-    async fn call_chat_completions(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse> {
+    async fn call_chat_completions(
+        &self,
+        request: &ChatRequest,
+    ) -> anyhow::Result<ChatCompletionsOutcome> {
         let url = self.chat_completions_url();
 
         let response = self
@@ -162,16 +170,17 @@ impl OpenAiCompatibleProvider {
             let sanitized_error = sanitize_api_error(&error);
 
             if status == reqwest::StatusCode::NOT_FOUND {
-                anyhow::bail!("NOT_FOUND_FALLBACK::{sanitized_error}");
+                return Ok(ChatCompletionsOutcome::NotFound(sanitized_error));
             }
 
             anyhow::bail!("{} API error: {sanitized_error}", self.name);
         }
 
-        response
+        let chat_response: ChatResponse = response
             .json()
             .await
-            .with_context(|| format!("{} chat completions JSON decode failed", self.name))
+            .with_context(|| format!("{} chat completions JSON decode failed", self.name))?;
+        Ok(ChatCompletionsOutcome::Ok(chat_response))
     }
 
     async fn chat_with_system_internal(
@@ -213,8 +222,8 @@ impl OpenAiCompatibleProvider {
             return self.chat_via_responses(system_prompt, message, model).await;
         }
 
-        match self.call_chat_completions(&request).await {
-            Ok(chat_response) => {
+        match self.call_chat_completions(&request).await? {
+            ChatCompletionsOutcome::Ok(chat_response) => {
                 let text = extract_chat_text(&chat_response, &self.name)?;
                 let mut provider_response = if let Some(usage) = chat_response.usage {
                     ProviderResponse::with_usage(text, usage.prompt_tokens, usage.completion_tokens)
@@ -228,21 +237,15 @@ impl OpenAiCompatibleProvider {
 
                 Ok(provider_response)
             }
-            Err(error) => {
-                let error_text = error.to_string();
-                if let Some((_, sanitized_error)) = error_text.split_once("NOT_FOUND_FALLBACK::") {
-                    return self
-                        .chat_via_responses(system_prompt, message, model)
-                        .await
-                        .map_err(|responses_err| {
-                            anyhow::anyhow!(
-                                "{} API error: {sanitized_error} (chat completions unavailable; responses fallback failed: {responses_err})",
-                                self.name
-                            )
-                        });
-                }
-
-                Err(error)
+            ChatCompletionsOutcome::NotFound(sanitized_error) => {
+                self.chat_via_responses(system_prompt, message, model)
+                    .await
+                    .map_err(|responses_err| {
+                        anyhow::anyhow!(
+                            "{} API error: {sanitized_error} (chat completions unavailable; responses fallback failed: {responses_err})",
+                            self.name
+                        )
+                    })
             }
         }
     }

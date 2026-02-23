@@ -22,7 +22,7 @@ tokio = { version = "1", default-features = false, features = [
 
 # HTTP client
 reqwest = { version = "0.13", default-features = false, features = [
-    "json", "rustls", "blocking", "multipart", "stream", "query",
+    "json", "rustls", "multipart", "stream", "query",
 ] }
 
 # Serialization
@@ -113,8 +113,18 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 rmcp = { version = "0.16.0", features = ["client", "transport-child-process", "transport-io"], optional = true }
 
 [features]
-default = ["discord", "email", "vector-search", "tui", "bundled-sqlite", "media", "link-extraction"]
+default = [
+    "discord", "email", "vector-search", "tui", "bundled-sqlite",
+    "media", "link-extraction",
+    "telegram", "slack", "matrix", "irc", "whatsapp", "imessage",
+]
 discord = []
+telegram = []
+slack = []
+matrix = []
+irc = []
+whatsapp = []
+imessage = []
 bundled-sqlite = ["rusqlite/bundled"]
 email = ["dep:lettre", "dep:mail-parser"]
 vector-search = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema"]

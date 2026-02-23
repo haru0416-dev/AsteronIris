@@ -3,11 +3,19 @@ use crate::config::ChannelsConfig;
 use crate::transport::channels::DiscordChannel;
 #[cfg(feature = "email")]
 use crate::transport::channels::EmailChannel;
+#[cfg(feature = "imessage")]
+use crate::transport::channels::IMessageChannel;
+#[cfg(feature = "matrix")]
+use crate::transport::channels::MatrixChannel;
+#[cfg(feature = "slack")]
+use crate::transport::channels::SlackChannel;
+#[cfg(feature = "telegram")]
+use crate::transport::channels::TelegramChannel;
+#[cfg(feature = "whatsapp")]
+use crate::transport::channels::WhatsAppChannel;
 use crate::transport::channels::policy::{ChannelEntry, ChannelPolicy};
-use crate::transport::channels::{
-    IMessageChannel, IrcChannel, IrcChannelConfig, MatrixChannel, SlackChannel, TelegramChannel,
-    WhatsAppChannel,
-};
+#[cfg(feature = "irc")]
+use crate::transport::channels::{IrcChannel, IrcChannelConfig};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -24,6 +32,7 @@ fn build_policy(
 pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
     let mut channels = Vec::with_capacity(8);
 
+    #[cfg(feature = "telegram")]
     if let Some(tg) = channels_config.telegram {
         channels.push(ChannelEntry {
             name: "Telegram",
@@ -42,6 +51,7 @@ pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
         });
     }
 
+    #[cfg(feature = "slack")]
     if let Some(sl) = channels_config.slack {
         channels.push(ChannelEntry {
             name: "Slack",
@@ -54,6 +64,7 @@ pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
         });
     }
 
+    #[cfg(feature = "imessage")]
     if let Some(im) = channels_config.imessage {
         channels.push(ChannelEntry {
             name: "iMessage",
@@ -62,6 +73,7 @@ pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
         });
     }
 
+    #[cfg(feature = "matrix")]
     if let Some(mx) = channels_config.matrix {
         channels.push(ChannelEntry {
             name: "Matrix",
@@ -75,6 +87,7 @@ pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
         });
     }
 
+    #[cfg(feature = "whatsapp")]
     if let Some(wa) = channels_config.whatsapp {
         channels.push(ChannelEntry {
             name: "WhatsApp",
@@ -97,6 +110,7 @@ pub fn build_channels(channels_config: ChannelsConfig) -> Vec<ChannelEntry> {
         });
     }
 
+    #[cfg(feature = "irc")]
     if let Some(irc) = channels_config.irc {
         channels.push(ChannelEntry {
             name: "IRC",

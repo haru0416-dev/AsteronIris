@@ -67,16 +67,33 @@ impl RecallCandidate {
     }
 }
 
-impl SqliteMemory {
-    #[allow(clippy::too_many_lines, clippy::unused_async)]
-    pub(super) async fn append_event(
-        &self,
-        input: MemoryEventInput,
-    ) -> anyhow::Result<MemoryEvent> {
-        let input = input.normalize_for_ingress()?;
-        let embedding = self.get_or_compute_embedding(&input.value).await?;
-        let conn = self.conn.lock_anyhow()?;
+struct EventMetadata {
+    event_id: String,
+    ingested_at: String,
+    source: &'static str,
+    layer: &'static str,
+    privacy: &'static str,
+    event_type: String,
+    signal_tier_str: &'static str,
+    source_kind: Option<&'static str>,
+    source_uri: Option<String>,
+    provenance_source_class: Option<&'static str>,
+    provenance_reference: Option<String>,
+    provenance_evidence_uri: Option<String>,
+    retention_tier: &'static str,
+    retention_expires_at: Option<String>,
+    content_type: &'static str,
+    contradiction_penalty: f64,
+    promotion_status: &'static str,
+    embedding_dim: Option<i64>,
+    embedding_blob: Option<Vec<u8>>,
+}
 
+impl SqliteMemory {
+    fn prepare_event_metadata(
+        input: &MemoryEventInput,
+        embedding: Option<Vec<f32>>,
+    ) -> EventMetadata {
         let event_id = Uuid::new_v4().to_string();
         let ingested_at = Local::now().to_rfc3339();
         let source = Self::source_to_str(input.source);
@@ -134,6 +151,33 @@ impl SqliteMemory {
         let embedding_dim = embedding.as_ref().map(|entry| entry.len() as i64);
         let embedding_blob = embedding.map(|entry| vector::vec_to_bytes(&entry));
 
+        EventMetadata {
+            event_id,
+            ingested_at,
+            source,
+            layer,
+            privacy,
+            event_type,
+            signal_tier_str,
+            source_kind,
+            source_uri,
+            provenance_source_class,
+            provenance_reference,
+            provenance_evidence_uri,
+            retention_tier,
+            retention_expires_at,
+            content_type,
+            contradiction_penalty,
+            promotion_status,
+            embedding_dim,
+            embedding_blob,
+        }
+    }
+
+    fn decide_replacement(
+        conn: &rusqlite::Connection,
+        input: &MemoryEventInput,
+    ) -> anyhow::Result<(bool, Option<String>)> {
         let mut incumbent_stmt = conn.prepare_cached(
             "SELECT winner_event_id, source, confidence, updated_at FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
         ).context("prepare belief slot lookup")?;
@@ -176,6 +220,17 @@ impl SqliteMemory {
             }
         });
 
+        Ok((should_replace, supersedes_event_id))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn insert_event_records(
+        conn: &rusqlite::Connection,
+        input: &MemoryEventInput,
+        meta: &EventMetadata,
+        should_replace: bool,
+        supersedes_event_id: Option<&str>,
+    ) -> anyhow::Result<()> {
         conn.execute(
             "INSERT INTO memory_events (
                 event_id, entity_id, slot_key, layer, event_type, value, source,
@@ -185,37 +240,37 @@ impl SqliteMemory {
                 privacy_level, occurred_at, ingested_at, supersedes_event_id
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
-                event_id,
+                meta.event_id,
                 input.entity_id,
                 input.slot_key,
-                layer,
-                event_type,
+                meta.layer,
+                meta.event_type,
                 input.value,
-                source,
+                meta.source,
                 input.confidence,
                 input.importance,
-                provenance_source_class,
-                provenance_reference,
-                provenance_evidence_uri,
-                retention_tier,
-                retention_expires_at,
-                signal_tier_str,
-                source_kind,
-                privacy,
+                meta.provenance_source_class,
+                meta.provenance_reference,
+                meta.provenance_evidence_uri,
+                meta.retention_tier,
+                meta.retention_expires_at,
+                meta.signal_tier_str,
+                meta.source_kind,
+                meta.privacy,
                 input.occurred_at,
-                ingested_at,
+                meta.ingested_at,
                 supersedes_event_id,
             ],
         )
         .context("insert memory event")?;
 
-        if contradiction_penalty > 0.0 {
+        if meta.contradiction_penalty > 0.0 {
             let unit_id = format!("{}:{}", input.entity_id, input.slot_key);
             conn.execute(
                 "UPDATE retrieval_units
                  SET contradiction_penalty = MIN(1.0, contradiction_penalty + ?2)
                  WHERE unit_id = ?1",
-                params![unit_id, contradiction_penalty],
+                params![unit_id, meta.contradiction_penalty],
             )
             .context("update contradiction penalty")?;
         }
@@ -239,11 +294,11 @@ impl SqliteMemory {
                     input.entity_id,
                     input.slot_key,
                     input.value,
-                    event_id,
-                    source,
+                    meta.event_id,
+                    meta.source,
                     input.confidence,
                     input.importance,
-                    privacy,
+                    meta.privacy,
                     input.occurred_at,
                 ],
             )
@@ -287,34 +342,56 @@ impl SqliteMemory {
                     input.entity_id,
                     input.slot_key,
                     input.value,
-                    content_type,
-                    signal_tier_str,
-                    promotion_status,
-                    source_uri,
-                    source_kind,
+                    meta.content_type,
+                    meta.signal_tier_str,
+                    meta.promotion_status,
+                    meta.source_uri,
+                    meta.source_kind,
                     input.importance,
                     input.confidence,
-                    contradiction_penalty,
-                    privacy,
-                    embedding_blob,
-                    embedding_dim,
-                    layer,
-                    provenance_source_class,
-                    provenance_reference,
-                    provenance_evidence_uri,
-                    retention_tier,
-                    retention_expires_at,
+                    meta.contradiction_penalty,
+                    meta.privacy,
+                    meta.embedding_blob,
+                    meta.embedding_dim,
+                    meta.layer,
+                    meta.provenance_source_class,
+                    meta.provenance_reference,
+                    meta.provenance_evidence_uri,
+                    meta.retention_tier,
+                    meta.retention_expires_at,
                     input.occurred_at,
                 ],
             )
             .context("upsert retrieval unit")?;
 
-            Self::try_promote_raw_to_candidate(&conn, &input.entity_id, &input.slot_key)
+            Self::try_promote_raw_to_candidate(conn, &input.entity_id, &input.slot_key)
                 .context("promote corroborated raw signal")?;
         }
 
+        Ok(())
+    }
+
+    #[allow(clippy::unused_async)]
+    pub(super) async fn append_event(
+        &self,
+        input: MemoryEventInput,
+    ) -> anyhow::Result<MemoryEvent> {
+        let input = input.normalize_for_ingress()?;
+        let embedding = self.get_or_compute_embedding(&input.value).await?;
+        let conn = self.conn.lock_anyhow()?;
+
+        let meta = Self::prepare_event_metadata(&input, embedding);
+        let (should_replace, supersedes_event_id) = Self::decide_replacement(&conn, &input)?;
+        Self::insert_event_records(
+            &conn,
+            &input,
+            &meta,
+            should_replace,
+            supersedes_event_id.as_deref(),
+        )?;
+
         Ok(MemoryEvent {
-            event_id,
+            event_id: meta.event_id,
             entity_id: input.entity_id,
             slot_key: input.slot_key,
             event_type: input.event_type,
@@ -325,7 +402,7 @@ impl SqliteMemory {
             provenance: input.provenance,
             privacy_level: input.privacy_level,
             occurred_at: input.occurred_at,
-            ingested_at,
+            ingested_at: meta.ingested_at,
         })
     }
 

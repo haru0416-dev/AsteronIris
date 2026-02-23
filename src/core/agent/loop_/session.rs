@@ -23,7 +23,6 @@ use crate::core::planner::{
 };
 use crate::core::providers::response::ProviderMessage;
 use crate::core::providers::{CliStreamSink, StreamSink};
-use crate::core::tools;
 use crate::core::tools::middleware::ExecutionContext;
 use crate::runtime::observability::traits::AutonomyLifecycleSignal;
 use crate::runtime::observability::{NoopObserver, Observer};
@@ -449,44 +448,7 @@ pub async fn run_main_session_turn_for_integration_with_policy(
     } = params;
     let observer: Arc<dyn Observer> = Arc::new(NoopObserver);
     let security_arc = Arc::new(security.clone());
-    let composio_key = if config.composio.enabled {
-        config.composio.api_key.as_deref()
-    } else {
-        None
-    };
-    #[cfg(feature = "taste")]
-    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = if config.taste.enabled
-    {
-        crate::core::providers::create_provider(
-            config.default_provider.as_deref().unwrap_or("anthropic"),
-            config.api_key.as_deref(),
-        )
-        .ok()
-        .map(|p| Arc::from(p) as Arc<dyn crate::core::providers::Provider>)
-    } else {
-        None
-    };
-    #[cfg(not(feature = "taste"))]
-    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = None;
-    let tools = tools::all_tools(
-        &security_arc,
-        Arc::clone(&mem),
-        composio_key,
-        &config.browser,
-        &config.tools,
-        Some(&config.mcp),
-        &config.taste,
-        taste_provider,
-        config
-            .default_model
-            .as_deref()
-            .unwrap_or("anthropic/claude-sonnet-4-20250514"),
-    );
-    let middleware = tools::default_middleware_chain();
-    let mut registry = tools::ToolRegistry::new(middleware);
-    for tool in tools {
-        registry.register(tool);
-    }
+    let registry = super::run::init_tools(config, &security_arc, &mem, None);
     let person_id = resolve_person_id(config);
     let params = MainSessionTurnParams {
         answer_provider,
@@ -495,7 +457,7 @@ pub async fn run_main_session_turn_for_integration_with_policy(
         system_prompt,
         model_name,
         temperature,
-        registry: Arc::new(registry),
+        registry,
         max_tool_iterations: config.autonomy.max_tool_loop_iterations,
         rate_limiter: Arc::new(EntityRateLimiter::new(
             config.autonomy.max_actions_per_hour,

@@ -24,6 +24,7 @@ mod websocket;
 pub use server::run_gateway;
 #[allow(unused_imports)]
 pub use server::run_gateway_with_listener;
+#[cfg(feature = "whatsapp")]
 #[allow(unused_imports)]
 pub use signature::verify_whatsapp_signature;
 
@@ -33,6 +34,7 @@ use crate::core::providers::Provider;
 use crate::core::tools::ToolRegistry;
 use crate::security::pairing::PairingGuard;
 use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
+#[cfg(feature = "whatsapp")]
 use crate::transport::channels::WhatsAppChannel;
 use replay_guard::ReplayGuard;
 use std::sync::Arc;
@@ -40,9 +42,9 @@ use std::sync::Arc;
 #[cfg(test)]
 use axum::http::StatusCode;
 #[cfg(test)]
-use handlers::{
-    handle_health, handle_pair, handle_webhook, handle_whatsapp_message, handle_whatsapp_verify,
-};
+use handlers::{handle_health, handle_pair, handle_webhook};
+#[cfg(all(test, feature = "whatsapp"))]
+use handlers::{handle_whatsapp_message, handle_whatsapp_verify};
 
 /// Maximum request body size (64KB) — prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;
@@ -64,8 +66,10 @@ pub struct AppState {
     pub auto_save: bool,
     pub webhook_secret: Option<Arc<str>>,
     pub pairing: Arc<PairingGuard>,
+    #[cfg(feature = "whatsapp")]
     pub whatsapp: Option<Arc<WhatsAppChannel>>,
     /// `WhatsApp` app secret for webhook signature verification (`X-Hub-Signature-256`)
+    #[cfg(feature = "whatsapp")]
     pub whatsapp_app_secret: Option<Arc<str>>,
     pub defense_mode: GatewayDefenseMode,
     pub defense_kill_switch: bool,
@@ -80,6 +84,7 @@ pub struct WebhookBody {
 }
 
 /// `WhatsApp` verification query params
+#[cfg(feature = "whatsapp")]
 #[derive(serde::Deserialize)]
 pub struct WhatsAppVerifyQuery {
     #[serde(rename = "hub.mode")]

@@ -19,6 +19,10 @@ use super::ingress_policy::{
 use super::policy::min_autonomy;
 use super::startup::ChannelRuntime;
 use super::traits::{Channel, ChannelMessage, MediaAttachment};
+use crate::core::agent::tool_loop::ToolLoopResult;
+use crate::security::policy::AutonomyLevel;
+use std::collections::HashSet;
+use tokio::task::JoinHandle;
 
 fn build_channel_ingestion_envelopes(
     msg: &ChannelMessage,
@@ -137,18 +141,10 @@ fn approval_context_for_message(config: &Config, msg: &ChannelMessage) -> Channe
     context
 }
 
-#[allow(clippy::too_many_lines)]
-pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
-    println!(
-        "  › {}",
-        t!(
-            "channels.message_in",
-            channel = msg.channel,
-            sender = msg.sender,
-            content = truncate_with_ellipsis(&msg.content, 80)
-        )
-    );
-
+fn resolve_channel_policy(
+    rt: &ChannelRuntime,
+    msg: &ChannelMessage,
+) -> (AutonomyLevel, Option<HashSet<String>>) {
     let global_autonomy = rt.config.autonomy.effective_autonomy_level();
     let channel_policy = rt.channel_policies.get(&msg.channel);
     let channel_level = channel_policy
@@ -165,20 +161,25 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
         "resolved channel runtime policy"
     );
 
-    let source = format!("channel:{}", msg.channel);
-    let ingress = apply_external_ingress_policy(&source, &msg.content);
-    let autosave_entity_id = channel_autosave_entity_id(&msg.channel, &msg.sender);
+    (effective_autonomy, tool_allowlist)
+}
 
+async fn autosave_and_ingest(
+    rt: &ChannelRuntime,
+    msg: &ChannelMessage,
+    autosave_entity_id: &str,
+    persisted_summary: &str,
+) {
     if rt.config.memory.auto_save {
         let policy_context = channel_runtime_policy_context();
-        if let Err(error) = policy_context.enforce_recall_scope(&autosave_entity_id) {
+        if let Err(error) = policy_context.enforce_recall_scope(autosave_entity_id) {
             tracing::warn!(error, "channel autosave skipped due to policy context");
         } else {
             let event = channel_autosave_input(
-                &autosave_entity_id,
+                autosave_entity_id,
                 &msg.channel,
                 &msg.sender,
-                ingress.persisted_summary.clone(),
+                persisted_summary.to_string(),
             );
             if let Err(error) = enforce_external_autosave_write_policy(&event) {
                 tracing::warn!(%error, "channel autosave rejected by write policy");
@@ -190,7 +191,7 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
 
     if msg.channel != "cli" {
         let envelopes =
-            build_channel_ingestion_envelopes(msg, &autosave_entity_id, &ingress.persisted_summary);
+            build_channel_ingestion_envelopes(msg, autosave_entity_id, persisted_summary);
         let pipeline =
             crate::core::memory::ingestion::SqliteIngestionPipeline::new(Arc::clone(&rt.mem));
         match pipeline.ingest_batch(envelopes).await {
@@ -209,25 +210,15 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
             }
         }
     }
+}
 
-    if ingress.blocked {
-        tracing::warn!(
-            source,
-            "blocked high-risk external content at channel ingress"
-        );
-        if let Err(error) = reply_to_origin(
-            &rt.channels,
-            &msg.channel,
-            "⚠️ External content was blocked by safety policy.",
-            &msg.sender,
-        )
-        .await
-        {
-            tracing::warn!(%error, "failed to send channel safety block reply");
-        }
-        return;
-    }
-
+async fn build_execution_context(
+    rt: &ChannelRuntime,
+    msg: &ChannelMessage,
+    autosave_entity_id: String,
+    effective_autonomy: AutonomyLevel,
+    tool_allowlist: Option<HashSet<String>>,
+) -> ExecutionContext {
     let tenant_context = channel_runtime_policy_context();
     let workspace_dir = if tenant_context.tenant_mode_enabled {
         let tenant_id = tenant_context.tenant_id.as_deref().unwrap_or("default");
@@ -243,7 +234,7 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
     } else {
         rt.config.workspace_dir.clone()
     };
-    let ctx = ExecutionContext {
+    ExecutionContext {
         security: Arc::clone(&rt.security),
         autonomy_level: effective_autonomy,
         entity_id: autosave_entity_id,
@@ -257,62 +248,16 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
             &msg.channel,
             &approval_context_for_message(&rt.config, msg),
         )),
-    };
-    let tool_loop = ToolLoop::new(
-        Arc::clone(&rt.registry),
-        rt.config.autonomy.max_tool_loop_iterations,
-    );
-    let media_processor = MediaProcessor::with_provider(Arc::clone(&rt.provider), rt.model.clone());
-    let (message_input, image_blocks) = prepare_channel_input_and_images(
-        &ingress.model_input,
-        &msg.attachments,
-        rt.media_store.as_ref(),
-        &media_processor,
-    )
-    .await;
-    let mut stream_forward_handle = None;
-    let stream_sink: Option<Arc<dyn StreamSink>> = rt
-        .channels
-        .iter()
-        .find(|channel| channel.name() == msg.channel)
-        .map(|channel| {
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
-            let channel = Arc::clone(channel);
-            let recipient = msg.sender.clone();
-            let channel_name = msg.channel.clone();
-            stream_forward_handle = Some(tokio::spawn(async move {
-                while let Some(chunk) = rx.recv().await {
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    if let Err(error) = channel.send(&chunk, &recipient).await {
-                        tracing::warn!(
-                            channel = %channel_name,
-                            recipient = %recipient,
-                            error = %error,
-                            "failed to stream channel chunk"
-                        );
-                        break;
-                    }
-                }
-            }));
-            Arc::new(ChannelStreamSink::new(tx, 80)) as Arc<dyn StreamSink>
-        });
+    }
+}
 
-    match tool_loop
-        .run(ToolLoopRunParams {
-            provider: rt.provider.as_ref(),
-            system_prompt: &rt.system_prompt,
-            user_message: &message_input,
-            image_content: &image_blocks,
-            model: &rt.model,
-            temperature: rt.temperature,
-            ctx: &ctx,
-            stream_sink,
-            conversation_history: &[],
-        })
-        .await
-    {
+async fn process_tool_loop_result(
+    rt: &ChannelRuntime,
+    msg: &ChannelMessage,
+    result: Result<ToolLoopResult>,
+    stream_forward_handle: Option<JoinHandle<()>>,
+) {
+    match result {
         Ok(result) => {
             if let Some(handle) = stream_forward_handle
                 && let Err(error) = handle.await
@@ -409,6 +354,108 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
             }
         }
     }
+}
+
+pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMessage) {
+    println!(
+        "  › {}",
+        t!(
+            "channels.message_in",
+            channel = msg.channel,
+            sender = msg.sender,
+            content = truncate_with_ellipsis(&msg.content, 80)
+        )
+    );
+
+    let (effective_autonomy, tool_allowlist) = resolve_channel_policy(rt, msg);
+
+    let source = format!("channel:{}", msg.channel);
+    let ingress = apply_external_ingress_policy(&source, &msg.content);
+    let autosave_entity_id = channel_autosave_entity_id(&msg.channel, &msg.sender);
+
+    autosave_and_ingest(rt, msg, &autosave_entity_id, &ingress.persisted_summary).await;
+
+    if ingress.blocked {
+        tracing::warn!(
+            source,
+            "blocked high-risk external content at channel ingress"
+        );
+        if let Err(error) = reply_to_origin(
+            &rt.channels,
+            &msg.channel,
+            "⚠️ External content was blocked by safety policy.",
+            &msg.sender,
+        )
+        .await
+        {
+            tracing::warn!(%error, "failed to send channel safety block reply");
+        }
+        return;
+    }
+
+    let ctx = build_execution_context(
+        rt,
+        msg,
+        autosave_entity_id,
+        effective_autonomy,
+        tool_allowlist,
+    )
+    .await;
+    let tool_loop = ToolLoop::new(
+        Arc::clone(&rt.registry),
+        rt.config.autonomy.max_tool_loop_iterations,
+    );
+    let media_processor = MediaProcessor::with_provider(Arc::clone(&rt.provider), rt.model.clone());
+    let (message_input, image_blocks) = prepare_channel_input_and_images(
+        &ingress.model_input,
+        &msg.attachments,
+        rt.media_store.as_ref(),
+        &media_processor,
+    )
+    .await;
+    let mut stream_forward_handle = None;
+    let stream_sink: Option<Arc<dyn StreamSink>> = rt
+        .channels
+        .iter()
+        .find(|channel| channel.name() == msg.channel)
+        .map(|channel| {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
+            let channel = Arc::clone(channel);
+            let recipient = msg.sender.clone();
+            let channel_name = msg.channel.clone();
+            stream_forward_handle = Some(tokio::spawn(async move {
+                while let Some(chunk) = rx.recv().await {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    if let Err(error) = channel.send(&chunk, &recipient).await {
+                        tracing::warn!(
+                            channel = %channel_name,
+                            recipient = %recipient,
+                            error = %error,
+                            "failed to stream channel chunk"
+                        );
+                        break;
+                    }
+                }
+            }));
+            Arc::new(ChannelStreamSink::new(tx, 80)) as Arc<dyn StreamSink>
+        });
+
+    let result = tool_loop
+        .run(ToolLoopRunParams {
+            provider: rt.provider.as_ref(),
+            system_prompt: &rt.system_prompt,
+            user_message: &message_input,
+            image_content: &image_blocks,
+            model: &rt.model,
+            temperature: rt.temperature,
+            ctx: &ctx,
+            stream_sink,
+            conversation_history: &[],
+        })
+        .await;
+    process_tool_loop_result(rt, msg, result, stream_forward_handle).await;
 }
 
 #[cfg(test)]

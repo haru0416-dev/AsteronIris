@@ -27,9 +27,9 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         }
 
         let (config, autostart) = if *channels_only {
-            asteroniris::onboard::run_channels_repair_wizard()?
+            asteroniris::onboard::run_channels_repair_wizard().await?
         } else if *interactive {
-            asteroniris::onboard::run_wizard(*install_daemon)?
+            asteroniris::onboard::run_wizard(*install_daemon).await?
         } else {
             asteroniris::onboard::run_quick_setup(
                 api_key.as_deref(),
@@ -64,7 +64,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         );
         println!();
 
-        let (new_config, _autostart) = asteroniris::onboard::run_wizard(false)?;
+        let (new_config, _autostart) = asteroniris::onboard::run_wizard(false).await?;
         Arc::new(new_config)
     } else {
         config
