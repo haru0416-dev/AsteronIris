@@ -454,6 +454,20 @@ pub async fn run_main_session_turn_for_integration_with_policy(
     } else {
         None
     };
+    #[cfg(feature = "taste")]
+    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = if config.taste.enabled
+    {
+        crate::core::providers::create_provider(
+            config.default_provider.as_deref().unwrap_or("anthropic"),
+            config.api_key.as_deref(),
+        )
+        .ok()
+        .map(|p| Arc::from(p) as Arc<dyn crate::core::providers::Provider>)
+    } else {
+        None
+    };
+    #[cfg(not(feature = "taste"))]
+    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = None;
     let tools = tools::all_tools(
         &security_arc,
         Arc::clone(&mem),
@@ -461,6 +475,8 @@ pub async fn run_main_session_turn_for_integration_with_policy(
         &config.browser,
         &config.tools,
         Some(&config.mcp),
+        &config.taste,
+        taste_provider,
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = tools::ToolRegistry::new(middleware);

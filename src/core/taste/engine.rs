@@ -1,5 +1,5 @@
 use crate::config::TasteConfig;
-use crate::core::providers::create_provider;
+use crate::core::providers::Provider;
 use async_trait::async_trait;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -90,12 +90,12 @@ impl TasteEngine for DefaultTasteEngine {
 }
 
 /// Creates a taste engine instance from configuration.
-pub fn create_taste_engine(config: &TasteConfig) -> anyhow::Result<Arc<dyn TasteEngine>> {
-    let provider = create_provider("synthetic", None).map_err(|e| {
-        anyhow::anyhow!("failed to create synthetic provider for taste engine: {e}")
-    })?;
-
-    let critic = LlmCritic::new(Arc::from(provider), "claude-3-haiku-20240307".to_string());
+pub fn create_taste_engine(
+    config: &TasteConfig,
+    provider: Arc<dyn Provider>,
+    model: String,
+) -> anyhow::Result<Arc<dyn TasteEngine>> {
+    let critic = LlmCritic::new(provider, model);
 
     let mut adapters: HashMap<Domain, Arc<dyn DomainAdapter>> = HashMap::new();
     if config.text_enabled {

@@ -107,6 +107,7 @@ pub async fn doctor_channels(config: Arc<Config>) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
     let auth_broker = AuthBroker::load_or_init(config)?;
 
@@ -153,6 +154,19 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
     } else {
         None
     };
+    #[cfg(feature = "taste")]
+    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = if config.taste.enabled
+    {
+        let provider_name = config.default_provider.as_deref().unwrap_or("anthropic");
+        let api_key = auth_broker.resolve_provider_api_key(provider_name);
+        providers::create_provider(provider_name, api_key.as_deref())
+            .ok()
+            .map(|p| Arc::from(p) as Arc<dyn crate::core::providers::Provider>)
+    } else {
+        None
+    };
+    #[cfg(not(feature = "taste"))]
+    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = None;
     let tools = tools::all_tools(
         &security,
         Arc::clone(&mem),
@@ -160,6 +174,8 @@ async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
         &config.browser,
         &config.tools,
         Some(&config.mcp),
+        &config.taste,
+        taste_provider,
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = ToolRegistry::new(middleware);

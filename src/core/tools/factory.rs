@@ -88,6 +88,18 @@ pub fn tool_descriptions(
         ));
     }
 
+    #[cfg(feature = "taste")]
+    {
+        descs.push((
+            "taste_evaluate".to_string(),
+            "Evaluate text or UI artifact aesthetic quality on coherence, hierarchy, and intentionality axes. Returns scores [0.0-1.0] and improvement suggestions.".to_string(),
+        ));
+        descs.push((
+            "taste_compare".to_string(),
+            "Record a preference comparison between two artifacts. Persists to store and updates Bradley-Terry ratings.".to_string(),
+        ));
+    }
+
     append_mcp_tool_descriptions(&mut descs, mcp_config);
 
     descs
@@ -124,6 +136,7 @@ pub(crate) fn append_mcp_tool_descriptions(
 }
 
 /// Create full tool registry including memory tools and optional Composio
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn all_tools(
     security: &Arc<SecurityPolicy>,
     memory: Arc<dyn Memory>,
@@ -131,6 +144,11 @@ pub fn all_tools(
     browser_config: &crate::config::BrowserConfig,
     tools_config: &ToolsConfig,
     mcp_config: Option<&McpConfig>,
+    #[cfg_attr(not(feature = "taste"), allow(unused_variables))]
+    taste_config: &crate::config::TasteConfig,
+    #[cfg_attr(not(feature = "taste"), allow(unused_variables))] taste_provider: Option<
+        Arc<dyn crate::core::providers::Provider>,
+    >,
 ) -> Vec<Box<dyn Tool>> {
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
@@ -190,11 +208,16 @@ pub fn all_tools(
 
     #[cfg(feature = "taste")]
     {
-        if let Ok(engine) =
-            crate::core::taste::create_taste_engine(&crate::config::TasteConfig::default())
+        if taste_config.enabled
+            && let Some(provider) = taste_provider
         {
-            tools.push(Box::new(super::TasteEvaluateTool::new(Arc::clone(&engine))));
-            tools.push(Box::new(super::TasteCompareTool::new(engine)));
+            let model = "claude-sonnet-4-20250514".to_string();
+            if let Ok(engine) =
+                crate::core::taste::create_taste_engine(taste_config, provider, model)
+            {
+                tools.push(Box::new(super::TasteEvaluateTool::new(Arc::clone(&engine))));
+                tools.push(Box::new(super::TasteCompareTool::new(engine)));
+            }
         }
     }
 

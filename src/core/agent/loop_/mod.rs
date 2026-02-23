@@ -66,7 +66,7 @@ pub async fn run(
     let auth_broker = AuthBroker::load_or_init(&config).context("load auth broker")?;
 
     let mem = init_memory(&config, &auth_broker).context("initialize memory backend")?;
-    let registry = init_tools(&config, &security, &mem);
+    let registry = init_tools(&config, &security, &mem, &auth_broker);
     let rate_limiter = Arc::new(EntityRateLimiter::new(
         config.autonomy.max_actions_per_hour,
         config.autonomy.max_actions_per_entity_per_hour,
@@ -146,12 +146,26 @@ fn init_tools(
     config: &Config,
     security: &Arc<SecurityPolicy>,
     mem: &Arc<dyn Memory>,
+    #[cfg_attr(not(feature = "taste"), allow(unused_variables))] auth_broker: &AuthBroker,
 ) -> Arc<ToolRegistry> {
     let composio_key = if config.composio.enabled {
         config.composio.api_key.as_deref()
     } else {
         None
     };
+    #[cfg(feature = "taste")]
+    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = if config.taste.enabled
+    {
+        let provider_name = config.default_provider.as_deref().unwrap_or("anthropic");
+        let api_key = auth_broker.resolve_provider_api_key(provider_name);
+        providers::create_provider(provider_name, api_key.as_deref())
+            .ok()
+            .map(|p| Arc::from(p) as Arc<dyn crate::core::providers::Provider>)
+    } else {
+        None
+    };
+    #[cfg(not(feature = "taste"))]
+    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = None;
     let tools = tools::all_tools(
         security,
         Arc::clone(mem),
@@ -159,6 +173,8 @@ fn init_tools(
         &config.browser,
         &config.tools,
         Some(&config.mcp),
+        &config.taste,
+        taste_provider,
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = ToolRegistry::new(middleware);
