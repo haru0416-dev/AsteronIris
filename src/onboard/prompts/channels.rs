@@ -121,34 +121,7 @@ pub fn setup_channels() -> Result<ChannelsConfig> {
     }
 
     // Summary line
-    let mut active: Vec<&str> = vec!["CLI"];
-    if config.telegram.is_some() {
-        active.push("Telegram");
-    }
-    if config.discord.is_some() {
-        active.push("Discord");
-    }
-    if config.slack.is_some() {
-        active.push("Slack");
-    }
-    if config.imessage.is_some() {
-        active.push("iMessage");
-    }
-    if config.matrix.is_some() {
-        active.push("Matrix");
-    }
-    if config.whatsapp.is_some() {
-        active.push("WhatsApp");
-    }
-    if config.email.is_some() {
-        active.push("Email");
-    }
-    if config.irc.is_some() {
-        active.push("IRC");
-    }
-    if config.webhook.is_some() {
-        active.push("Webhook");
-    }
+    let active = config.active_channel_names();
 
     println!(
         "  {} {}",

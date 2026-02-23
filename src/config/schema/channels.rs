@@ -33,6 +33,35 @@ impl Default for ChannelsConfig {
     }
 }
 
+impl ChannelsConfig {
+    #[must_use]
+    pub fn configured_channel_flags(&self) -> [(&'static str, bool); 9] {
+        [
+            ("Telegram", self.telegram.is_some()),
+            ("Discord", self.discord.is_some()),
+            ("Slack", self.slack.is_some()),
+            ("Webhook", self.webhook.is_some()),
+            ("iMessage", self.imessage.is_some()),
+            ("Matrix", self.matrix.is_some()),
+            ("WhatsApp", self.whatsapp.is_some()),
+            ("Email", self.email.is_some()),
+            ("IRC", self.irc.is_some()),
+        ]
+    }
+
+    #[must_use]
+    pub fn active_channel_names(&self) -> Vec<&'static str> {
+        let mut active = Vec::with_capacity(10);
+        active.push("CLI");
+        for (name, configured) in self.configured_channel_flags() {
+            if configured {
+                active.push(name);
+            }
+        }
+        active
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
     pub bot_token: String,

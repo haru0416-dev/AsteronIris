@@ -56,17 +56,7 @@ pub fn handle_command(command: crate::ChannelCommands, config: &Config) -> Resul
         crate::ChannelCommands::List => {
             println!("{}", t!("channels.list_header"));
             println!("  ✓ {}", t!("channels.cli_always"));
-            for (name, configured) in [
-                ("Telegram", config.channels_config.telegram.is_some()),
-                ("Discord", config.channels_config.discord.is_some()),
-                ("Slack", config.channels_config.slack.is_some()),
-                ("Webhook", config.channels_config.webhook.is_some()),
-                ("iMessage", config.channels_config.imessage.is_some()),
-                ("Matrix", config.channels_config.matrix.is_some()),
-                ("WhatsApp", config.channels_config.whatsapp.is_some()),
-                ("Email", config.channels_config.email.is_some()),
-                ("IRC", config.channels_config.irc.is_some()),
-            ] {
+            for (name, configured) in config.channels_config.configured_channel_flags() {
                 println!("  {} {name}", if configured { "✓" } else { "✗" });
             }
             println!("\n{}", t!("channels.to_start"));
