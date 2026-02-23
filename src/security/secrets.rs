@@ -16,10 +16,6 @@
 //
 // For sovereign users who prefer plaintext, `secrets.encrypt = false` disables this.
 //
-// Migration: values with the legacy `enc:` prefix (XOR cipher) are decrypted
-// using the old algorithm for backward compatibility. New encryptions always
-// produce `enc2:` (ChaCha20-Poly1305).
-
 use anyhow::{Context, Result};
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
 use chacha20poly1305::{AeadCore, ChaCha20Poly1305, Key, Nonce};
@@ -75,51 +71,13 @@ impl SecretStore {
 
     /// Decrypt a secret.
     /// - `enc2:` prefix → ChaCha20-Poly1305 (current format)
-    /// - `enc:` prefix → legacy XOR cipher (backward compatibility for migration)
     /// - No prefix → returned as-is (plaintext config)
-    ///
-    /// **Warning**: Legacy `enc:` values are insecure. Use `decrypt_and_migrate` to
-    /// automatically upgrade them to the secure `enc2:` format.
     pub fn decrypt(&self, value: &str) -> Result<String> {
         if let Some(hex_str) = value.strip_prefix("enc2:") {
             self.decrypt_chacha20(hex_str)
-        } else if let Some(hex_str) = value.strip_prefix("enc:") {
-            self.decrypt_legacy_xor(hex_str)
         } else {
             Ok(value.to_string())
         }
-    }
-
-    /// Decrypt a secret and return a migrated `enc2:` value if the input used legacy `enc:` format.
-    ///
-    /// Returns `(plaintext, Some(new_enc2_value))` if migration occurred, or
-    /// `(plaintext, None)` if no migration was needed.
-    ///
-    /// This allows callers to persist the upgraded value back to config.
-    pub fn decrypt_and_migrate(&self, value: &str) -> Result<(String, Option<String>)> {
-        if let Some(hex_str) = value.strip_prefix("enc2:") {
-            // Already using secure format — no migration needed
-            let plaintext = self.decrypt_chacha20(hex_str)?;
-            Ok((plaintext, None))
-        } else if let Some(hex_str) = value.strip_prefix("enc:") {
-            // Legacy XOR cipher — decrypt and re-encrypt with ChaCha20-Poly1305
-            tracing::warn!(
-                "Decrypting legacy XOR-encrypted secret (enc: prefix). \
-                 This format is insecure and will be removed in a future release. \
-                 The secret will be automatically migrated to enc2: (ChaCha20-Poly1305)."
-            );
-            let plaintext = self.decrypt_legacy_xor(hex_str)?;
-            let migrated = self.encrypt(&plaintext)?;
-            Ok((plaintext, Some(migrated)))
-        } else {
-            // Plaintext — no migration needed
-            Ok((value.to_string(), None))
-        }
-    }
-
-    /// Check if a value uses the legacy `enc:` format that should be migrated.
-    pub fn needs_migration(value: &str) -> bool {
-        value.starts_with("enc:")
     }
 
     /// Decrypt using ChaCha20-Poly1305 (current secure format).
@@ -145,23 +103,7 @@ impl SecretStore {
             .context("Decrypted secret is not valid UTF-8 — corrupt data")
     }
 
-    /// Decrypt using legacy XOR cipher (insecure, for backward compatibility only).
-    fn decrypt_legacy_xor(&self, hex_str: &str) -> Result<String> {
-        let ciphertext = hex_decode(hex_str)
-            .context("Failed to decode legacy encrypted secret (corrupt hex)")?;
-        let key = self.load_or_create_key()?;
-        let plaintext_bytes = xor_cipher(&ciphertext, &key);
-        String::from_utf8(plaintext_bytes)
-            .context("Decrypted legacy secret is not valid UTF-8 — wrong key or corrupt data")
-    }
-
-    /// Check if a value is already encrypted (current or legacy format).
     pub fn is_encrypted(value: &str) -> bool {
-        value.starts_with("enc2:") || value.starts_with("enc:")
-    }
-
-    /// Check if a value uses the secure `enc2:` format.
-    pub fn is_secure_encrypted(value: &str) -> bool {
         value.starts_with("enc2:")
     }
 
@@ -224,17 +166,6 @@ impl SecretStore {
             Ok(key)
         }
     }
-}
-
-/// XOR cipher with repeating key. Same function for encrypt and decrypt.
-fn xor_cipher(data: &[u8], key: &[u8]) -> Vec<u8> {
-    if key.is_empty() {
-        return data.to_vec();
-    }
-    data.iter()
-        .enumerate()
-        .map(|(i, &b)| b ^ key[i % key.len()])
-        .collect()
 }
 
 /// Generate a random 256-bit key using the OS CSPRNG.

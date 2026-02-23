@@ -68,10 +68,10 @@ pub(super) fn decrypt_secret_option(
     }
 
     let needs_encrypt_persist = encrypt_enabled && !SecretStore::is_encrypted(trimmed);
-    let (decrypted, migrated) = store.decrypt_and_migrate(trimmed)?;
+    let decrypted = store.decrypt(trimmed)?;
     *value = Some(decrypted);
 
-    Ok(needs_encrypt_persist || migrated.is_some())
+    Ok(needs_encrypt_persist)
 }
 
 pub(super) fn encrypt_secret_option(value: &mut Option<String>, store: &SecretStore) -> Result<()> {

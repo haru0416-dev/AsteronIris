@@ -3,12 +3,9 @@ use anyhow::{Result, bail};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 
-pub const STATE_HEADER_SCHEMA_VERSION: u8 = 1;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StateHeaderV1 {
-    pub schema_version: u8,
+pub struct StateHeader {
     pub identity_principles_hash: String,
     pub safety_posture: String,
     pub current_objective: String,
@@ -19,16 +16,8 @@ pub struct StateHeaderV1 {
     pub last_updated_at: String,
 }
 
-impl StateHeaderV1 {
+impl StateHeader {
     pub fn validate(&self, persona: &PersonaConfig) -> Result<()> {
-        if self.schema_version != STATE_HEADER_SCHEMA_VERSION {
-            bail!(
-                "invalid schema_version: expected {}, got {}",
-                STATE_HEADER_SCHEMA_VERSION,
-                self.schema_version
-            );
-        }
-
         validate_non_empty("identity_principles_hash", &self.identity_principles_hash)?;
         validate_non_empty("safety_posture", &self.safety_posture)?;
         validate_text_len(
@@ -75,9 +64,6 @@ impl StateHeaderV1 {
     ) -> Result<()> {
         candidate.validate(persona)?;
 
-        if candidate.schema_version != previous.schema_version {
-            bail!("immutable field changed: schema_version");
-        }
         if candidate.identity_principles_hash != previous.identity_principles_hash {
             bail!("immutable field changed: identity_principles_hash");
         }
@@ -130,9 +116,8 @@ fn validate_items(
 mod tests {
     use super::*;
 
-    fn sample_state_header() -> StateHeaderV1 {
-        StateHeaderV1 {
-            schema_version: 1,
+    fn sample_state_header() -> StateHeader {
+        StateHeader {
             identity_principles_hash: "abc123".into(),
             safety_posture: "strict".into(),
             current_objective: "Ship contracts for persona loop".into(),
@@ -148,7 +133,6 @@ mod tests {
     fn state_header_valid_v1_payload_parse() {
         let payload = r#"
 {
-  "schema_version": 1,
   "identity_principles_hash": "abc123",
   "safety_posture": "strict",
   "current_objective": "Ship contracts for persona loop",
@@ -160,7 +144,7 @@ mod tests {
 }
 "#;
 
-        let parsed: StateHeaderV1 = serde_json::from_str(payload).unwrap();
+        let parsed: StateHeader = serde_json::from_str(payload).unwrap();
         parsed.validate(&PersonaConfig::default()).unwrap();
     }
 
@@ -168,7 +152,6 @@ mod tests {
     fn state_header_rejects_invalid() {
         let missing_required = r#"
 {
-  "schema_version": 1,
   "identity_principles_hash": "abc123",
   "safety_posture": "strict",
   "open_loops": [],
@@ -179,19 +162,11 @@ mod tests {
 }
 "#;
 
-        let err = serde_json::from_str::<StateHeaderV1>(missing_required).unwrap_err();
+        let err = serde_json::from_str::<StateHeader>(missing_required).unwrap_err();
         assert!(
             err.to_string()
                 .contains("missing field `current_objective`"),
             "unexpected serde error: {err}"
-        );
-
-        let mut invalid = sample_state_header();
-        invalid.schema_version = 2;
-        let validate_err = invalid.validate(&PersonaConfig::default()).unwrap_err();
-        assert_eq!(
-            validate_err.to_string(),
-            "invalid schema_version: expected 1, got 2"
         );
     }
 
@@ -201,7 +176,7 @@ mod tests {
         let mut candidate = previous.clone();
         candidate.identity_principles_hash = "changed".into();
 
-        let err = StateHeaderV1::validate_writeback_candidate(
+        let err = StateHeader::validate_writeback_candidate(
             &previous,
             &candidate,
             &PersonaConfig::default(),

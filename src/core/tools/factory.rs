@@ -163,7 +163,7 @@ pub fn all_tools(
     }
 
     if browser_config.enabled {
-        // Add legacy browser_open tool for simple URL opening
+        // Simple URL opener (opens in system browser, no DOM automation)
         tools.push(Box::new(BrowserOpenTool::new(
             browser_config.allowed_domains.clone(),
         )));

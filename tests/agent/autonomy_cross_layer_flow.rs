@@ -10,7 +10,7 @@ use asteroniris::core::agent::loop_::{
 use asteroniris::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
-use asteroniris::core::persona::state_header::StateHeaderV1;
+use asteroniris::core::persona::state_header::StateHeader;
 use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use asteroniris::core::providers::Provider;
 use asteroniris::core::tools::{ActionIntent, ActionOperator, NoopOperator};
@@ -85,9 +85,8 @@ impl Observer for LifecycleCounter {
     }
 }
 
-fn seeded_state() -> StateHeaderV1 {
-    StateHeaderV1 {
-        schema_version: 1,
+fn seeded_state() -> StateHeader {
+    StateHeader {
         identity_principles_hash: "identity-v1-abcd1234".to_string(),
         safety_posture: "strict".to_string(),
         current_objective: "Close autonomy loop deterministically".to_string(),
@@ -136,7 +135,6 @@ async fn autonomy_cycle_reflect_queue_verify_and_intent_seam_stays_bounded() {
     let answer_provider = SequenceProvider::new(vec![Ok("bounded-autonomy-answer".to_string())]);
     let reflect_provider = SequenceProvider::new(vec![Ok(serde_json::json!({
         "state_header": {
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Execute bounded autonomy flow",

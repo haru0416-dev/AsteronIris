@@ -435,7 +435,7 @@ impl LanceDbMemory {
             }
         };
 
-        let projection_requirement = match mode {
+        let retrieval_docs_requirement = match mode {
             ForgetMode::Hard => ForgetArtifactRequirement::MustBeAbsent,
             ForgetMode::Soft | ForgetMode::Tombstone => {
                 ForgetArtifactRequirement::MustBeNonRetrievable
@@ -446,12 +446,7 @@ impl LanceDbMemory {
             ForgetArtifactCheck::new(ForgetArtifact::Slot, slot_requirement, slot_observed),
             ForgetArtifactCheck::new(
                 ForgetArtifact::RetrievalDocs,
-                ForgetArtifactRequirement::NotGoverned,
-                ForgetArtifactObservation::Absent,
-            ),
-            ForgetArtifactCheck::new(
-                ForgetArtifact::ProjectionDocs,
-                projection_requirement,
+                retrieval_docs_requirement,
                 projection_observed,
             ),
             ForgetArtifactCheck::new(

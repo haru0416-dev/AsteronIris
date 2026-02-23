@@ -148,10 +148,7 @@ async fn memory_throughput_ops_per_sec() {
     let mem: Arc<dyn Memory> = if backend == "lancedb" {
         Arc::new(LanceDbMemory::with_embedder(tmp.path(), Arc::clone(&embedder), 0.7, 0.3).unwrap())
     } else {
-        Arc::new(
-            SqliteMemory::with_embedder(tmp.path(), Arc::clone(&embedder), 0.7, 0.3, 10_000)
-                .unwrap(),
-        )
+        Arc::new(SqliteMemory::with_embedder(tmp.path(), Arc::clone(&embedder), 10_000).unwrap())
     };
 
     let store_sem = Arc::new(Semaphore::new(concurrency));
@@ -239,10 +236,7 @@ async fn memory_throughput_churn_bounded_recall() {
     let mem: Arc<dyn Memory> = if backend == "lancedb" {
         Arc::new(LanceDbMemory::with_embedder(tmp.path(), Arc::clone(&embedder), 0.7, 0.3).unwrap())
     } else {
-        Arc::new(
-            SqliteMemory::with_embedder(tmp.path(), Arc::clone(&embedder), 0.7, 0.3, 10_000)
-                .unwrap(),
-        )
+        Arc::new(SqliteMemory::with_embedder(tmp.path(), Arc::clone(&embedder), 10_000).unwrap())
     };
 
     let churn_sem = Arc::new(Semaphore::new(concurrency));

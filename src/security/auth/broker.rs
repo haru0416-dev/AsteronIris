@@ -7,7 +7,7 @@ use anyhow::Result;
 #[derive(Debug, Clone)]
 pub struct AuthBroker {
     profile_store: AuthProfileStore,
-    legacy_api_key: Option<String>,
+    config_api_key: Option<String>,
 }
 
 impl AuthBroker {
@@ -16,7 +16,7 @@ impl AuthBroker {
 
         Ok(Self {
             profile_store,
-            legacy_api_key: config
+            config_api_key: config
                 .api_key
                 .as_deref()
                 .map(str::trim)
@@ -28,7 +28,7 @@ impl AuthBroker {
     pub fn resolve_provider_api_key(&self, provider: &str) -> Option<String> {
         self.profile_store
             .active_api_key_for_provider(provider)
-            .or_else(|| self.legacy_api_key.clone())
+            .or_else(|| self.config_api_key.clone())
     }
 
     pub fn resolve_memory_api_key(&self, memory: &MemoryConfig) -> Option<String> {

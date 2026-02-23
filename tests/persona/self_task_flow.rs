@@ -6,7 +6,7 @@ use asteroniris::core::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration,
 };
 use asteroniris::core::memory::{Memory, SqliteMemory};
-use asteroniris::core::persona::state_header::StateHeaderV1;
+use asteroniris::core::persona::state_header::StateHeader;
 use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use asteroniris::core::providers::Provider;
 use asteroniris::platform::cron::{self, CronJobKind, CronJobOrigin};
@@ -62,9 +62,8 @@ fn test_config(workspace_dir: &std::path::Path) -> Config {
     config
 }
 
-fn seeded_state() -> StateHeaderV1 {
-    StateHeaderV1 {
-        schema_version: 1,
+fn seeded_state() -> StateHeader {
+    StateHeader {
         identity_principles_hash: "identity-v1-abcd1234".to_string(),
         safety_posture: "strict".to_string(),
         current_objective: "Close autonomy loop deterministically".to_string(),
@@ -98,7 +97,6 @@ async fn persona_reflect_self_task_flows_through_scheduler_planner_route() {
     let answer_provider = SequenceProvider::new(vec![Ok("bounded-autonomy-answer".to_string())]);
     let reflect_provider = SequenceProvider::new(vec![Ok(serde_json::json!({
         "state_header": {
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Execute bounded autonomy flow",
@@ -190,7 +188,6 @@ async fn persona_reflect_self_task_enqueue_rejects_payload_above_pending_cap() {
     let answer_provider = SequenceProvider::new(vec![Ok("bounded-autonomy-answer".to_string())]);
     let reflect_provider = SequenceProvider::new(vec![Ok(serde_json::json!({
         "state_header": {
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Execute bounded autonomy flow",
@@ -251,7 +248,6 @@ async fn persona_reflect_rejects_top_level_source_identity_injection() {
         "source_kind": "discord",
         "source_ref": "channel:discord:attack",
         "state_header": {
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Attempt identity overwrite",
@@ -317,7 +313,6 @@ async fn persona_reflect_rejects_top_level_source_kind_only_injection() {
     let reflect_provider = SequenceProvider::new(vec![Ok(serde_json::json!({
         "source_kind": "slack",
         "state_header": {
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Attempt source kind overwrite",
@@ -383,7 +378,6 @@ async fn persona_reflect_rejects_top_level_source_ref_only_injection() {
     let reflect_provider = SequenceProvider::new(vec![Ok(serde_json::json!({
         "source_ref": "channel:discord:attack",
         "state_header": {
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Attempt source ref overwrite",
@@ -458,7 +452,6 @@ async fn persona_reflect_enqueues_bounded_self_tasks_within_pending_cap() {
     let answer_provider = SequenceProvider::new(vec![Ok("bounded-autonomy-answer".to_string())]);
     let reflect_provider = SequenceProvider::new(vec![Ok(serde_json::json!({
         "state_header": {
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Execute bounded autonomy flow",

@@ -73,15 +73,6 @@ impl SqliteMemory {
         .context("insert deletion ledger entry")?;
 
         let unit_id = format!("{entity_id}:{slot_key}");
-        let projection_content: Option<String> = conn
-            .query_row(
-                "SELECT content FROM retrieval_units
-                 WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0",
-                params![Self::PROJECTION_ENTITY_ID, slot_key],
-                |row| row.get(0),
-            )
-            .ok();
-        let projection_cache_hash = projection_content.as_deref().map(Self::content_hash);
         let applied = match mode {
             ForgetMode::Soft => {
                 let affected_slot = conn
@@ -108,17 +99,6 @@ impl SqliteMemory {
                     "DELETE FROM retrieval_units WHERE unit_id = ?1",
                     params![unit_id],
                 )?;
-                let _ = conn.execute(
-                    "DELETE FROM retrieval_units
-                     WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0",
-                    params![Self::PROJECTION_ENTITY_ID, slot_key],
-                )?;
-                if let Some(cache_hash) = &projection_cache_hash {
-                    let _ = conn.execute(
-                        "DELETE FROM embedding_cache WHERE content_hash = ?1",
-                        params![cache_hash],
-                    )?;
-                }
                 affected_slot > 0
             }
             ForgetMode::Tombstone => {
@@ -143,25 +123,13 @@ impl SqliteMemory {
                     "DELETE FROM retrieval_units WHERE unit_id = ?1",
                     params![unit_id],
                 )?;
-                let _ = conn.execute(
-                    "DELETE FROM retrieval_units
-                     WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0",
-                    params![Self::PROJECTION_ENTITY_ID, slot_key],
-                )?;
-                if let Some(cache_hash) = &projection_cache_hash {
-                    let _ = conn.execute(
-                        "DELETE FROM embedding_cache WHERE content_hash = ?1",
-                        params![cache_hash],
-                    )?;
-                }
                 true
             }
         };
 
         let slot_observed = Self::observe_slot_artifact(&conn, entity_id, slot_key);
         let retrieval_observed = Self::observe_retrieval_artifact(&conn, &unit_id);
-        let projection_observed = Self::observe_projection_artifact(&conn, slot_key)?;
-        let cache_observed = Self::observe_cache_artifact(&conn, projection_cache_hash.as_deref())?;
+        let cache_observed = ForgetArtifactObservation::Absent;
         let ledger_observed =
             Self::observe_ledger_artifact(&conn, entity_id, slot_key, phase, reason, &now)?;
 
@@ -175,11 +143,6 @@ impl SqliteMemory {
                 ForgetArtifact::RetrievalUnits,
                 mode.artifact_requirement(ForgetArtifact::RetrievalUnits),
                 retrieval_observed,
-            ),
-            ForgetArtifactCheck::new(
-                ForgetArtifact::ProjectionDocs,
-                mode.artifact_requirement(ForgetArtifact::ProjectionDocs),
-                projection_observed,
             ),
             ForgetArtifactCheck::new(
                 ForgetArtifact::Caches,
@@ -240,54 +203,6 @@ impl SqliteMemory {
             Some("secret") => ForgetArtifactObservation::PresentNonRetrievable,
             Some(_) => ForgetArtifactObservation::PresentRetrievable,
         }
-    }
-
-    fn observe_projection_artifact(
-        conn: &rusqlite::Connection,
-        slot_key: &str,
-    ) -> anyhow::Result<ForgetArtifactObservation> {
-        let exists = conn
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1
-                    FROM retrieval_units
-                    WHERE entity_id = ?1 AND slot_key = ?2 AND chunk_index = 0
-                )",
-                params![Self::PROJECTION_ENTITY_ID, slot_key],
-                |row| row.get::<_, i64>(0),
-            )
-            .context("check projection entry existence")?
-            == 1;
-
-        Ok(if exists {
-            ForgetArtifactObservation::PresentRetrievable
-        } else {
-            ForgetArtifactObservation::Absent
-        })
-    }
-
-    fn observe_cache_artifact(
-        conn: &rusqlite::Connection,
-        cache_hash: Option<&str>,
-    ) -> anyhow::Result<ForgetArtifactObservation> {
-        let Some(cache_hash) = cache_hash else {
-            return Ok(ForgetArtifactObservation::Absent);
-        };
-
-        let exists = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM embedding_cache WHERE content_hash = ?1)",
-                params![cache_hash],
-                |row| row.get::<_, i64>(0),
-            )
-            .context("check embedding cache entry")?
-            == 1;
-
-        Ok(if exists {
-            ForgetArtifactObservation::PresentRetrievable
-        } else {
-            ForgetArtifactObservation::Absent
-        })
     }
 
     fn observe_ledger_artifact(

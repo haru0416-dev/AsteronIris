@@ -547,18 +547,13 @@ impl MarkdownMemory {
                 ForgetArtifactRequirement::MustBeNonRetrievable
             }
         };
-        let projection_requirement = slot_requirement;
+        let retrieval_docs_requirement = slot_requirement;
 
         let artifact_checks = vec![
             ForgetArtifactCheck::new(ForgetArtifact::Slot, slot_requirement, slot_observed),
             ForgetArtifactCheck::new(
                 ForgetArtifact::RetrievalDocs,
-                ForgetArtifactRequirement::NotGoverned,
-                ForgetArtifactObservation::Absent,
-            ),
-            ForgetArtifactCheck::new(
-                ForgetArtifact::ProjectionDocs,
-                projection_requirement,
+                retrieval_docs_requirement,
                 projection_observed,
             ),
             ForgetArtifactCheck::new(

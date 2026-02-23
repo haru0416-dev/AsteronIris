@@ -24,14 +24,8 @@ pub fn create_memory(
                     config.embedding_dimensions,
                 ));
 
-            #[allow(clippy::cast_possible_truncation)]
-            let mem = SqliteMemory::with_embedder(
-                workspace_dir,
-                embedder,
-                config.vector_weight as f32,
-                config.keyword_weight as f32,
-                config.embedding_cache_size,
-            )?;
+            let mem =
+                SqliteMemory::with_embedder(workspace_dir, embedder, config.embedding_cache_size)?;
             Box::new(mem)
         }
         #[cfg(feature = "vector-search")]
@@ -55,8 +49,9 @@ pub fn create_memory(
         }
         "markdown" | "none" => Box::new(MarkdownMemory::new(workspace_dir)),
         other => {
-            tracing::warn!("Unknown memory backend '{other}', falling back to markdown");
-            Box::new(MarkdownMemory::new(workspace_dir))
+            anyhow::bail!(
+                "Unknown memory backend '{other}'. Supported: sqlite, lancedb, markdown, none"
+            );
         }
     };
 
@@ -116,14 +111,19 @@ mod tests {
     }
 
     #[test]
-    fn factory_unknown_falls_back_to_markdown() {
+    fn factory_unknown_backend_is_error() {
         let tmp = TempDir::new().unwrap();
         let cfg = MemoryConfig {
             backend: "redis".into(),
             ..MemoryConfig::default()
         };
-        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
-        assert_eq!(mem.name(), "markdown");
+        match create_memory(&cfg, tmp.path(), None) {
+            Err(e) => assert!(
+                e.to_string().contains("Unknown memory backend"),
+                "expected unknown backend error, got: {e}"
+            ),
+            Ok(_) => panic!("expected error for unknown backend"),
+        }
     }
 
     #[test]

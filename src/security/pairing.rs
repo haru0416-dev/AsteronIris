@@ -43,10 +43,6 @@ impl PairingGuard {
     ///
     /// If `require_pairing` is true and no tokens exist yet, a fresh
     /// pairing code is generated and returned via `pairing_code()`.
-    ///
-    /// Existing tokens are accepted in both forms:
-    /// - Plaintext (`zc_...`): hashed on load for backward compatibility
-    /// - Already hashed (64-char hex): stored as-is
     pub fn new(
         require_pairing: bool,
         existing_tokens: &[String],
@@ -54,19 +50,8 @@ impl PairingGuard {
     ) -> Self {
         let token_ttl = Duration::from_secs(token_ttl_secs.unwrap_or(DEFAULT_TOKEN_TTL_SECS));
         let now = Instant::now();
-        let mut tokens: HashMap<String, Instant> = existing_tokens
-            .iter()
-            .map(|t| {
-                (
-                    if is_token_hash(t) {
-                        t.clone()
-                    } else {
-                        hash_token(t)
-                    },
-                    now,
-                )
-            })
-            .collect();
+        let mut tokens: HashMap<String, Instant> =
+            existing_tokens.iter().map(|t| (t.clone(), now)).collect();
         retain_non_expired_tokens(&mut tokens, now, token_ttl);
         let code = if require_pairing && tokens.is_empty() {
             Some(generate_code())
@@ -245,14 +230,8 @@ fn generate_token() -> String {
 }
 
 /// SHA-256 hash a bearer token for storage. Returns lowercase hex.
-fn hash_token(token: &str) -> String {
+pub fn hash_token(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
-}
-
-/// Check if a stored value looks like a SHA-256 hash (64 hex chars)
-/// rather than a plaintext token.
-fn is_token_hash(value: &str) -> bool {
-    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Constant-time string comparison to prevent timing attacks.
@@ -297,7 +276,7 @@ mod tests {
 
     #[test]
     fn new_guard_no_code_when_tokens_exist() {
-        let guard = PairingGuard::new(true, &["zc_existing".into()], None);
+        let guard = PairingGuard::new(true, &[hash_token("zc_existing")], None);
         assert!(guard.pairing_code().is_none());
         assert!(guard.is_paired());
     }
@@ -335,8 +314,7 @@ mod tests {
 
     #[test]
     fn is_authenticated_with_valid_token() {
-        // Pass plaintext token — PairingGuard hashes it on load
-        let guard = PairingGuard::new(true, &["zc_valid".into()], None);
+        let guard = PairingGuard::new(true, &[hash_token("zc_valid")], None);
         assert!(guard.is_authenticated("zc_valid"));
     }
 
@@ -350,7 +328,7 @@ mod tests {
 
     #[test]
     fn is_authenticated_with_invalid_token() {
-        let guard = PairingGuard::new(true, &["zc_valid".into()], None);
+        let guard = PairingGuard::new(true, &[hash_token("zc_valid")], None);
         assert!(!guard.is_authenticated("zc_invalid"));
     }
 
@@ -363,7 +341,7 @@ mod tests {
 
     #[test]
     fn tokens_returns_hashes() {
-        let guard = PairingGuard::new(true, &["zc_a".into(), "zc_b".into()], None);
+        let guard = PairingGuard::new(true, &[hash_token("zc_a"), hash_token("zc_b")], None);
         let tokens = guard.tokens();
         assert_eq!(tokens.len(), 2);
         // Tokens should be stored as 64-char hex hashes, not plaintext
@@ -385,7 +363,7 @@ mod tests {
 
     #[test]
     fn is_authenticated_rejects_expired_token_and_cleans_it_up() {
-        let guard = PairingGuard::new(true, &["zc_valid".into()], Some(0));
+        let guard = PairingGuard::new(true, &[hash_token("zc_valid")], Some(0));
         assert!(!guard.is_authenticated("zc_valid"));
         assert!(guard.tokens().is_empty());
         assert!(!guard.is_paired());
@@ -393,13 +371,13 @@ mod tests {
 
     #[test]
     fn is_authenticated_accepts_non_expired_token() {
-        let guard = PairingGuard::new(true, &["zc_valid".into()], Some(60));
+        let guard = PairingGuard::new(true, &[hash_token("zc_valid")], Some(60));
         assert!(guard.is_authenticated("zc_valid"));
     }
 
     #[test]
     fn revoke_all_clears_all_paired_tokens() {
-        let guard = PairingGuard::new(true, &["zc_a".into(), "zc_b".into()], None);
+        let guard = PairingGuard::new(true, &[hash_token("zc_a"), hash_token("zc_b")], None);
         guard.revoke_all();
         assert!(guard.tokens().is_empty());
         assert!(!guard.is_paired());
@@ -422,14 +400,6 @@ mod tests {
     #[test]
     fn hash_token_differs_for_different_inputs() {
         assert_ne!(hash_token("zc_a"), hash_token("zc_b"));
-    }
-
-    #[test]
-    fn is_token_hash_detects_hash_vs_plaintext() {
-        assert!(is_token_hash(&hash_token("zc_test")));
-        assert!(!is_token_hash("zc_test_token"));
-        assert!(!is_token_hash("too_short"));
-        assert!(!is_token_hash(""));
     }
 
     // ── is_public_bind ───────────────────────────────────────

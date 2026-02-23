@@ -1,8 +1,6 @@
 use super::SqliteMemory;
 use anyhow::Context;
-use chrono::Local;
-use rusqlite::{Connection, params};
-
+use rusqlite::Connection;
 impl SqliteMemory {
     #[allow(clippy::too_many_lines)]
     pub(super) fn init_schema(conn: &Connection) -> anyhow::Result<()> {
@@ -17,7 +15,6 @@ impl SqliteMemory {
             CREATE INDEX IF NOT EXISTS idx_cache_accessed ON embedding_cache(accessed_at);",
         )
         .context("initialize core memory schema")?;
-
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS memory_events (
                 event_id TEXT PRIMARY KEY,
@@ -43,7 +40,11 @@ impl SqliteMemory {
             );
             CREATE INDEX IF NOT EXISTS idx_memory_events_entity_slot
                 ON memory_events(entity_id, slot_key, occurred_at DESC);
-
+            CREATE INDEX IF NOT EXISTS idx_memory_events_entity_layer
+                ON memory_events(entity_id, layer, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_memory_events_retention_expires
+                ON memory_events(retention_expires_at)
+                WHERE retention_expires_at IS NOT NULL;
             CREATE TABLE IF NOT EXISTS belief_slots (
                 entity_id TEXT NOT NULL,
                 slot_key TEXT NOT NULL,
@@ -57,7 +58,6 @@ impl SqliteMemory {
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(entity_id, slot_key)
             );
-
             CREATE TABLE IF NOT EXISTS retrieval_units (
                 unit_id             TEXT PRIMARY KEY,
                 entity_id           TEXT NOT NULL,
@@ -69,7 +69,6 @@ impl SqliteMemory {
                 chunk_index         INTEGER,
                 source_uri          TEXT,
                 source_kind         TEXT,
-
                 recency_score       REAL NOT NULL DEFAULT 1.0,
                 importance          REAL NOT NULL DEFAULT 0.5,
                 reliability         REAL NOT NULL DEFAULT 0.8,
@@ -79,7 +78,6 @@ impl SqliteMemory {
                 embedding           BLOB,
                 embedding_model     TEXT,
                 embedding_dim       INTEGER,
-
                 layer               TEXT NOT NULL DEFAULT 'working',
                 provenance_source_class TEXT,
                 provenance_reference    TEXT,
@@ -91,11 +89,9 @@ impl SqliteMemory {
                 updated_at          TEXT NOT NULL,
                 UNIQUE(entity_id, slot_key, chunk_index)
             );
-
             CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts USING fts5(
-                slot_key, content, content=retrieval_units, content_rowid=rowid
+                slot_key, content, content=retrieval_units, content_rowid=rowid, tokenize='trigram'
             );
-
             CREATE TRIGGER IF NOT EXISTS retrieval_units_ai AFTER INSERT ON retrieval_units BEGIN
                 INSERT INTO retrieval_fts(rowid, slot_key, content)
                 VALUES (new.rowid, new.slot_key, new.content);
@@ -110,7 +106,6 @@ impl SqliteMemory {
                 INSERT INTO retrieval_fts(rowid, slot_key, content)
                 VALUES (new.rowid, new.slot_key, new.content);
             END;
-
             CREATE INDEX IF NOT EXISTS idx_retrieval_units_entity ON retrieval_units(entity_id);
             CREATE INDEX IF NOT EXISTS idx_retrieval_units_entity_slot ON retrieval_units(entity_id, slot_key);
             CREATE INDEX IF NOT EXISTS idx_retrieval_units_signal_tier ON retrieval_units(signal_tier);
@@ -129,772 +124,20 @@ impl SqliteMemory {
             );",
         )
         .context("initialize event schema tables")?;
-        Self::run_schema_migrations(conn)?;
         Ok(())
     }
-
-    #[allow(clippy::too_many_lines)]
-    fn run_schema_migrations(conn: &Connection) -> anyhow::Result<()> {
-        let version_table_exists = Self::table_exists(conn, "memory_schema_version")?;
-        let memory_event_columns = Self::table_columns(conn, "memory_events")?;
-        let memories_exists = Self::table_exists(conn, "memories")?;
-        let retrieval_docs_exists = Self::table_exists(conn, "retrieval_docs")?;
-        let memories_columns = Self::table_columns(conn, "memories")?;
-        let retrieval_doc_columns = Self::table_columns(conn, "retrieval_docs")?;
-        let retrieval_units_exists = Self::table_exists(conn, "retrieval_units")?;
-        let retrieval_units_columns = if retrieval_units_exists {
-            Self::table_columns(conn, "retrieval_units")?
-        } else {
-            Vec::new()
-        };
-        let pragma_user_version = Self::get_user_version(conn)?;
-
-        let has_all_v2_columns = Self::MEMORY_EVENTS_V2_COLUMNS
-            .iter()
-            .all(|column| memory_event_columns.iter().any(|entry| entry == *column));
-        let has_any_v2_columns = Self::MEMORY_EVENTS_V2_COLUMNS
-            .iter()
-            .any(|column| memory_event_columns.iter().any(|entry| entry == *column));
-        let has_all_events_v3_columns = Self::MEMORY_EVENTS_V3_COLUMNS
-            .iter()
-            .all(|column| memory_event_columns.iter().any(|entry| entry == *column));
-        let has_any_events_v3_columns = Self::MEMORY_EVENTS_V3_COLUMNS
-            .iter()
-            .any(|column| memory_event_columns.iter().any(|entry| entry == *column));
-        let has_all_memories_v3_columns = Self::MEMORIES_V3_COLUMNS
-            .iter()
-            .all(|column| memories_columns.iter().any(|entry| entry == *column));
-        let has_any_memories_v3_columns = Self::MEMORIES_V3_COLUMNS
-            .iter()
-            .any(|column| memories_columns.iter().any(|entry| entry == *column));
-        let has_all_retrieval_v3_columns = Self::RETRIEVAL_DOCS_V3_COLUMNS
-            .iter()
-            .all(|column| retrieval_doc_columns.iter().any(|entry| entry == *column));
-        let has_any_retrieval_v3_columns = Self::RETRIEVAL_DOCS_V3_COLUMNS
-            .iter()
-            .any(|column| retrieval_doc_columns.iter().any(|entry| entry == *column));
-        let has_all_events_v4_columns = Self::MEMORY_EVENTS_V4_COLUMNS
-            .iter()
-            .all(|column| memory_event_columns.iter().any(|entry| entry == *column));
-        let has_any_events_v4_columns = Self::MEMORY_EVENTS_V4_COLUMNS
-            .iter()
-            .any(|column| memory_event_columns.iter().any(|entry| entry == *column));
-        let has_all_retrieval_units_v4_columns = Self::RETRIEVAL_UNITS_V4_COLUMNS
-            .iter()
-            .all(|column| retrieval_units_columns.iter().any(|entry| entry == *column));
-        let has_v5_pruned_legacy_tables = !memories_exists && !retrieval_docs_exists;
-
-        if !version_table_exists {
-            if has_any_v2_columns && !has_all_v2_columns {
-                anyhow::bail!(
-                    "sqlite schema inconsistent: memory_events has partial v2 columns without memory_schema_version"
-                );
-            }
-
-            if pragma_user_version > Self::MEMORY_SCHEMA_V5 {
-                anyhow::bail!(
-                    "sqlite schema version unsupported: user_version={pragma_user_version}"
-                );
-            }
-
-            if has_any_events_v3_columns != has_all_events_v3_columns {
-                anyhow::bail!(
-                    "sqlite schema inconsistent: memory_events has partial v3 retention columns without memory_schema_version"
-                );
-            }
-            if has_any_memories_v3_columns != has_all_memories_v3_columns {
-                anyhow::bail!(
-                    "sqlite schema inconsistent: memories has partial v3 metadata columns without memory_schema_version"
-                );
-            }
-            if has_any_retrieval_v3_columns != has_all_retrieval_v3_columns {
-                anyhow::bail!(
-                    "sqlite schema inconsistent: retrieval_docs has partial v3 metadata columns without memory_schema_version"
-                );
-            }
-            if has_any_events_v4_columns != has_all_events_v4_columns {
-                anyhow::bail!(
-                    "sqlite schema inconsistent: memory_events has partial v4 columns without memory_schema_version"
-                );
-            }
-
-            Self::ensure_schema_version_table(conn)?;
-            match pragma_user_version {
-                0 => {
-                    if retrieval_units_exists
-                        && has_all_events_v4_columns
-                        && has_v5_pruned_legacy_tables
-                    {
-                        Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-                    } else if has_all_v2_columns
-                        && has_all_events_v3_columns
-                        && has_all_memories_v3_columns
-                        && has_all_retrieval_v3_columns
-                    {
-                        Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
-                    } else if has_all_v2_columns {
-                        Self::migrate_v2_to_v3(conn)?;
-                        Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
-                    } else {
-                        Self::migrate_v1_to_v2(conn)?;
-                        Self::migrate_v2_to_v3(conn)?;
-                        Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
-                    }
-                    Self::migrate_v3_to_v4(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V4)?;
-                    Self::migrate_v4_to_v5(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-                }
-                Self::MEMORY_SCHEMA_V1 => {
-                    if has_all_v2_columns {
-                        anyhow::bail!(
-                            "sqlite schema inconsistent: PRAGMA user_version=1 but memory_events already has v2 columns"
-                        );
-                    }
-                    Self::migrate_v1_to_v2(conn)?;
-                    Self::migrate_v2_to_v3(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
-                    Self::migrate_v3_to_v4(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V4)?;
-                    Self::migrate_v4_to_v5(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-                }
-                Self::MEMORY_SCHEMA_V2 => {
-                    if !has_all_v2_columns {
-                        let missing_columns =
-                            Self::missing_v2_columns(&memory_event_columns).join(", ");
-                        anyhow::bail!(
-                            "sqlite schema inconsistent: user_version=2 but memory_events missing columns: {missing_columns}"
-                        );
-                    }
-                    Self::migrate_v2_to_v3(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
-                    Self::migrate_v3_to_v4(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V4)?;
-                    Self::migrate_v4_to_v5(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-                }
-                Self::MEMORY_SCHEMA_V3 => {
-                    Self::validate_v3_columns(
-                        &memory_event_columns,
-                        &memories_columns,
-                        &retrieval_doc_columns,
-                        "user_version=3",
-                    )?;
-                    Self::migrate_v3_to_v4(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V4)?;
-                    Self::migrate_v4_to_v5(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-                }
-                Self::MEMORY_SCHEMA_V4 => {
-                    if !retrieval_units_exists
-                        || !has_all_events_v4_columns
-                        || !has_all_retrieval_units_v4_columns
-                    {
-                        anyhow::bail!(
-                            "sqlite schema inconsistent: user_version=4 but required v4 structures are missing"
-                        );
-                    }
-                    Self::migrate_v4_to_v5(conn)?;
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-                }
-                Self::MEMORY_SCHEMA_V5 => {
-                    if !retrieval_units_exists
-                        || !has_all_events_v4_columns
-                        || !has_v5_pruned_legacy_tables
-                    {
-                        anyhow::bail!(
-                            "sqlite schema inconsistent: user_version=5 but required v5 structures are missing"
-                        );
-                    }
-                    Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-                }
-                other => anyhow::bail!("sqlite schema version unsupported: user_version={other}"),
-            }
-            Self::ensure_v3_indexes(conn)?;
-            return Ok(());
-        }
-
-        let schema_version = Self::get_schema_version(conn)?;
-        Self::validate_schema_markers(conn, schema_version, pragma_user_version)?;
-        match schema_version {
-            Self::MEMORY_SCHEMA_V1 => {
-                Self::migrate_v1_to_v2(conn)?;
-                Self::migrate_v2_to_v3(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
-                Self::migrate_v3_to_v4(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V4)?;
-                Self::migrate_v4_to_v5(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-            }
-            Self::MEMORY_SCHEMA_V2 => {
-                if !has_all_v2_columns {
-                    let missing_columns =
-                        Self::missing_v2_columns(&memory_event_columns).join(", ");
-                    anyhow::bail!(
-                        "sqlite schema inconsistent: memory_schema_version=2 but memory_events missing columns: {missing_columns}"
-                    );
-                }
-                Self::migrate_v2_to_v3(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V3)?;
-                Self::migrate_v3_to_v4(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V4)?;
-                Self::migrate_v4_to_v5(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-            }
-            Self::MEMORY_SCHEMA_V3 => {
-                Self::validate_v3_columns(
-                    &memory_event_columns,
-                    &memories_columns,
-                    &retrieval_doc_columns,
-                    "memory_schema_version=3",
-                )?;
-                Self::migrate_v3_to_v4(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V4)?;
-                Self::migrate_v4_to_v5(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-            }
-            Self::MEMORY_SCHEMA_V4 => {
-                if !retrieval_units_exists
-                    || !has_all_events_v4_columns
-                    || !has_all_retrieval_units_v4_columns
-                {
-                    anyhow::bail!(
-                        "sqlite schema inconsistent: memory_schema_version=4 but required v4 structures are missing"
-                    );
-                }
-                Self::migrate_v4_to_v5(conn)?;
-                Self::set_schema_version(conn, Self::MEMORY_SCHEMA_V5)?;
-            }
-            Self::MEMORY_SCHEMA_V5 => {
-                if !retrieval_units_exists
-                    || !has_all_events_v4_columns
-                    || !has_v5_pruned_legacy_tables
-                {
-                    anyhow::bail!(
-                        "sqlite schema inconsistent: memory_schema_version=5 but required v5 structures are missing"
-                    );
-                }
-            }
-            other => anyhow::bail!("sqlite schema version unsupported: {other}"),
-        }
-
-        Self::ensure_v3_indexes(conn)?;
-        Ok(())
-    }
-
-    fn ensure_v3_indexes(conn: &Connection) -> anyhow::Result<()> {
-        conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_memory_events_entity_layer
-                 ON memory_events(entity_id, layer, occurred_at DESC);
-             CREATE INDEX IF NOT EXISTS idx_memory_events_retention_expires
-                  ON memory_events(retention_expires_at)
-                  WHERE retention_expires_at IS NOT NULL;",
-        )
-        .context("create v3 schema indexes")?;
-        Ok(())
-    }
-
-    fn migrate_v1_to_v2(conn: &Connection) -> anyhow::Result<()> {
-        let memory_event_columns = Self::table_columns(conn, "memory_events")?;
-        let normalized_columns: Vec<String> = memory_event_columns
-            .iter()
-            .map(|column| column.trim().to_ascii_lowercase())
-            .collect();
-
-        let has_all_v2_columns = Self::MEMORY_EVENTS_V2_COLUMNS.iter().all(|column| {
-            normalized_columns
-                .iter()
-                .any(|entry| entry == &column.to_ascii_lowercase())
-        });
-        if has_all_v2_columns {
-            return Ok(());
-        }
-
-        let has_any_v2_columns = Self::MEMORY_EVENTS_V2_COLUMNS.iter().any(|column| {
-            normalized_columns
-                .iter()
-                .any(|entry| entry == &column.to_ascii_lowercase())
-        });
-        if has_any_v2_columns {
-            anyhow::bail!(
-                "sqlite schema inconsistent: memory_events migration requires all-or-none v2 columns"
-            );
-        }
-
-        conn.execute_batch("BEGIN IMMEDIATE")
-            .context("begin schema v1 to v2 migration")?;
-        let mut migration_sql = String::new();
-        if !normalized_columns
-            .iter()
-            .any(|column| column == &"layer".to_ascii_lowercase())
-        {
-            migration_sql.push_str(
-                "ALTER TABLE memory_events ADD COLUMN layer TEXT NOT NULL DEFAULT 'working';\n",
-            );
-        }
-        if !normalized_columns
-            .iter()
-            .any(|column| column == &"provenance_source_class".to_ascii_lowercase())
-        {
-            migration_sql
-                .push_str("ALTER TABLE memory_events ADD COLUMN provenance_source_class TEXT;\n");
-        }
-        if !normalized_columns
-            .iter()
-            .any(|column| column == &"provenance_reference".to_ascii_lowercase())
-        {
-            migration_sql
-                .push_str("ALTER TABLE memory_events ADD COLUMN provenance_reference TEXT;\n");
-        }
-        if !normalized_columns
-            .iter()
-            .any(|column| column == &"provenance_evidence_uri".to_ascii_lowercase())
-        {
-            migration_sql
-                .push_str("ALTER TABLE memory_events ADD COLUMN provenance_evidence_uri TEXT;\n");
-        }
-
-        let migration_result = if migration_sql.is_empty() {
-            Ok(())
-        } else {
-            conn.execute_batch(&migration_sql)
-        };
-
-        match migration_result {
-            Ok(()) => conn
-                .execute_batch("COMMIT")
-                .context("commit schema v1 to v2 migration")?,
-            Err(err) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(err.into());
-            }
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn migrate_v2_to_v3(conn: &Connection) -> anyhow::Result<()> {
-        let memory_event_columns: Vec<String> = Self::table_columns(conn, "memory_events")?
-            .into_iter()
-            .map(|column| column.to_ascii_lowercase())
-            .collect();
-        let memories_columns: Vec<String> = Self::table_columns(conn, "memories")?
-            .into_iter()
-            .map(|column| column.to_ascii_lowercase())
-            .collect();
-        let retrieval_doc_columns: Vec<String> = Self::table_columns(conn, "retrieval_docs")?
-            .into_iter()
-            .map(|column| column.to_ascii_lowercase())
-            .collect();
-
-        if Self::has_all_columns(&memory_event_columns, &Self::MEMORY_EVENTS_V3_COLUMNS)
-            && Self::has_all_columns(&memories_columns, &Self::MEMORIES_V3_COLUMNS)
-            && Self::has_all_columns(&retrieval_doc_columns, &Self::RETRIEVAL_DOCS_V3_COLUMNS)
-        {
-            return Ok(());
-        }
-
-        if Self::has_any_columns(&memory_event_columns, &Self::MEMORY_EVENTS_V3_COLUMNS)
-            && !Self::has_all_columns(&memory_event_columns, &Self::MEMORY_EVENTS_V3_COLUMNS)
-        {
-            anyhow::bail!(
-                "sqlite schema inconsistent: memory_events migration requires all-or-none v3 retention columns"
-            );
-        }
-        if Self::has_any_columns(&memories_columns, &Self::MEMORIES_V3_COLUMNS)
-            && !Self::has_all_columns(&memories_columns, &Self::MEMORIES_V3_COLUMNS)
-        {
-            anyhow::bail!(
-                "sqlite schema inconsistent: memories migration requires all-or-none v3 metadata columns"
-            );
-        }
-        if Self::has_any_columns(&retrieval_doc_columns, &Self::RETRIEVAL_DOCS_V3_COLUMNS)
-            && !Self::has_all_columns(&retrieval_doc_columns, &Self::RETRIEVAL_DOCS_V3_COLUMNS)
-        {
-            anyhow::bail!(
-                "sqlite schema inconsistent: retrieval_docs migration requires all-or-none v3 metadata columns"
-            );
-        }
-
-        conn.execute_batch("BEGIN IMMEDIATE")
-            .context("begin schema v2 to v3 migration")?;
-        let mut migration_sql = String::new();
-        if !memory_event_columns
-            .iter()
-            .any(|column| column == "retention_tier")
-        {
-            migration_sql.push_str(
-                "ALTER TABLE memory_events ADD COLUMN retention_tier TEXT NOT NULL DEFAULT 'working';\n",
-            );
-        }
-        if !memory_event_columns
-            .iter()
-            .any(|column| column == "retention_expires_at")
-        {
-            migration_sql
-                .push_str("ALTER TABLE memory_events ADD COLUMN retention_expires_at TEXT;\n");
-        }
-        if !memories_columns.iter().any(|column| column == "layer") {
-            migration_sql.push_str(
-                "ALTER TABLE memories ADD COLUMN layer TEXT NOT NULL DEFAULT 'working';\n",
-            );
-        }
-        if !memories_columns
-            .iter()
-            .any(|column| column == "provenance_source_class")
-        {
-            migration_sql
-                .push_str("ALTER TABLE memories ADD COLUMN provenance_source_class TEXT;\n");
-        }
-        if !memories_columns
-            .iter()
-            .any(|column| column == "provenance_reference")
-        {
-            migration_sql.push_str("ALTER TABLE memories ADD COLUMN provenance_reference TEXT;\n");
-        }
-        if !memories_columns
-            .iter()
-            .any(|column| column == "provenance_evidence_uri")
-        {
-            migration_sql
-                .push_str("ALTER TABLE memories ADD COLUMN provenance_evidence_uri TEXT;\n");
-        }
-        if !memories_columns
-            .iter()
-            .any(|column| column == "retention_tier")
-        {
-            migration_sql.push_str(
-                "ALTER TABLE memories ADD COLUMN retention_tier TEXT NOT NULL DEFAULT 'working';\n",
-            );
-        }
-        if !memories_columns
-            .iter()
-            .any(|column| column == "retention_expires_at")
-        {
-            migration_sql.push_str("ALTER TABLE memories ADD COLUMN retention_expires_at TEXT;\n");
-        }
-        if !retrieval_doc_columns.iter().any(|column| column == "layer") {
-            migration_sql.push_str(
-                "ALTER TABLE retrieval_docs ADD COLUMN layer TEXT NOT NULL DEFAULT 'working';\n",
-            );
-        }
-        if !retrieval_doc_columns
-            .iter()
-            .any(|column| column == "provenance_source_class")
-        {
-            migration_sql
-                .push_str("ALTER TABLE retrieval_docs ADD COLUMN provenance_source_class TEXT;\n");
-        }
-        if !retrieval_doc_columns
-            .iter()
-            .any(|column| column == "provenance_reference")
-        {
-            migration_sql
-                .push_str("ALTER TABLE retrieval_docs ADD COLUMN provenance_reference TEXT;\n");
-        }
-        if !retrieval_doc_columns
-            .iter()
-            .any(|column| column == "provenance_evidence_uri")
-        {
-            migration_sql
-                .push_str("ALTER TABLE retrieval_docs ADD COLUMN provenance_evidence_uri TEXT;\n");
-        }
-        if !retrieval_doc_columns
-            .iter()
-            .any(|column| column == "retention_tier")
-        {
-            migration_sql.push_str("ALTER TABLE retrieval_docs ADD COLUMN retention_tier TEXT NOT NULL DEFAULT 'working';\n");
-        }
-        if !retrieval_doc_columns
-            .iter()
-            .any(|column| column == "retention_expires_at")
-        {
-            migration_sql
-                .push_str("ALTER TABLE retrieval_docs ADD COLUMN retention_expires_at TEXT;\n");
-        }
-
-        migration_sql.push_str(concat!(
-            "CREATE INDEX IF NOT EXISTS idx_memory_events_entity_layer\n",
-            "                ON memory_events(entity_id, layer, occurred_at DESC);\n",
-            "CREATE INDEX IF NOT EXISTS idx_memory_events_retention_expires\n",
-            "                ON memory_events(retention_expires_at)\n",
-            "                WHERE retention_expires_at IS NOT NULL;\n",
-            "CREATE INDEX IF NOT EXISTS idx_retrieval_docs_entity_layer_visibility\n",
-            "                ON retrieval_docs(entity_id, layer, visibility, updated_at DESC);\n",
-            "CREATE INDEX IF NOT EXISTS idx_retrieval_docs_retention_expires\n",
-            "                ON retrieval_docs(retention_expires_at)\n",
-            "                WHERE retention_expires_at IS NOT NULL;\n",
-        ));
-
-        let migration_result = if migration_sql.is_empty() {
-            Ok(())
-        } else {
-            conn.execute_batch(&migration_sql)
-        };
-
-        match migration_result {
-            Ok(()) => conn
-                .execute_batch("COMMIT")
-                .context("commit schema v2 to v3 migration")?,
-            Err(err) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(err.into());
-            }
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn migrate_v3_to_v4(conn: &Connection) -> anyhow::Result<()> {
-        let memory_event_columns: Vec<String> = Self::table_columns(conn, "memory_events")?
-            .into_iter()
-            .map(|column| column.to_ascii_lowercase())
-            .collect();
-
-        if Self::table_exists(conn, "retrieval_units")? {
-            return Ok(());
-        }
-
-        conn.execute_batch("BEGIN IMMEDIATE")
-            .context("begin schema v3 to v4 migration")?;
-
-        let migration_result = (|| -> anyhow::Result<()> {
-            if !memory_event_columns
-                .iter()
-                .any(|column| column == "signal_tier")
-            {
-                conn.execute_batch(
-                    "ALTER TABLE memory_events ADD COLUMN signal_tier TEXT NOT NULL DEFAULT 'raw';",
-                )?;
-            }
-            if !memory_event_columns
-                .iter()
-                .any(|column| column == "source_kind")
-            {
-                conn.execute_batch("ALTER TABLE memory_events ADD COLUMN source_kind TEXT;")?;
-            }
-
-            conn.execute_batch(
-                "CREATE TABLE retrieval_units (
-                    unit_id             TEXT PRIMARY KEY,
-                    entity_id           TEXT NOT NULL,
-                    slot_key            TEXT NOT NULL,
-                    content             TEXT NOT NULL,
-                    content_type        TEXT NOT NULL DEFAULT 'belief',
-                    signal_tier         TEXT NOT NULL DEFAULT 'belief',
-                    promotion_status    TEXT NOT NULL DEFAULT 'promoted',
-                    chunk_index         INTEGER,
-                    source_uri          TEXT,
-                    source_kind         TEXT,
-
-                    recency_score       REAL NOT NULL DEFAULT 1.0,
-                    importance          REAL NOT NULL DEFAULT 0.5,
-                    reliability         REAL NOT NULL DEFAULT 0.8,
-                    contradiction_penalty REAL NOT NULL DEFAULT 0.0,
-                    visibility          TEXT NOT NULL DEFAULT 'public',
-
-                    embedding           BLOB,
-                    embedding_model     TEXT,
-                    embedding_dim       INTEGER,
-
-                    layer               TEXT NOT NULL DEFAULT 'working',
-                    provenance_source_class TEXT,
-                    provenance_reference    TEXT,
-                    provenance_evidence_uri TEXT,
-                    retention_tier      TEXT NOT NULL DEFAULT 'working',
-                    retention_expires_at TEXT,
-
-                    created_at          TEXT NOT NULL,
-                    updated_at          TEXT NOT NULL,
-                    UNIQUE(entity_id, slot_key, chunk_index)
-                );",
-            )?;
-
-            conn.execute_batch(
-                "CREATE VIRTUAL TABLE retrieval_fts USING fts5(
-                    slot_key, content, content=retrieval_units, content_rowid=rowid
-                );
-
-                CREATE TRIGGER retrieval_units_ai AFTER INSERT ON retrieval_units BEGIN
-                    INSERT INTO retrieval_fts(rowid, slot_key, content)
-                    VALUES (new.rowid, new.slot_key, new.content);
-                END;
-                CREATE TRIGGER retrieval_units_ad AFTER DELETE ON retrieval_units BEGIN
-                    INSERT INTO retrieval_fts(retrieval_fts, rowid, slot_key, content)
-                    VALUES ('delete', old.rowid, old.slot_key, old.content);
-                END;
-                CREATE TRIGGER retrieval_units_au AFTER UPDATE ON retrieval_units BEGIN
-                    INSERT INTO retrieval_fts(retrieval_fts, rowid, slot_key, content)
-                    VALUES ('delete', old.rowid, old.slot_key, old.content);
-                    INSERT INTO retrieval_fts(rowid, slot_key, content)
-                    VALUES (new.rowid, new.slot_key, new.content);
-                END;",
-            )?;
-
-            conn.execute_batch(
-                "CREATE INDEX idx_retrieval_units_entity ON retrieval_units(entity_id);
-                 CREATE INDEX idx_retrieval_units_entity_slot ON retrieval_units(entity_id, slot_key);
-                 CREATE INDEX idx_retrieval_units_signal_tier ON retrieval_units(signal_tier);
-                 CREATE INDEX idx_retrieval_units_promotion ON retrieval_units(promotion_status);
-                 CREATE INDEX idx_retrieval_units_entity_visibility ON retrieval_units(entity_id, visibility, updated_at DESC);
-                 CREATE INDEX idx_retrieval_units_retention ON retrieval_units(retention_expires_at) WHERE retention_expires_at IS NOT NULL;",
-            )?;
-
-            conn.execute_batch(
-                "INSERT INTO retrieval_units (
-                    unit_id, entity_id, slot_key, content, content_type, signal_tier,
-                    promotion_status, chunk_index, source_uri, source_kind,
-                    recency_score, importance, reliability, contradiction_penalty, visibility,
-                    embedding, embedding_model, embedding_dim,
-                    layer, provenance_source_class, provenance_reference, provenance_evidence_uri,
-                    retention_tier, retention_expires_at,
-                    created_at, updated_at
-                )
-                SELECT
-                    doc_id, entity_id, slot_key, text_body, 'belief', 'belief',
-                    'promoted', NULL, NULL, NULL,
-                    recency_score, importance, reliability, contradiction_penalty, visibility,
-                    NULL, NULL, NULL,
-                    layer, provenance_source_class, provenance_reference, provenance_evidence_uri,
-                    retention_tier, retention_expires_at,
-                    updated_at, updated_at
-                FROM retrieval_docs;",
-            )?;
-
-            conn.execute_batch("INSERT INTO retrieval_fts(retrieval_fts) VALUES('rebuild');")?;
-
-            Ok(())
-        })();
-
-        match migration_result {
-            Ok(()) => conn
-                .execute_batch("COMMIT")
-                .context("commit v3 to v4 migration")?,
-            Err(err) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(err);
-            }
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn migrate_v4_to_v5(conn: &Connection) -> anyhow::Result<()> {
-        let memories_exists = Self::table_exists(conn, "memories")?;
-        let retrieval_docs_exists = Self::table_exists(conn, "retrieval_docs")?;
-        if !memories_exists && !retrieval_docs_exists {
-            return Ok(());
-        }
-
-        conn.execute_batch("BEGIN IMMEDIATE")
-            .context("begin schema v4 to v5 migration")?;
-
-        let migration_result = (|| -> anyhow::Result<()> {
-            if retrieval_docs_exists {
-                let missing_units: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*)
-                         FROM retrieval_docs rd
-                         WHERE NOT EXISTS (
-                             SELECT 1
-                             FROM retrieval_units ru
-                             WHERE ru.unit_id = rd.doc_id
-                         )",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .context("check retrieval_docs migration integrity")?;
-                if missing_units > 0 {
-                    anyhow::bail!(
-                        "sqlite schema integrity check failed before v5 migration: {missing_units} retrieval_docs rows missing in retrieval_units"
-                    );
-                }
-            }
-
-            if memories_exists {
-                conn.execute_batch(
-                    "INSERT OR REPLACE INTO retrieval_units (
-                        unit_id, entity_id, slot_key, content, content_type, signal_tier,
-                        promotion_status, chunk_index, source_uri, source_kind,
-                        recency_score, importance, reliability, contradiction_penalty, visibility,
-                        embedding, embedding_model, embedding_dim,
-                        layer, provenance_source_class, provenance_reference, provenance_evidence_uri,
-                        retention_tier, retention_expires_at,
-                        created_at, updated_at
-                    )
-                    SELECT
-                        'projection:' || key,
-                        '__projection__',
-                        key,
-                        content,
-                        'projection',
-                        'belief',
-                        'promoted',
-                        0,
-                        NULL,
-                        NULL,
-                        1.0,
-                        0.5,
-                        0.8,
-                        0.0,
-                        'private',
-                        embedding,
-                        NULL,
-                        NULL,
-                        COALESCE(layer, 'working'),
-                        COALESCE(provenance_source_class, 'system'),
-                        provenance_reference,
-                        provenance_evidence_uri,
-                        COALESCE(retention_tier, 'working'),
-                        retention_expires_at,
-                        created_at,
-                        updated_at
-                    FROM memories;",
-                )
-                .context("migrate projection rows from memories to retrieval_units")?;
-            }
-
-            conn.execute_batch(
-                "DROP TRIGGER IF EXISTS memories_ai;
-                 DROP TRIGGER IF EXISTS memories_ad;
-                 DROP TRIGGER IF EXISTS memories_au;
-                 DROP TABLE IF EXISTS memories_fts;
-                 DROP TABLE IF EXISTS memories;
-                 DROP TABLE IF EXISTS retrieval_docs;",
-            )
-            .context("drop legacy v5 tables")?;
-
-            Ok(())
-        })();
-
-        match migration_result {
-            Ok(()) => conn
-                .execute_batch("COMMIT")
-                .context("commit v4 to v5 migration")?,
-            Err(err) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(err);
-            }
-        }
-
-        Ok(())
-    }
-
+    #[cfg(test)]
     fn table_exists(conn: &Connection, table_name: &str) -> anyhow::Result<bool> {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                params![table_name],
+                rusqlite::params![table_name],
                 |row| row.get(0),
             )
             .context("check schema table existence")?;
         Ok(count == 1)
     }
-
+    #[cfg(test)]
     fn table_columns(conn: &Connection, table_name: &str) -> anyhow::Result<Vec<String>> {
         let mut stmt = conn
             .prepare(&format!("PRAGMA table_info({table_name})"))
@@ -908,158 +151,10 @@ impl SqliteMemory {
         }
         Ok(columns)
     }
-
-    fn missing_v2_columns(columns: &[String]) -> Vec<&'static str> {
-        Self::MEMORY_EVENTS_V2_COLUMNS
-            .iter()
-            .copied()
-            .filter(|column| !columns.iter().any(|entry| entry == column))
-            .collect()
-    }
-
-    fn missing_columns<'a>(columns: &[String], required: &'a [&'a str]) -> Vec<&'a str> {
-        required
-            .iter()
-            .copied()
-            .filter(|column| !columns.iter().any(|entry| entry == column))
-            .collect()
-    }
-
-    fn has_all_columns(columns: &[String], required: &[&str]) -> bool {
-        required
-            .iter()
-            .all(|column| columns.iter().any(|entry| entry == *column))
-    }
-
-    fn has_any_columns(columns: &[String], required: &[&str]) -> bool {
-        required
-            .iter()
-            .any(|column| columns.iter().any(|entry| entry == *column))
-    }
-
-    fn validate_v3_columns(
-        memory_event_columns: &[String],
-        memories_columns: &[String],
-        retrieval_doc_columns: &[String],
-        state: &str,
-    ) -> anyhow::Result<()> {
-        let missing_event_v3 =
-            Self::missing_columns(memory_event_columns, &Self::MEMORY_EVENTS_V3_COLUMNS);
-        if !missing_event_v3.is_empty() {
-            anyhow::bail!(
-                "sqlite schema inconsistent: {state} but memory_events missing v3 columns: {}",
-                missing_event_v3.join(", ")
-            );
-        }
-
-        let missing_memories_v3 =
-            Self::missing_columns(memories_columns, &Self::MEMORIES_V3_COLUMNS);
-        if !missing_memories_v3.is_empty() {
-            anyhow::bail!(
-                "sqlite schema inconsistent: {state} but memories missing v3 columns: {}",
-                missing_memories_v3.join(", ")
-            );
-        }
-
-        let missing_retrieval_v3 =
-            Self::missing_columns(retrieval_doc_columns, &Self::RETRIEVAL_DOCS_V3_COLUMNS);
-        if !missing_retrieval_v3.is_empty() {
-            anyhow::bail!(
-                "sqlite schema inconsistent: {state} but retrieval_docs missing v3 columns: {}",
-                missing_retrieval_v3.join(", ")
-            );
-        }
-
-        Ok(())
-    }
-
-    fn ensure_schema_version_table(conn: &Connection) -> anyhow::Result<()> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS memory_schema_version (
-                id INTEGER PRIMARY KEY CHECK(id = 1),
-                version INTEGER NOT NULL,
-                updated_at TEXT NOT NULL
-            );",
-        )
-        .context("create schema version table")?;
-        Ok(())
-    }
-
-    fn validate_schema_markers(
-        conn: &Connection,
-        app_version: i64,
-        pragma_version: i64,
-    ) -> anyhow::Result<()> {
-        if pragma_version == 0 {
-            Self::set_user_version(conn, app_version)?;
-            return Ok(());
-        }
-
-        if pragma_version != app_version {
-            anyhow::bail!(
-                "sqlite schema inconsistent: memory_schema_version={app_version} but PRAGMA user_version={pragma_version}"
-            );
-        }
-
-        Ok(())
-    }
-
-    fn get_schema_version(conn: &Connection) -> anyhow::Result<i64> {
-        let row_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM memory_schema_version", [], |row| {
-                row.get(0)
-            })
-            .context("count schema version rows")?;
-
-        if row_count != 1 {
-            anyhow::bail!(
-                "sqlite schema inconsistent: memory_schema_version must contain exactly one row"
-            );
-        }
-
-        let version: i64 = conn
-            .query_row(
-                "SELECT version FROM memory_schema_version WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .context("read schema version")?;
-        Ok(version)
-    }
-
-    fn set_schema_version(conn: &Connection, version: i64) -> anyhow::Result<()> {
-        let now = Local::now().to_rfc3339();
-        conn.execute(
-            "INSERT INTO memory_schema_version (id, version, updated_at)
-             VALUES (1, ?1, ?2)
-             ON CONFLICT(id) DO UPDATE SET
-                 version = excluded.version,
-                 updated_at = excluded.updated_at",
-            params![version, now],
-        )
-        .context("upsert schema version")?;
-        Self::set_user_version(conn, version)?;
-        Ok(())
-    }
-
-    fn get_user_version(conn: &Connection) -> anyhow::Result<i64> {
-        let version: i64 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .context("read PRAGMA user_version")?;
-        Ok(version)
-    }
-
-    fn set_user_version(conn: &Connection, version: i64) -> anyhow::Result<()> {
-        conn.execute_batch(&format!("PRAGMA user_version = {version}"))
-            .context("set PRAGMA user_version")?;
-        Ok(())
-    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn fresh_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         SqliteMemory::init_schema(&conn).unwrap();
@@ -1070,7 +165,6 @@ mod tests {
     fn init_schema_creates_expected_tables() {
         let conn = Connection::open_in_memory().unwrap();
         SqliteMemory::init_schema(&conn).unwrap();
-
         let expected_tables = [
             "memory_events",
             "belief_slots",
@@ -1078,9 +172,7 @@ mod tests {
             "retrieval_fts",
             "deletion_ledger",
             "embedding_cache",
-            "memory_schema_version",
         ];
-
         for table in expected_tables {
             assert!(SqliteMemory::table_exists(&conn, table).unwrap());
         }
@@ -1103,41 +195,9 @@ mod tests {
     #[test]
     fn table_columns_returns_expected_columns() {
         let conn = fresh_db();
-        let columns = SqliteMemory::table_columns(&conn, "memory_schema_version").unwrap();
-        assert_eq!(columns, vec!["id", "version", "updated_at"]);
-    }
-
-    #[test]
-    fn has_all_and_has_any_columns_handle_true_and_false_cases() {
-        let columns = vec!["alpha".to_string(), "beta".to_string()];
-        assert!(SqliteMemory::has_all_columns(&columns, &["alpha"]));
-        assert!(SqliteMemory::has_all_columns(&columns, &["alpha", "beta"]));
-        assert!(!SqliteMemory::has_all_columns(
-            &columns,
-            &["alpha", "gamma"]
-        ));
-
-        assert!(SqliteMemory::has_any_columns(&columns, &["beta", "gamma"]));
-        assert!(!SqliteMemory::has_any_columns(
-            &columns,
-            &["gamma", "delta"]
-        ));
-    }
-
-    #[test]
-    fn missing_columns_identifies_absent_values() {
-        let columns = vec!["alpha".to_string(), "gamma".to_string()];
-        let missing = SqliteMemory::missing_columns(&columns, &["alpha", "beta", "gamma"]);
-        assert_eq!(missing, vec!["beta"]);
-    }
-
-    #[test]
-    fn missing_v2_columns_identifies_required_event_columns() {
-        let columns = vec!["layer".to_string(), "provenance_source_class".to_string()];
-        let missing = SqliteMemory::missing_v2_columns(&columns);
-        assert_eq!(
-            missing,
-            vec!["provenance_reference", "provenance_evidence_uri"]
-        );
+        let columns = SqliteMemory::table_columns(&conn, "memory_events").unwrap();
+        assert!(columns.contains(&"event_id".to_string()));
+        assert!(columns.contains(&"entity_id".to_string()));
+        assert!(columns.contains(&"layer".to_string()));
     }
 }

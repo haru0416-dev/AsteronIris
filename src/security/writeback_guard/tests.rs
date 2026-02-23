@@ -15,7 +15,6 @@ fn immutable_fields() -> ImmutableStateHeader {
 fn valid_reflection_payload() -> Value {
     json!({
         "state_header": {
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Ship deterministic writeback guard",

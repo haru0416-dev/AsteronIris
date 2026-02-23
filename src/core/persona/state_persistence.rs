@@ -4,7 +4,7 @@ use crate::core::memory::{
     SourceKind,
 };
 use crate::core::persona::person_identity::{person_entity_id, sanitize_person_id};
-use crate::core::persona::state_header::{STATE_HEADER_SCHEMA_VERSION, StateHeaderV1};
+use crate::core::persona::state_header::StateHeader;
 use crate::security::writeback_guard::enforce_persona_long_term_write_policy;
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const CANONICAL_STATE_HEADER_KEY: &str = "persona/state_header/v1";
-const LEGACY_CANONICAL_STATE_HEADER_ENTITY_ID: &str = "default";
 
 const STATE_HEADER_MIRROR_HEADER: &str = "# Persona State Header\n\nbackend_canonical: true\n\n";
 
@@ -58,7 +57,7 @@ impl BackendCanonicalStateHeaderPersistence {
         }
     }
 
-    pub async fn load_backend_canonical(&self) -> Result<Option<StateHeaderV1>> {
+    pub async fn load_backend_canonical(&self) -> Result<Option<StateHeader>> {
         let person_entity_id = self.person_entity_id();
         let person_slot_key = self.person_canonical_key();
 
@@ -66,18 +65,11 @@ impl BackendCanonicalStateHeaderPersistence {
             .memory
             .resolve_slot(&person_entity_id, &person_slot_key)
             .await?
-            .or(self
-                .memory
-                .resolve_slot(
-                    LEGACY_CANONICAL_STATE_HEADER_ENTITY_ID,
-                    CANONICAL_STATE_HEADER_KEY,
-                )
-                .await?)
         else {
             return Ok(None);
         };
 
-        let parsed: StateHeaderV1 = serde_json::from_str(&entry.value).with_context(|| {
+        let parsed: StateHeader = serde_json::from_str(&entry.value).with_context(|| {
             format!(
                 "failed to parse backend canonical state header key: {CANONICAL_STATE_HEADER_KEY}"
             )
@@ -87,7 +79,7 @@ impl BackendCanonicalStateHeaderPersistence {
         Ok(Some(parsed))
     }
 
-    pub async fn reconcile_mirror_from_backend_on_startup(&self) -> Result<Option<StateHeaderV1>> {
+    pub async fn reconcile_mirror_from_backend_on_startup(&self) -> Result<Option<StateHeader>> {
         let canonical = if let Some(existing) = self.load_backend_canonical().await? {
             existing
         } else {
@@ -103,7 +95,7 @@ impl BackendCanonicalStateHeaderPersistence {
 
     pub async fn persist_backend_canonical_and_sync_mirror(
         &self,
-        state: &StateHeaderV1,
+        state: &StateHeader,
     ) -> Result<()> {
         state.validate(&self.persona)?;
 
@@ -134,7 +126,7 @@ impl BackendCanonicalStateHeaderPersistence {
         self.sync_mirror_from_backend_canonical(state)
     }
 
-    pub fn read_mirror_state(&self) -> Result<Option<StateHeaderV1>> {
+    pub fn read_mirror_state(&self) -> Result<Option<StateHeader>> {
         let mirror_path = self.state_mirror_path();
         if !mirror_path.exists() {
             return Ok(None);
@@ -152,15 +144,14 @@ impl BackendCanonicalStateHeaderPersistence {
         self.workspace_dir.join(&self.persona.state_mirror_filename)
     }
 
-    fn sync_mirror_from_backend_canonical(&self, state: &StateHeaderV1) -> Result<()> {
+    fn sync_mirror_from_backend_canonical(&self, state: &StateHeader) -> Result<()> {
         let mirror_path = self.state_mirror_path();
         let content = render_state_header_mirror_markdown(state)?;
         write_atomic(&mirror_path, &content)
     }
 
-    fn seed_minimal_backend_canonical() -> StateHeaderV1 {
-        StateHeaderV1 {
-            schema_version: STATE_HEADER_SCHEMA_VERSION,
+    fn seed_minimal_backend_canonical() -> StateHeader {
+        StateHeader {
             identity_principles_hash: "bootstrap-minimal-v1".to_string(),
             safety_posture: "strict".to_string(),
             current_objective: "Initialize persona state continuity from backend canonical."
@@ -176,25 +167,25 @@ impl BackendCanonicalStateHeaderPersistence {
     }
 }
 
-fn render_state_header_mirror_markdown(state: &StateHeaderV1) -> Result<String> {
+fn render_state_header_mirror_markdown(state: &StateHeader) -> Result<String> {
     let json = serde_json::to_string_pretty(state)?;
     Ok(format!(
         "{STATE_HEADER_MIRROR_HEADER}```json\n{json}\n```\n"
     ))
 }
 
-fn parse_state_header_mirror_markdown(raw: &str) -> Result<StateHeaderV1> {
+fn parse_state_header_mirror_markdown(raw: &str) -> Result<StateHeader> {
     if let Some(start) = raw.find("```json") {
         let after_start = &raw[start + "```json".len()..];
         if let Some(end) = after_start.find("```") {
             let json_block = after_start[..end].trim();
-            let parsed: StateHeaderV1 = serde_json::from_str(json_block)
+            let parsed: StateHeader = serde_json::from_str(json_block)
                 .context("failed parsing json block from state mirror")?;
             return Ok(parsed);
         }
     }
 
-    let parsed: StateHeaderV1 =
+    let parsed: StateHeader =
         serde_json::from_str(raw.trim()).context("failed parsing raw state mirror as json")?;
     Ok(parsed)
 }
@@ -229,9 +220,8 @@ mod tests {
     use chrono::Utc;
     use tempfile::TempDir;
 
-    fn sample_state(objective: &str, summary: &str) -> StateHeaderV1 {
-        StateHeaderV1 {
-            schema_version: 1,
+    fn sample_state(objective: &str, summary: &str) -> StateHeader {
+        StateHeader {
             identity_principles_hash: "identity-v1-abcd1234".to_string(),
             safety_posture: "strict".to_string(),
             current_objective: objective.to_string(),
@@ -262,39 +252,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn state_header_person_namespace_falls_back_to_legacy_key() {
-        let tmp = TempDir::new().unwrap();
-        let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(tmp.path()).unwrap());
-        let persona = PersonaConfig::default();
-        let service = BackendCanonicalStateHeaderPersistence::new(
-            Arc::clone(&memory),
-            tmp.path().to_path_buf(),
-            persona,
-            "alice",
-        );
-
-        let legacy_state = sample_state("Legacy objective", "Legacy summary");
-        memory
-            .append_event(
-                MemoryEventInput::new(
-                    "default",
-                    CANONICAL_STATE_HEADER_KEY,
-                    MemoryEventType::FactUpdated,
-                    serde_json::to_string(&legacy_state).unwrap(),
-                    MemorySource::System,
-                    PrivacyLevel::Private,
-                )
-                .with_confidence(0.95)
-                .with_importance(1.0),
-            )
-            .await
-            .unwrap();
-
-        let loaded = service.load_backend_canonical().await.unwrap().unwrap();
-        assert_eq!(loaded, legacy_state);
-    }
-
-    #[tokio::test]
     async fn state_header_person_namespace_persists_under_person_slot() {
         let tmp = TempDir::new().unwrap();
         let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(tmp.path()).unwrap());
@@ -317,7 +274,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let parsed: StateHeaderV1 = serde_json::from_str(&slot.value).unwrap();
+        let parsed: StateHeader = serde_json::from_str(&slot.value).unwrap();
         assert_eq!(parsed, state);
     }
 
@@ -332,7 +289,6 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(seeded.schema_version, 1);
         assert!(!seeded.identity_principles_hash.trim().is_empty());
         assert!(!seeded.safety_posture.trim().is_empty());
         assert!(!seeded.current_objective.trim().is_empty());

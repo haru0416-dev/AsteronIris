@@ -9,7 +9,7 @@ use super::filesystem::{
     archive_daily_memory_files, archive_session_files, purge_memory_archives,
     purge_session_archives,
 };
-use super::prune::{LifecyclePruneReport, prune_conversation_rows, prune_v2_lifecycle_rows};
+use super::prune::{LifecyclePruneReport, prune_conversation_rows, prune_lifecycle_rows};
 
 pub(super) const HYGIENE_INTERVAL_HOURS: i64 = 12;
 const STATE_FILE: &str = "memory_hygiene_state.json";
@@ -53,7 +53,7 @@ pub fn run_if_due(config: &MemoryConfig, workspace_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let lifecycle = prune_v2_lifecycle_rows(workspace_dir, config)?;
+    let lifecycle = prune_lifecycle_rows(workspace_dir, config)?;
 
     let report = HygieneReport {
         archived_memory_files: archive_daily_memory_files(workspace_dir, config.archive_after_days)

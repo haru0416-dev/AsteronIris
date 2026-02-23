@@ -4,7 +4,7 @@ use crate::core::memory::Memory;
 use crate::core::providers::Provider;
 use crate::core::tools::ToolRegistry;
 use crate::security::SecurityPolicy;
-use crate::security::pairing::PairingGuard;
+use crate::security::pairing::{PairingGuard, hash_token};
 use crate::transport::channels::WhatsAppChannel;
 use async_trait::async_trait;
 use axum::{
@@ -354,7 +354,7 @@ async fn webhook_audit_mode_still_blocks_missing_bearer_when_paired() {
         mem,
         auto_save: false,
         webhook_secret: None,
-        pairing: Arc::new(PairingGuard::new(true, &["valid-token".to_string()], None)),
+        pairing: Arc::new(PairingGuard::new(true, &[hash_token("valid-token")], None)),
         whatsapp: None,
         whatsapp_app_secret: None,
         defense_mode: GatewayDefenseMode::Audit,
@@ -607,7 +607,7 @@ async fn handle_health_returns_ok_with_unpaired_state() {
 
 #[tokio::test]
 async fn handle_health_reflects_paired_when_tokens_exist() {
-    let state = make_test_state(PairingGuard::new(true, &["tok".to_string()], None));
+    let state = make_test_state(PairingGuard::new(true, &[hash_token("tok")], None));
     let response = handle_health(State(state)).await.into_response();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await

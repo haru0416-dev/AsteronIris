@@ -184,7 +184,7 @@ fn handle_status(config: &Config, provider: Option<&str>) -> Result<()> {
     let has_resolved_key = broker
         .resolve_provider_api_key(&canonical_provider)
         .is_some();
-    let uses_legacy = active_profile.is_none() && has_secret(config.api_key.as_deref());
+    let uses_config_key = active_profile.is_none() && has_secret(config.api_key.as_deref());
 
     println!("🔐 Auth status");
     println!("Provider: {canonical_provider}");
@@ -219,8 +219,8 @@ fn handle_status(config: &Config, provider: Option<&str>) -> Result<()> {
                 profile.oauth_source.as_deref().unwrap_or("-")
             );
         }
-        None if uses_legacy => {
-            println!("Source: legacy config.api_key fallback");
+        None if uses_config_key => {
+            println!("Source: config.api_key");
             println!("Profile id: -");
         }
         None => {
@@ -234,7 +234,7 @@ fn handle_status(config: &Config, provider: Option<&str>) -> Result<()> {
         default_profile_id.map_or("(none)", String::as_str)
     );
     println!(
-        "Legacy config.api_key: {}",
+        "Config api_key: {}",
         if has_secret(config.api_key.as_deref()) {
             "set"
         } else {

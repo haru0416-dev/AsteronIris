@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use asteroniris::config::PersonaConfig;
 use asteroniris::core::memory::{Memory, SqliteMemory};
-use asteroniris::core::persona::state_header::StateHeaderV1;
+use asteroniris::core::persona::state_header::StateHeader;
 use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use tempfile::TempDir;
 
-fn state_for_turn(turn: u8) -> StateHeaderV1 {
-    StateHeaderV1 {
-        schema_version: 1,
+fn state_for_turn(turn: u8) -> StateHeader {
+    StateHeader {
         identity_principles_hash: "identity-v1-abcd1234".to_string(),
         safety_posture: "strict".to_string(),
         current_objective: format!("Ship task 7 continuity turn {turn}"),
@@ -47,7 +46,6 @@ async fn persona_bootstrap_seeds_minimal_state() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(seeded.schema_version, 1);
     assert!(!seeded.identity_principles_hash.trim().is_empty());
     assert!(!seeded.safety_posture.trim().is_empty());
     assert!(!seeded.current_objective.trim().is_empty());
@@ -82,7 +80,7 @@ async fn continuity_across_restart_preserves_latest_backend_state_and_repairs_mi
     let mirror_path = workspace.path().join("STATE.md");
     fs::write(
         &mirror_path,
-        "# Persona State Header\n\n```json\n{\"schema_version\":1,\"current_objective\":\"stale\"}\n```\n",
+        "# Persona State Header\n\n```json\n{\"current_objective\":\"stale\"}\n```\n",
     )
     .unwrap();
 

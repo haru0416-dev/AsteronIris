@@ -14,10 +14,10 @@ fn decrypt_secret_string(
     }
 
     let needs_encrypt_persist = encrypt_enabled && !SecretStore::is_encrypted(current);
-    let (decrypted, migrated) = store.decrypt_and_migrate(current)?;
+    let decrypted = store.decrypt(current)?;
     *value = decrypted;
 
-    Ok(needs_encrypt_persist || migrated.is_some())
+    Ok(needs_encrypt_persist)
 }
 
 fn decrypt_secret_option(
@@ -35,10 +35,10 @@ fn decrypt_secret_option(
     }
 
     let needs_encrypt_persist = encrypt_enabled && !SecretStore::is_encrypted(trimmed);
-    let (decrypted, migrated) = store.decrypt_and_migrate(trimmed)?;
+    let decrypted = store.decrypt(trimmed)?;
     *value = Some(decrypted);
 
-    Ok(needs_encrypt_persist || migrated.is_some())
+    Ok(needs_encrypt_persist)
 }
 
 fn encrypt_secret_string(value: &mut String, store: &SecretStore) -> Result<()> {

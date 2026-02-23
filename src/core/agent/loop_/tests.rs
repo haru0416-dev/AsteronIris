@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::PersonaConfig;
 use crate::core::memory::SqliteMemory;
-use crate::core::persona::state_header::StateHeaderV1;
+use crate::core::persona::state_header::StateHeader;
 use crate::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use crate::core::providers::reliable::ReliableProvider;
 use crate::security::SecurityPolicy;
@@ -41,9 +41,8 @@ impl Provider for MockProvider {
     }
 }
 
-fn sample_state() -> StateHeaderV1 {
-    StateHeaderV1 {
-        schema_version: 1,
+fn sample_state() -> StateHeader {
+    StateHeader {
         identity_principles_hash: "identity-v1-abcd1234".to_string(),
         safety_posture: "strict".to_string(),
         current_objective: "Ship two-call main-session loop".to_string(),
@@ -55,10 +54,9 @@ fn sample_state() -> StateHeaderV1 {
     }
 }
 
-fn build_reflect_payload(previous: &StateHeaderV1) -> String {
+fn build_reflect_payload(previous: &StateHeader) -> String {
     json!({
         "state_header": {
-            "schema_version": previous.schema_version,
             "identity_principles_hash": previous.identity_principles_hash,
             "safety_posture": previous.safety_posture,
             "current_objective": "Confirm two provider calls per turn",

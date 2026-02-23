@@ -23,8 +23,7 @@ pub(super) const ALLOWED_TOP_LEVEL_FIELDS: [&str; 4] = [
     "style_profile",
 ];
 pub(super) const FORBIDDEN_TOP_LEVEL_SOURCE_FIELDS: [&str; 2] = ["source_kind", "source_ref"];
-pub(super) const ALLOWED_STATE_HEADER_FIELDS: [&str; 9] = [
-    "schema_version",
+pub(super) const ALLOWED_STATE_HEADER_FIELDS: [&str; 8] = [
     "identity_principles_hash",
     "safety_posture",
     "current_objective",

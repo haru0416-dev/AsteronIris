@@ -11,33 +11,11 @@ fn test_config(tmp: &tempfile::TempDir) -> Config {
 }
 
 #[test]
-fn broker_migrates_legacy_config_api_key_to_profiles_store() {
+fn broker_prefers_provider_profile_over_config_api_key() {
     let tmp = tempfile::TempDir::new().unwrap();
     let mut config = test_config(&tmp);
     config.default_provider = Some("openrouter".into());
-    config.api_key = Some("sk-legacy-openrouter".into());
-    config.secrets.encrypt = true;
-
-    let broker = AuthBroker::load_or_init(&config).unwrap();
-    assert_eq!(
-        broker.resolve_provider_api_key("openrouter").as_deref(),
-        Some("sk-legacy-openrouter")
-    );
-
-    let store_path = auth_profiles_path(&config);
-    assert!(store_path.exists());
-
-    let persisted = fs::read_to_string(store_path).unwrap();
-    assert!(persisted.contains("enc2:"));
-    assert!(!persisted.contains("sk-legacy-openrouter"));
-}
-
-#[test]
-fn broker_prefers_provider_profile_over_legacy_key() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let mut config = test_config(&tmp);
-    config.default_provider = Some("openrouter".into());
-    config.api_key = Some("sk-legacy".into());
+    config.api_key = Some("sk-config".into());
     config.secrets.encrypt = true;
 
     let path = auth_profiles_path(&config);
@@ -76,7 +54,7 @@ fn broker_prefers_provider_profile_over_legacy_key() {
     );
     assert_eq!(
         broker.resolve_provider_api_key("anthropic").as_deref(),
-        Some("sk-legacy")
+        Some("sk-config")
     );
 
     let persisted = fs::read_to_string(path).unwrap();
@@ -90,7 +68,7 @@ fn broker_resolves_embedding_key_from_openai_profile() {
     let tmp = tempfile::TempDir::new().unwrap();
     let mut config = test_config(&tmp);
     config.default_provider = Some("openrouter".into());
-    config.api_key = Some("sk-legacy".into());
+    config.api_key = Some("sk-config".into());
     config.memory.embedding_provider = "openai".into();
 
     let path = auth_profiles_path(&config);
@@ -175,24 +153,6 @@ fn upsert_profile_rejects_invalid_id() {
     );
 
     assert!(result.is_err());
-}
-
-#[test]
-fn load_or_init_migrates_legacy_key_without_duplicate_profiles() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let mut config = test_config(&tmp);
-    config.default_provider = Some("openrouter".into());
-    config.api_key = Some("sk-legacy-openrouter".into());
-    config.secrets.encrypt = true;
-
-    let store_first = AuthProfileStore::load_or_init_for_config(&config).unwrap();
-    assert_eq!(store_first.profiles.len(), 1);
-
-    let store_second = AuthProfileStore::load_or_init_for_config(&config).unwrap();
-    assert_eq!(store_second.profiles.len(), 1);
-
-    let persisted = fs::read_to_string(auth_profiles_path(&config)).unwrap();
-    assert!(persisted.contains("enc2:"));
 }
 
 #[test]

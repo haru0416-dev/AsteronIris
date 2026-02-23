@@ -2,7 +2,7 @@ use asteroniris::config::{Config, GatewayDefenseMode, ObservabilityConfig, Webho
 use asteroniris::runtime::observability::create_observer;
 use asteroniris::runtime::observability::multi::MultiObserver;
 use asteroniris::runtime::observability::traits::{Observer, ObserverEvent, ObserverMetric};
-use asteroniris::security::pairing::PairingGuard;
+use asteroniris::security::pairing::{PairingGuard, hash_token};
 use asteroniris::transport::gateway::run_gateway_with_listener;
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -118,7 +118,7 @@ async fn wait_until_gateway_ready(port: u16) {
 async fn gateway_auth_enforces_deny_and_allows_authorized_path() {
     let server = GatewayTestServer::start(
         true,
-        vec!["token-abc".to_string()],
+        vec![hash_token("token-abc")],
         "gateway-shared-secret",
         GatewayDefenseMode::Enforce,
         false,
@@ -189,7 +189,7 @@ async fn gateway_auth_enforces_deny_and_allows_authorized_path() {
 async fn gateway_audit_mode_blocks_missing_bearer_token() {
     let server = GatewayTestServer::start(
         true,
-        vec!["token-abc".to_string()],
+        vec![hash_token("token-abc")],
         "gateway-shared-secret",
         GatewayDefenseMode::Audit,
         false,
@@ -220,7 +220,7 @@ async fn gateway_audit_mode_blocks_missing_bearer_token() {
 async fn gateway_warn_mode_still_blocks_missing_bearer_token() {
     let server = GatewayTestServer::start(
         true,
-        vec!["token-abc".to_string()],
+        vec![hash_token("token-abc")],
         "gateway-shared-secret",
         GatewayDefenseMode::Warn,
         false,
@@ -251,7 +251,7 @@ async fn gateway_warn_mode_still_blocks_missing_bearer_token() {
 async fn gateway_kill_switch_does_not_bypass_authentication() {
     let server = GatewayTestServer::start(
         true,
-        vec!["token-abc".to_string()],
+        vec![hash_token("token-abc")],
         "gateway-shared-secret",
         GatewayDefenseMode::Enforce,
         true,
@@ -368,7 +368,7 @@ async fn gateway_pair_endpoint_enforces_retry_after_lockout() {
 async fn gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths() {
     let server = GatewayTestServer::start(
         true,
-        vec!["token-abc".to_string()],
+        vec![hash_token("token-abc")],
         "gateway-shared-secret",
         GatewayDefenseMode::Enforce,
         false,
@@ -479,7 +479,7 @@ async fn gateway_webhook_denies_missing_invalid_and_mismatched_auth_paths() {
 async fn gateway_rejects_expired_persisted_token_from_config_ttl() {
     let server = GatewayTestServer::start_with_ttl(
         true,
-        vec!["token-abc".to_string()],
+        vec![hash_token("token-abc")],
         "gateway-shared-secret",
         GatewayDefenseMode::Enforce,
         false,

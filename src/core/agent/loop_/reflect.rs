@@ -3,7 +3,7 @@ use crate::core::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
     SourceKind,
 };
-use crate::core::persona::state_header::StateHeaderV1;
+use crate::core::persona::state_header::StateHeader;
 use crate::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use crate::core::providers::Provider;
 use crate::security::writeback_guard::{
@@ -21,7 +21,6 @@ Output must be a single strict JSON object, with no markdown and no extra text.
 Required top-level shape:
 {
   "state_header": {
-    "schema_version": number,
     "identity_principles_hash": string,
     "safety_posture": string,
     "current_objective": string,
@@ -39,7 +38,7 @@ Do not change immutable fields.
 If uncertain, keep mutable values close to current state."#;
 
 fn build_reflect_message(
-    canonical_state: Option<&StateHeaderV1>,
+    canonical_state: Option<&StateHeader>,
     user_message: &str,
     answer: &str,
 ) -> Result<String> {
@@ -104,7 +103,7 @@ pub(super) async fn run_persona_reflect_writeback(
     };
 
     let immutable = ImmutableStateHeader {
-        schema_version: u32::from(previous_state.schema_version),
+        schema_version: 1,
         identity_principles_hash: previous_state.identity_principles_hash.clone(),
         safety_posture: previous_state.safety_posture.clone(),
     };
@@ -117,8 +116,7 @@ pub(super) async fn run_persona_reflect_writeback(
         }
     };
 
-    let candidate = StateHeaderV1 {
-        schema_version: previous_state.schema_version,
+    let candidate = StateHeader {
         identity_principles_hash: previous_state.identity_principles_hash.clone(),
         safety_posture: previous_state.safety_posture.clone(),
         current_objective: accepted.state_header.current_objective,
@@ -129,7 +127,7 @@ pub(super) async fn run_persona_reflect_writeback(
         last_updated_at: accepted.state_header.last_updated_at,
     };
 
-    StateHeaderV1::validate_writeback_candidate(&previous_state, &candidate, &config.persona)
+    StateHeader::validate_writeback_candidate(&previous_state, &candidate, &config.persona)
         .context("validate persona writeback candidate")?;
     persistence
         .persist_backend_canonical_and_sync_mirror(&candidate)

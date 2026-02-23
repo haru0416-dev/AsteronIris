@@ -73,7 +73,7 @@ pub(super) fn prune_conversation_rows(workspace_dir: &Path, retention_days: u32)
 }
 
 #[allow(clippy::too_many_lines)]
-pub(super) fn prune_v2_lifecycle_rows(
+pub(super) fn prune_lifecycle_rows(
     workspace_dir: &Path,
     config: &MemoryConfig,
 ) -> Result<LifecyclePruneReport> {

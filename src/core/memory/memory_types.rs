@@ -644,7 +644,6 @@ pub enum ForgetArtifact {
     Slot,
     RetrievalUnits,
     RetrievalDocs,
-    ProjectionDocs,
     Caches,
     Ledger,
 }
@@ -717,9 +716,7 @@ impl ForgetMode {
             | (Self::Tombstone, ForgetArtifact::Slot) => {
                 ForgetArtifactRequirement::MustBeNonRetrievable
             }
-            (Self::Soft, ForgetArtifact::ProjectionDocs | ForgetArtifact::Caches) => {
-                ForgetArtifactRequirement::NotGoverned
-            }
+            (Self::Soft, ForgetArtifact::Caches) => ForgetArtifactRequirement::NotGoverned,
             (Self::Soft | Self::Hard | Self::Tombstone, ForgetArtifact::Ledger) => {
                 ForgetArtifactRequirement::MustExist
             }
@@ -728,14 +725,12 @@ impl ForgetMode {
                 ForgetArtifact::Slot
                 | ForgetArtifact::RetrievalUnits
                 | ForgetArtifact::RetrievalDocs
-                | ForgetArtifact::ProjectionDocs
                 | ForgetArtifact::Caches,
             )
             | (
                 Self::Tombstone,
                 ForgetArtifact::RetrievalUnits
                 | ForgetArtifact::RetrievalDocs
-                | ForgetArtifact::ProjectionDocs
                 | ForgetArtifact::Caches,
             ) => ForgetArtifactRequirement::MustBeAbsent,
         }

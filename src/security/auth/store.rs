@@ -286,37 +286,6 @@ impl AuthProfileStore {
             .map(ToOwned::to_owned)
     }
 
-    fn migrate_legacy_config_api_key(&mut self, provider: &str, legacy_api_key: &str) -> bool {
-        let legacy_api_key = legacy_api_key.trim();
-        if legacy_api_key.is_empty() {
-            return false;
-        }
-
-        let canonical = canonical_provider_name(provider);
-        if self.active_profile_for_provider(&canonical).is_some() {
-            return false;
-        }
-
-        let mut profile_id = format!("{canonical}-legacy-default");
-        while self.profiles.iter().any(|p| p.id == profile_id) {
-            profile_id.push('x');
-        }
-
-        self.profiles.push(AuthProfile {
-            id: profile_id.clone(),
-            provider: canonical.clone(),
-            label: Some("Migrated from config.api_key".into()),
-            api_key: Some(legacy_api_key.to_string()),
-            refresh_token: None,
-            auth_scheme: Some("api_key".into()),
-            oauth_source: None,
-            disabled: false,
-        });
-        self.defaults.insert(canonical, profile_id);
-
-        true
-    }
-
     fn load_from_disk(
         path: &Path,
         store: &SecretStore,
@@ -407,14 +376,6 @@ impl AuthProfileStore {
             Self::load_from_disk(&auth_profiles_path, &store, config.secrets.encrypt)?;
 
         needs_persist |= profile_store.normalize_metadata();
-
-        if let (Some(default_provider), Some(legacy_api_key)) = (
-            config.default_provider.as_deref(),
-            config.api_key.as_deref(),
-        ) && profile_store.migrate_legacy_config_api_key(default_provider, legacy_api_key)
-        {
-            needs_persist = true;
-        }
 
         if needs_persist {
             profile_store.save_to_disk(&auth_profiles_path, &store, config.secrets.encrypt)?;

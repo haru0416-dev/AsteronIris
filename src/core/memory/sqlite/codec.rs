@@ -1,28 +1,8 @@
 use super::SqliteMemory;
 use crate::core::memory::traits::MemoryLayer;
-use crate::core::memory::{MemoryCategory, MemorySource, PrivacyLevel, SignalTier, SourceKind};
+use crate::core::memory::{MemorySource, PrivacyLevel, SignalTier, SourceKind};
 
 impl SqliteMemory {
-    // Used by projection layer methods (upsert/list_projection_entry) — currently dormant
-    pub(super) fn category_to_str(cat: &MemoryCategory) -> String {
-        match cat {
-            MemoryCategory::Core => "core".into(),
-            MemoryCategory::Daily => "daily".into(),
-            MemoryCategory::Conversation => "conversation".into(),
-            MemoryCategory::Custom(name) => name.clone(),
-        }
-    }
-
-    // Used by projection layer methods (fetch/list/keyword search) — currently dormant
-    pub(super) fn str_to_category(s: &str) -> MemoryCategory {
-        match s {
-            "core" => MemoryCategory::Core,
-            "daily" => MemoryCategory::Daily,
-            "conversation" => MemoryCategory::Conversation,
-            other => MemoryCategory::custom(other),
-        }
-    }
-
     pub(super) fn source_to_str(source: MemorySource) -> &'static str {
         match source {
             MemorySource::ExplicitUser => "explicit_user",
@@ -154,22 +134,6 @@ mod tests {
             MemoryLayer::Procedural,
             MemoryLayer::Identity,
         ]
-    }
-
-    #[test]
-    fn category_round_trip() {
-        let categories = [
-            MemoryCategory::Core,
-            MemoryCategory::Daily,
-            MemoryCategory::Conversation,
-            MemoryCategory::Custom("foo".to_string()),
-        ];
-
-        for category in categories {
-            let encoded = SqliteMemory::category_to_str(&category);
-            let decoded = SqliteMemory::str_to_category(&encoded);
-            assert_eq!(decoded, category);
-        }
     }
 
     #[test]

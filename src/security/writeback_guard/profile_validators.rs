@@ -88,14 +88,6 @@ pub(super) fn validate_state_header(
         "payload.state_header",
     )?;
 
-    let Some(schema_version_value) = state_header.get("schema_version").and_then(Value::as_u64)
-    else {
-        return Err("payload.state_header.schema_version must be an integer".to_string());
-    };
-    if schema_version_value != u64::from(immutable.schema_version) {
-        return Err("immutable field mismatch: payload.state_header.schema_version".to_string());
-    }
-
     let Some(identity_hash) = state_header
         .get("identity_principles_hash")
         .and_then(Value::as_str)

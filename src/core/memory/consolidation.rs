@@ -5,7 +5,7 @@ use crate::core::memory::{
 use crate::runtime::observability::Observer;
 use crate::runtime::observability::traits::MemoryLifecycleSignal;
 use crate::utils::text::truncate_with_ellipsis;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -72,7 +72,7 @@ fn load_state(workspace_dir: &Path) -> Result<ConsolidationState> {
     }
 
     let raw = fs::read_to_string(path)?;
-    let state = serde_json::from_str(&raw).unwrap_or_default();
+    let state = serde_json::from_str(&raw).context("parse consolidation state")?;
     Ok(state)
 }
 

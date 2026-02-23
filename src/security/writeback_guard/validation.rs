@@ -207,7 +207,6 @@ mod tests {
 
     fn valid_state_header() -> Value {
         json!({
-            "schema_version": 1,
             "identity_principles_hash": "identity-v1-abcd1234",
             "safety_posture": "strict",
             "current_objective": "Ship deterministic writeback guard",
@@ -706,24 +705,6 @@ mod tests {
         )
         .expect_err("unknown field must reject");
         assert!(err.contains("payload.state_header contains unknown field: unknown"));
-
-        let mut bad_schema_type = valid_state_header();
-        bad_schema_type["schema_version"] = json!("1");
-        let err = validate_state_header(
-            bad_schema_type.as_object().expect("object expected"),
-            &immutable_fields(),
-        )
-        .expect_err("schema type must reject");
-        assert!(err.contains("payload.state_header.schema_version must be an integer"));
-
-        let mut bad_schema_value = valid_state_header();
-        bad_schema_value["schema_version"] = json!(2);
-        let err = validate_state_header(
-            bad_schema_value.as_object().expect("object expected"),
-            &immutable_fields(),
-        )
-        .expect_err("schema mismatch must reject");
-        assert!(err.contains("immutable field mismatch: payload.state_header.schema_version"));
 
         let mut bad_identity = valid_state_header();
         bad_identity["identity_principles_hash"] = json!("other");

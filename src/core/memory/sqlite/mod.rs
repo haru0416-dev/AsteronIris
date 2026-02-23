@@ -43,61 +43,17 @@ pub struct SqliteMemory {
     #[allow(dead_code)] // Retained for diagnostics and future reconnection workflows
     db_path: PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
-    // Projection API — deprecated, scheduled for removal in V5.
-    #[allow(dead_code)]
-    vector_weight: f32,
-    // Projection API — deprecated, scheduled for removal in V5.
-    #[allow(dead_code)]
-    keyword_weight: f32,
     cache_max: usize,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
 impl SqliteMemory {
-    const MEMORY_SCHEMA_V1: i64 = 1;
-    const MEMORY_SCHEMA_V2: i64 = 2;
-    const MEMORY_SCHEMA_V3: i64 = 3;
-    const MEMORY_SCHEMA_V4: i64 = 4;
-    const MEMORY_SCHEMA_V5: i64 = 5;
-    const MEMORY_EVENTS_V2_COLUMNS: [&'static str; 4] = [
-        "layer",
-        "provenance_source_class",
-        "provenance_reference",
-        "provenance_evidence_uri",
-    ];
-    const MEMORY_EVENTS_V3_COLUMNS: [&'static str; 2] = ["retention_tier", "retention_expires_at"];
-    const MEMORIES_V3_COLUMNS: [&'static str; 6] = [
-        "layer",
-        "provenance_source_class",
-        "provenance_reference",
-        "provenance_evidence_uri",
-        "retention_tier",
-        "retention_expires_at",
-    ];
-    const RETRIEVAL_DOCS_V3_COLUMNS: [&'static str; 6] = [
-        "layer",
-        "provenance_source_class",
-        "provenance_reference",
-        "provenance_evidence_uri",
-        "retention_tier",
-        "retention_expires_at",
-    ];
-    const MEMORY_EVENTS_V4_COLUMNS: [&'static str; 2] = ["signal_tier", "source_kind"];
-    const RETRIEVAL_UNITS_V4_COLUMNS: [&'static str; 0] = [];
     const TREND_TTL_DAYS: f64 = 30.0;
     const TREND_DECAY_WINDOW_DAYS: f64 = 45.0;
-    const PROJECTION_ENTITY_ID: &'static str = "__projection__";
-
-    fn projection_unit_id(slot_key: &str) -> String {
-        format!("projection:{slot_key}")
-    }
-
     pub fn new(workspace_dir: &Path) -> anyhow::Result<Self> {
         Self::with_embedder(
             workspace_dir,
             Arc::new(super::embeddings::NoopEmbedding),
-            0.7,
-            0.3,
             10_000,
         )
     }
@@ -105,8 +61,6 @@ impl SqliteMemory {
     pub fn with_embedder(
         workspace_dir: &Path,
         embedder: Arc<dyn EmbeddingProvider>,
-        vector_weight: f32,
-        keyword_weight: f32,
         cache_max: usize,
     ) -> anyhow::Result<Self> {
         let db_path = workspace_dir.join("memory").join("brain.db");
@@ -131,8 +85,6 @@ impl SqliteMemory {
             conn: Mutex::new(conn),
             db_path,
             embedder,
-            vector_weight,
-            keyword_weight,
             cache_max,
         })
     }

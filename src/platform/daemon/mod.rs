@@ -110,14 +110,13 @@ mod tests {
     use super::initialize_persona_startup_state;
     use crate::config::Config;
     use crate::core::memory::create_memory;
-    use crate::core::persona::state_header::StateHeaderV1;
+    use crate::core::persona::state_header::StateHeader;
     use crate::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    fn custom_state() -> StateHeaderV1 {
-        StateHeaderV1 {
-            schema_version: 1,
+    fn custom_state() -> StateHeader {
+        StateHeader {
             identity_principles_hash: "identity-v1-abcd1234".to_string(),
             safety_posture: "strict".to_string(),
             current_objective: "reconcile from backend canonical".to_string(),

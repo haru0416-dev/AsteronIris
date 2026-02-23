@@ -224,12 +224,12 @@ where
     let value = Option::<String>::deserialize(deserializer)?;
     value
         .map(|level| match level.as_str() {
-            "read_only" | "readonly" => Ok(AutonomyLevel::ReadOnly),
+            "read_only" => Ok(AutonomyLevel::ReadOnly),
             "supervised" => Ok(AutonomyLevel::Supervised),
             "full" => Ok(AutonomyLevel::Full),
             _ => Err(serde::de::Error::unknown_variant(
                 &level,
-                &["read_only", "readonly", "supervised", "full"],
+                &["read_only", "supervised", "full"],
             )),
         })
         .transpose()
