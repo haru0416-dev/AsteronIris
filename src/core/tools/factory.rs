@@ -149,6 +149,7 @@ pub fn all_tools(
     #[cfg_attr(not(feature = "taste"), allow(unused_variables))] taste_provider: Option<
         Arc<dyn crate::core::providers::Provider>,
     >,
+    #[cfg_attr(not(feature = "taste"), allow(unused_variables))] taste_model: &str,
 ) -> Vec<Box<dyn Tool>> {
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
@@ -211,7 +212,7 @@ pub fn all_tools(
         if taste_config.enabled
             && let Some(provider) = taste_provider
         {
-            let model = "claude-sonnet-4-20250514".to_string();
+            let model = taste_model.to_string();
             if let Ok(engine) =
                 crate::core::taste::create_taste_engine(taste_config, provider, model)
             {

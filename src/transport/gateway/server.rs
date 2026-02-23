@@ -110,7 +110,7 @@ fn build_gateway_resources(config: &Config, auth_broker: &AuthBroker) -> Result<
     {
         let provider_name = config.default_provider.as_deref().unwrap_or("anthropic");
         let api_key = auth_broker.resolve_provider_api_key(provider_name);
-        providers::create_provider(provider_name, api_key.as_deref())
+        providers::create_provider_with_oauth_recovery(config, provider_name, api_key.as_deref())
             .ok()
             .map(|p| Arc::from(p) as Arc<dyn crate::core::providers::Provider>)
     } else {
@@ -128,6 +128,10 @@ fn build_gateway_resources(config: &Config, auth_broker: &AuthBroker) -> Result<
         Some(&config.mcp),
         &config.taste,
         taste_provider,
+        config
+            .default_model
+            .as_deref()
+            .unwrap_or("anthropic/claude-sonnet-4-20250514"),
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = ToolRegistry::new(middleware);

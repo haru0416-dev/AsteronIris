@@ -477,6 +477,10 @@ pub async fn run_main_session_turn_for_integration_with_policy(
         Some(&config.mcp),
         &config.taste,
         taste_provider,
+        config
+            .default_model
+            .as_deref()
+            .unwrap_or("anthropic/claude-sonnet-4-20250514"),
     );
     let middleware = tools::default_middleware_chain();
     let mut registry = tools::ToolRegistry::new(middleware);

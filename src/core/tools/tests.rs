@@ -110,6 +110,7 @@ fn all_tools_excludes_browser_when_disabled() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
     assert!(!names.contains(&"browser_open"));
@@ -142,6 +143,7 @@ fn all_tools_includes_browser_when_enabled() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
     assert!(names.contains(&"browser_open"));
@@ -298,6 +300,7 @@ fn all_tools_respects_disabled_shell() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
     assert!(!names.contains(&"shell"));
@@ -327,6 +330,7 @@ fn all_tools_respects_disabled_file_read() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
     assert!(!names.contains(&"file_read"));
@@ -355,6 +359,7 @@ fn all_tools_respects_disabled_memory_forget() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
     assert!(!names.contains(&"memory_forget"));
@@ -384,6 +389,7 @@ fn all_tools_includes_memory_forget_when_enabled() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
     assert!(names.contains(&"memory_forget"));
@@ -419,6 +425,7 @@ fn all_tools_with_all_disabled_yields_only_always_on_tools() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     // Always-on tools: delegate, subagent_spawn, subagent_output, subagent_cancel
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
@@ -457,6 +464,7 @@ fn all_tools_default_config_has_expected_tools() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
 
@@ -531,6 +539,7 @@ fn all_tools_none_mcp_matches_empty_mcp_config() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let with_empty_config = all_tools(
         &security,
@@ -541,6 +550,7 @@ fn all_tools_none_mcp_matches_empty_mcp_config() {
         Some(&enabled_mcp_config_without_servers()),
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
 
     let baseline_names: Vec<&str> = baseline.iter().map(|tool| tool.name()).collect();
@@ -610,6 +620,7 @@ fn all_tools_accepts_mcp_config_but_ignores_it_without_feature() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let with_enabled_mcp = all_tools(
         &security,
@@ -620,6 +631,7 @@ fn all_tools_accepts_mcp_config_but_ignores_it_without_feature() {
         Some(&enabled_mcp_config_with_empty_server()),
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
 
     let none_names: Vec<&str> = with_none.iter().map(|tool| tool.name()).collect();
@@ -652,6 +664,7 @@ fn all_tools_with_empty_mcp_servers_matches_none() {
         None,
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
     let with_empty_servers = all_tools(
         &security,
@@ -662,6 +675,7 @@ fn all_tools_with_empty_mcp_servers_matches_none() {
         Some(&enabled_mcp_config_without_servers()),
         &crate::config::TasteConfig::default(),
         None,
+        "test-model",
     );
 
     let none_names: Vec<&str> = with_none.iter().map(|tool| tool.name()).collect();
