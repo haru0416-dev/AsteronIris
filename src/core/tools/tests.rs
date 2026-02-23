@@ -358,14 +358,19 @@ fn all_tools_with_all_disabled_yields_only_always_on_tools() {
     };
     let tools = all_tools(&security, mem, None, &browser, &tools_cfg, None);
     // Always-on tools: delegate, subagent_spawn, subagent_output, subagent_cancel
+    // With taste feature: + taste_evaluate, taste_compare
     let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
     assert!(!names.contains(&"shell"));
     assert!(!names.contains(&"file_read"));
     assert!(!names.contains(&"memory_store"));
     assert!(names.contains(&"delegate"));
+    #[cfg(feature = "taste")]
+    let expected_always_on = 6;
+    #[cfg(not(feature = "taste"))]
+    let expected_always_on = 4;
     assert_eq!(
         tools.len(),
-        4,
+        expected_always_on,
         "only always-on tools should remain: {names:?}"
     );
 }
