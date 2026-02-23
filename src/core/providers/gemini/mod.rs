@@ -19,7 +19,8 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::gemini_types::{
+mod types;
+use types::{
     Candidate, Content, GeminiFileData, GeminiFunctionCall, GeminiFunctionDeclaration,
     GeminiFunctionResponse, GeminiInlineData, GeminiTool, GenerateContentRequest,
     GenerateContentResponse, GenerationConfig, Part, ResponsePart,

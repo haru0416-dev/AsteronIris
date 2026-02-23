@@ -7,7 +7,7 @@ use asteroniris::core::agent::loop_::{
 };
 use asteroniris::core::memory::{Memory, MemoryCategory, RecallQuery};
 use asteroniris::core::providers::Provider;
-use asteroniris::core::tools::memory_recall::MemoryRecallTool;
+use asteroniris::core::tools::MemoryRecallTool;
 use asteroniris::core::tools::{ExecutionContext, Tool};
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::{

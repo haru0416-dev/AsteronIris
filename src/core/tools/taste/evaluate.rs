@@ -1,4 +1,4 @@
-use super::traits::{Tool, ToolResult};
+use crate::core::tools::traits::{Tool, ToolResult};
 use crate::core::taste::engine::TasteEngine;
 use crate::core::taste::types::{Artifact, TasteContext, TextFormat};
 use crate::core::tools::middleware::ExecutionContext;

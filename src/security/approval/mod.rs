@@ -1,3 +1,15 @@
+pub mod channel;
+pub mod cli;
+#[cfg(feature = "discord")]
+pub mod discord;
+pub mod telegram;
+
+pub use channel::{ChannelApprovalContext, TextReplyApprovalBroker, broker_for_channel};
+pub use cli::CliApprovalBroker;
+#[cfg(feature = "discord")]
+pub use discord::DiscordApprovalBroker;
+pub use telegram::TelegramApprovalBroker;
+
 use crate::core::providers::scrub_secret_patterns;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

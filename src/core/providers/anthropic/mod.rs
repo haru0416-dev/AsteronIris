@@ -10,7 +10,8 @@ use crate::core::tools::traits::ToolSpec;
 use async_trait::async_trait;
 use reqwest::Client;
 
-use super::anthropic_types::{
+mod types;
+use types::{
     AnthropicImageSource, AnthropicToolDef, ChatRequest, ChatResponse, InputContentBlock, Message,
     MessageContent, ResponseContentBlock, StreamContentBlockDelta, StreamContentBlockStart,
     StreamContentBlockType, StreamDelta, StreamMessageDelta, StreamMessageStart,

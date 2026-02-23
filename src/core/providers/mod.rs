@@ -1,17 +1,12 @@
 pub mod anthropic;
-mod anthropic_types;
 pub mod compatible;
-mod compatible_types;
 pub mod factory;
 pub mod fallback_tools;
 pub mod gemini;
-mod gemini_types;
 pub mod http_client;
 pub mod oauth_recovery;
 pub mod ollama;
 pub mod openai;
-mod openai_compat;
-mod openai_types;
 pub mod openrouter;
 pub mod reliable;
 pub mod response;

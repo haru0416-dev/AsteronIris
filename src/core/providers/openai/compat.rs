@@ -1,4 +1,4 @@
-use super::openai_types::{
+use super::types::{
     ChatCompletionChunk, ChatRequest, ChatResponse, ContentPart, ImageUrlContent, Message,
     MessageContent, OpenAiTool, OpenAiToolCall, OpenAiToolCallFunction, OpenAiToolDefinition,
     StreamOptions, Usage,
@@ -15,7 +15,7 @@ use anyhow::Context;
 use futures_util::StreamExt;
 use serde_json::Value;
 
-pub(super) fn build_request(
+pub(in crate::core::providers) fn build_request(
     system_prompt: Option<&str>,
     message: &str,
     model: &str,
@@ -50,7 +50,7 @@ pub(super) fn build_request(
     }
 }
 
-pub(super) fn build_text_message(role: &'static str, content: String) -> Message {
+pub(in crate::core::providers) fn build_text_message(role: &'static str, content: String) -> Message {
     Message {
         role,
         content: Some(MessageContent::Text(content)),
@@ -59,7 +59,7 @@ pub(super) fn build_text_message(role: &'static str, content: String) -> Message
     }
 }
 
-pub(super) fn map_provider_message(provider_message: &ProviderMessage) -> Vec<Message> {
+pub(in crate::core::providers) fn map_provider_message(provider_message: &ProviderMessage) -> Vec<Message> {
     let mut text_parts = Vec::new();
     let mut image_parts = Vec::new();
     let mut assistant_tool_calls = Vec::new();
@@ -160,7 +160,7 @@ pub(super) fn map_provider_message(provider_message: &ProviderMessage) -> Vec<Me
     messages
 }
 
-pub(super) fn build_openai_tools(tools: &[ToolSpec]) -> Option<Vec<OpenAiTool>> {
+pub(in crate::core::providers) fn build_openai_tools(tools: &[ToolSpec]) -> Option<Vec<OpenAiTool>> {
     map_tools_optional(tools, |tool| {
         let fields = ToolFields::from_tool(tool);
         OpenAiTool {
@@ -191,7 +191,7 @@ fn build_messages(system_prompt: Option<&str>, messages: &[ProviderMessage]) -> 
     openai_messages
 }
 
-pub(super) fn build_tools_request(
+pub(in crate::core::providers) fn build_tools_request(
     system_prompt: Option<&str>,
     messages: &[ProviderMessage],
     tools: &[ToolSpec],
@@ -208,7 +208,7 @@ pub(super) fn build_tools_request(
     }
 }
 
-pub(super) fn build_stream_request(req: ProviderChatRequest) -> ChatRequest {
+pub(in crate::core::providers) fn build_stream_request(req: ProviderChatRequest) -> ChatRequest {
     let ProviderChatRequest {
         system_prompt,
         messages,
@@ -229,7 +229,7 @@ pub(super) fn build_stream_request(req: ProviderChatRequest) -> ChatRequest {
     }
 }
 
-pub(super) fn extract_text(
+pub(in crate::core::providers) fn extract_text(
     chat_response: &ChatResponse,
     provider_name: &str,
 ) -> anyhow::Result<String> {
@@ -240,7 +240,7 @@ pub(super) fn extract_text(
         .ok_or_else(|| anyhow::anyhow!("No response from {provider_name}"))
 }
 
-pub(super) fn map_finish_reason(finish_reason: Option<&str>) -> StopReason {
+pub(in crate::core::providers) fn map_finish_reason(finish_reason: Option<&str>) -> StopReason {
     match finish_reason {
         Some("stop") => StopReason::EndTurn,
         Some("tool_calls") => StopReason::ToolUse,
@@ -249,7 +249,7 @@ pub(super) fn map_finish_reason(finish_reason: Option<&str>) -> StopReason {
     }
 }
 
-pub(super) fn parse_tool_calls(
+pub(in crate::core::providers) fn parse_tool_calls(
     tool_calls: Option<Vec<OpenAiToolCall>>,
     provider_name: &str,
 ) -> anyhow::Result<Vec<ContentBlock>> {
@@ -273,14 +273,14 @@ pub(super) fn parse_tool_calls(
         .collect()
 }
 
-pub(super) struct ChatCompletionsEndpoint<'a> {
-    pub(super) provider_name: &'a str,
-    pub(super) url: &'a str,
-    pub(super) missing_api_key_message: &'a str,
-    pub(super) extra_headers: &'a [(&'a str, &'a str)],
+pub(in crate::core::providers) struct ChatCompletionsEndpoint<'a> {
+    pub(in crate::core::providers) provider_name: &'a str,
+    pub(in crate::core::providers) url: &'a str,
+    pub(in crate::core::providers) missing_api_key_message: &'a str,
+    pub(in crate::core::providers) extra_headers: &'a [(&'a str, &'a str)],
 }
 
-pub(super) async fn send_chat_completions_raw(
+pub(in crate::core::providers) async fn send_chat_completions_raw(
     client: &reqwest::Client,
     cached_auth_header: Option<&String>,
     request: &ChatRequest,
@@ -304,13 +304,13 @@ pub(super) async fn send_chat_completions_raw(
         .map_err(|error| anyhow::anyhow!("{} request failed: {error}", endpoint.provider_name))?;
 
     if !response.status().is_success() {
-        return Err(super::api_error(endpoint.provider_name, response).await);
+        return Err(crate::core::providers::api_error(endpoint.provider_name, response).await);
     }
 
     Ok(response)
 }
 
-pub(super) async fn send_chat_completions_json(
+pub(in crate::core::providers) async fn send_chat_completions_json(
     client: &reqwest::Client,
     cached_auth_header: Option<&String>,
     request: &ChatRequest,
@@ -333,7 +333,7 @@ fn provider_response_with_usage(text: String, usage: Option<&Usage>) -> Provider
     }
 }
 
-pub(super) fn build_text_provider_response(
+pub(in crate::core::providers) fn build_text_provider_response(
     chat_response: ChatResponse,
     provider_name: &str,
 ) -> anyhow::Result<ProviderResponse> {
@@ -347,7 +347,7 @@ pub(super) fn build_text_provider_response(
     Ok(provider_response)
 }
 
-pub(super) fn build_tool_provider_response(
+pub(in crate::core::providers) fn build_tool_provider_response(
     chat_response: ChatResponse,
     provider_name: &str,
 ) -> anyhow::Result<ProviderResponse> {
@@ -381,7 +381,7 @@ pub(super) fn build_tool_provider_response(
     Ok(provider_response)
 }
 
-pub(super) fn sse_response_to_provider_stream(response: reqwest::Response) -> ProviderStream {
+pub(in crate::core::providers) fn sse_response_to_provider_stream(response: reqwest::Response) -> ProviderStream {
     let mut byte_stream = response.bytes_stream();
 
     let stream = async_stream::try_stream! {

@@ -1,25 +1,25 @@
-use super::traits::{Tool, ToolResult};
+use crate::core::tools::traits::{Tool, ToolResult};
 use crate::core::subagents;
 use crate::core::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-pub struct SubagentCancelTool;
+pub struct SubagentOutputTool;
 
-impl SubagentCancelTool {
+impl SubagentOutputTool {
     pub fn new() -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl Tool for SubagentCancelTool {
+impl Tool for SubagentOutputTool {
     fn name(&self) -> &str {
-        "subagent_cancel"
+        "subagent_output"
     }
 
     fn description(&self) -> &str {
-        "Cancel a running sub-agent"
+        "Get status/output for a spawned sub-agent run"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -37,14 +37,18 @@ impl Tool for SubagentCancelTool {
             .get("run_id")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("Missing 'run_id' parameter"))?;
-        subagents::cancel(run_id)?;
+        let Some(snapshot) = subagents::get(run_id) else {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("subagent run not found: {run_id}")),
+                attachments: Vec::new(),
+            });
+        };
 
         Ok(ToolResult {
             success: true,
-            output: serde_json::to_string(&json!({
-                "status": "cancelled",
-                "run_id": run_id,
-            }))?,
+            output: serde_json::to_string(&snapshot)?,
             error: None,
             attachments: Vec::new(),
         })

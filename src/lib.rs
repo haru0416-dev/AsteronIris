@@ -15,7 +15,7 @@ extern crate rust_i18n;
 
 i18n!("locales", fallback = "en");
 
-pub mod commands;
+pub mod cli;
 pub mod config;
 pub mod core;
 pub mod media;
@@ -29,7 +29,7 @@ pub mod transport;
 pub mod ui;
 pub mod utils;
 
-pub use commands::{
+pub use cli::commands::{
     AuthCommands, ChannelCommands, CronCommands, IntegrationCommands, ServiceCommands,
     SkillCommands,
 };

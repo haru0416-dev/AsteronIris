@@ -21,7 +21,7 @@ fn inventory_scope_lock() {
     let inventory = build_scope_lock_inventory().expect("scope-lock inventory should build");
     let artifact = inventory.to_json_pretty();
     let baseline = load_scope_lock_baseline_inventory().expect("baseline artifact should parse");
-    let registry_source = include_str!("../../src/plugins/integrations/registry.rs");
+    let registry_source = include_str!("../../src/plugins/integrations/registry/catalog.rs");
     let skillforge_source = include_str!("../../src/plugins/skillforge/mod.rs");
 
     let expected_coming_soon_count = parse_registry_coming_soon_count(registry_source)
@@ -127,25 +127,25 @@ pub fn all_integrations() -> Vec<IntegrationEntry> {
             name: "Zeta",
             description: "Zeta integration",
             category: IntegrationCategory::AiModel,
-            status_fn: |_| IntegrationStatus::ComingSoon,
+            status_fn: status::coming_soon,
         },
         IntegrationEntry {
             name: "Alpha",
             description: "Alpha integration",
             category: IntegrationCategory::Chat,
-            status_fn: |_| IntegrationStatus::ComingSoon,
+            status_fn: status::coming_soon,
         },
         IntegrationEntry {
             name: "Alpha",
             description: "Duplicate",
             category: IntegrationCategory::Chat,
-            status_fn: |_| IntegrationStatus::ComingSoon,
+            status_fn: status::coming_soon,
         },
         IntegrationEntry {
             name: "Active",
             description: "Already active",
             category: IntegrationCategory::Chat,
-            status_fn: |_| IntegrationStatus::Available,
+            status_fn: status::active,
         },
     ];
 }
@@ -244,25 +244,25 @@ pub fn all_integrations() -> Vec<IntegrationEntry> {
                     name: "Beta",
                     description: "Social integration",
                     category: IntegrationCategory::Social,
-                    status_fn: |_| IntegrationStatus::ComingSoon,
+                    status_fn: status::coming_soon,
                 },
                 IntegrationEntry {
                     name: "Alpha",
                     description: "AI integration",
                     category: IntegrationCategory::AiModel,
-                    status_fn: |_| IntegrationStatus::ComingSoon,
+                    status_fn: status::coming_soon,
                 },
                 IntegrationEntry {
                     name: "Beta",
                     description: "Social duplicate",
-                    status_fn: |_| IntegrationStatus::ComingSoon,
+                    status_fn: status::coming_soon,
                     category: IntegrationCategory::Social,
                 },
                 IntegrationEntry {
                     name: "Ignored",
                     description: "Available integration",
                     category: IntegrationCategory::ToolsAutomation,
-                    status_fn: |_| IntegrationStatus::Active,
+                    status_fn: status::active,
                 },
             ];
         }

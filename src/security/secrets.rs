@@ -213,5 +213,4 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-#[path = "secrets_tests.rs"]
 mod tests;

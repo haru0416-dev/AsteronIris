@@ -1,6 +1,6 @@
 use super::*;
+use super::types::CandidateContent;
 use crate::core::providers::Provider;
-use crate::core::providers::gemini_types::CandidateContent;
 use crate::core::tools::traits::ToolSpec;
 
 #[test]

@@ -4,7 +4,7 @@ pub mod cli;
 #[cfg(feature = "discord")]
 pub mod discord;
 #[cfg(feature = "email")]
-pub mod email_channel;
+pub mod email;
 pub mod factory;
 mod health;
 pub mod imessage;
@@ -28,7 +28,7 @@ pub use cli::CliChannel;
 #[cfg(feature = "discord")]
 pub use discord::DiscordChannel;
 #[cfg(feature = "email")]
-pub use email_channel::EmailChannel;
+pub use email::EmailChannel;
 pub use imessage::IMessageChannel;
 pub use irc::{IrcChannel, IrcChannelConfig};
 pub use matrix::MatrixChannel;

@@ -2,7 +2,8 @@
 //! Most LLM APIs follow the same `/v1/chat/completions` format.
 //! This module provides a single implementation that works for all of them.
 
-use super::compatible_types::{
+mod types;
+use types::{
     ChatRequest, ChatResponse, Message, ResponsesInput, ResponsesRequest, ResponsesResponse,
     extract_chat_text, extract_responses_sse_text, extract_responses_text,
 };

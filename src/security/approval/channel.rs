@@ -1,7 +1,7 @@
-use crate::security::approval::{ApprovalBroker, ApprovalDecision, ApprovalRequest};
+use super::{ApprovalBroker, ApprovalDecision, ApprovalRequest};
 #[cfg(feature = "discord")]
-use crate::security::approval_discord::DiscordApprovalBroker;
-use crate::security::approval_telegram::TelegramApprovalBroker;
+use super::discord::DiscordApprovalBroker;
+use super::telegram::TelegramApprovalBroker;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
 use asteroniris::ChannelCommands;
+use asteroniris::cli::commands::{Cli, Commands};
 use std::sync::Arc;
 use tracing::info;
 
 use crate::app::status::render_status;
-use crate::cli::commands::{Cli, Commands};
 use asteroniris::Config;
 
 #[allow(clippy::too_many_lines)]
@@ -201,8 +201,8 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::dispatch;
-    use crate::cli::commands::{Cli, Commands};
     use asteroniris::Config;
+    use asteroniris::cli::commands::{Cli, Commands};
     use std::sync::Arc;
     use tempfile::TempDir;
 

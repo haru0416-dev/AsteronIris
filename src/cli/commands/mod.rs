@@ -1,8 +1,17 @@
-use asteroniris::{
+use clap::{Parser, Subcommand};
+
+pub mod handlers;
+pub mod parser;
+mod subcommands;
+pub mod types;
+
+pub use handlers::handle_command;
+pub use parser::parse_command;
+pub use subcommands::{
     AuthCommands, ChannelCommands, CronCommands, IntegrationCommands, ServiceCommands,
     SkillCommands,
 };
-use clap::{Parser, Subcommand};
+pub use types::{Command, CommandResult};
 
 /// `AsteronIris` - Secure, extensible AI assistant built in Rust.
 #[derive(Parser, Debug)]

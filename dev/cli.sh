@@ -5,9 +5,11 @@ set -e
 if [ -f "dev/docker-compose.yml" ]; then
     BASE_DIR="dev"
     HOST_TARGET_DIR="target"
+    TEMPLATE_FILE="config/templates/dev-config.toml"
 elif [ -f "docker-compose.yml" ] && [ "$(basename "$(pwd)")" == "dev" ]; then
     BASE_DIR="."
     HOST_TARGET_DIR="../target"
+    TEMPLATE_FILE="../config/templates/dev-config.toml"
 else
     echo "❌ Error: Run this script from the project root or dev/ directory."
     exit 1
@@ -31,7 +33,7 @@ function ensure_config {
         mkdir -p "$WORKSPACE_DIR"
 
         # Copy template
-        cat "$BASE_DIR/config.template.toml" > "$CONFIG_FILE"
+        cat "$TEMPLATE_FILE" > "$CONFIG_FILE"
     fi
 }
 

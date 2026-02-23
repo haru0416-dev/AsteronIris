@@ -20,9 +20,8 @@ use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
 mod app;
-mod cli;
 use asteroniris::Config;
-use cli::commands::Cli;
+use asteroniris::cli::commands::Cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -1,9 +1,4 @@
 pub mod approval;
-pub mod approval_channel;
-pub mod approval_cli;
-#[cfg(feature = "discord")]
-pub mod approval_discord;
-pub mod approval_telegram;
 pub mod auth;
 pub mod defaults;
 pub mod external_content;
@@ -20,14 +15,14 @@ pub use approval::{
     RiskLevel, classify_risk, summarize_args,
 };
 #[allow(unused_imports)]
-pub use approval_channel::{ChannelApprovalContext, TextReplyApprovalBroker, broker_for_channel};
+pub use approval::{ChannelApprovalContext, TextReplyApprovalBroker, broker_for_channel};
 #[allow(unused_imports)]
-pub use approval_cli::CliApprovalBroker;
+pub use approval::CliApprovalBroker;
 #[cfg(feature = "discord")]
 #[allow(unused_imports)]
-pub use approval_discord::DiscordApprovalBroker;
+pub use approval::DiscordApprovalBroker;
 #[allow(unused_imports)]
-pub use approval_telegram::TelegramApprovalBroker;
+pub use approval::TelegramApprovalBroker;
 pub use defaults::{default_allowed_commands, default_forbidden_paths};
 #[allow(unused_imports)]
 pub use pairing::PairingGuard;

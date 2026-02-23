@@ -1,15 +1,11 @@
 #[cfg(test)]
-use super::openai_types::Message;
-#[cfg(test)]
-use super::openai_types::OpenAiToolCall;
-use super::{
-    openai_compat,
-    openai_types::{ChatRequest, ChatResponse},
+use super::openai::types::Message;
+use super::openai::{
+    compat as openai_compat,
+    types::{ChatRequest, ChatResponse},
 };
 #[cfg(test)]
-use crate::core::providers::{ContentBlock, StopReason};
-#[cfg(test)]
-use crate::core::providers::{ImageSource, MessageRole, sse::parse_data_lines_without_done};
+use crate::core::providers::sse::parse_data_lines_without_done;
 use crate::core::providers::{
     ProviderMessage, ProviderResponse, build_provider_client,
     streaming::{ProviderChatRequest, ProviderStream},
@@ -19,17 +15,24 @@ use crate::core::tools::traits::ToolSpec;
 use async_trait::async_trait;
 use reqwest::Client;
 
-pub struct OpenAiProvider {
+pub struct OpenRouterProvider {
     /// Pre-computed `"Bearer <key>"` header value (avoids `format!` per request).
     cached_auth_header: Option<String>,
     client: Client,
 }
 
-const OPENAI_CHAT_COMPLETIONS_URL: &str = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MISSING_API_KEY_MESSAGE: &str =
-    "OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.";
+const OPENROUTER_CHAT_COMPLETIONS_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_MISSING_API_KEY_MESSAGE: &str =
+    "OpenRouter API key not set. Run `asteroniris onboard` or set OPENROUTER_API_KEY env var.";
+const OPENROUTER_EXTRA_HEADERS: [(&str, &str); 2] = [
+    (
+        "HTTP-Referer",
+        "https://github.com/haru0416-dev/AsteronIris",
+    ),
+    ("X-Title", "AsteronIris"),
+];
 
-impl OpenAiProvider {
+impl OpenRouterProvider {
     pub fn new(api_key: Option<&str>) -> Self {
         Self {
             cached_auth_header: api_key.map(|k| format!("Bearer {k}")),
@@ -44,6 +47,10 @@ impl OpenAiProvider {
         temperature: f64,
     ) -> ChatRequest {
         openai_compat::build_request(system_prompt, message, model, temperature)
+    }
+
+    fn extract_text(chat_response: &ChatResponse) -> anyhow::Result<String> {
+        openai_compat::extract_text(chat_response, "OpenRouter")
     }
 
     #[cfg(test)]
@@ -61,44 +68,16 @@ impl OpenAiProvider {
         openai_compat::build_tools_request(system_prompt, messages, tools, model, temperature)
     }
 
-    fn extract_text(chat_response: &ChatResponse) -> anyhow::Result<String> {
-        openai_compat::extract_text(chat_response, "OpenAI")
-    }
-
-    #[cfg(test)]
-    fn map_finish_reason(finish_reason: Option<&str>) -> StopReason {
-        openai_compat::map_finish_reason(finish_reason)
-    }
-
-    #[cfg(test)]
-    fn parse_tool_calls(
-        tool_calls: Option<Vec<OpenAiToolCall>>,
-    ) -> anyhow::Result<Vec<ContentBlock>> {
-        openai_compat::parse_tool_calls(tool_calls, "OpenAI")
-    }
-
-    async fn call_api(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
-        temperature: f64,
-    ) -> anyhow::Result<ChatResponse> {
-        let request = Self::build_request(system_prompt, message, model, temperature);
-
-        self.call_api_with_request(&request).await
-    }
-
     async fn call_api_with_request(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse> {
         openai_compat::send_chat_completions_json(
             &self.client,
             self.cached_auth_header.as_ref(),
             request,
             openai_compat::ChatCompletionsEndpoint {
-                provider_name: "OpenAI",
-                url: OPENAI_CHAT_COMPLETIONS_URL,
-                missing_api_key_message: OPENAI_MISSING_API_KEY_MESSAGE,
-                extra_headers: &[],
+                provider_name: "OpenRouter",
+                url: OPENROUTER_CHAT_COMPLETIONS_URL,
+                missing_api_key_message: OPENROUTER_MISSING_API_KEY_MESSAGE,
+                extra_headers: &OPENROUTER_EXTRA_HEADERS,
             },
         )
         .await
@@ -110,10 +89,10 @@ impl OpenAiProvider {
             self.cached_auth_header.as_ref(),
             request,
             openai_compat::ChatCompletionsEndpoint {
-                provider_name: "OpenAI",
-                url: OPENAI_CHAT_COMPLETIONS_URL,
-                missing_api_key_message: OPENAI_MISSING_API_KEY_MESSAGE,
-                extra_headers: &[],
+                provider_name: "OpenRouter",
+                url: OPENROUTER_CHAT_COMPLETIONS_URL,
+                missing_api_key_message: OPENROUTER_MISSING_API_KEY_MESSAGE,
+                extra_headers: &OPENROUTER_EXTRA_HEADERS,
             },
         )
         .await
@@ -127,10 +106,35 @@ impl OpenAiProvider {
         let response = self.call_api_streaming(&request).await?;
         Ok(openai_compat::sse_response_to_provider_stream(response))
     }
+
+    async fn call_api(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        let request = Self::build_request(system_prompt, message, model, temperature);
+        self.call_api_with_request(&request).await
+    }
 }
 
 #[async_trait]
-impl Provider for OpenAiProvider {
+impl Provider for OpenRouterProvider {
+    async fn warmup(&self) -> anyhow::Result<()> {
+        // Hit a lightweight endpoint to establish TLS + HTTP/2 connection pool.
+        // This prevents the first real chat request from timing out on cold start.
+        if let Some(auth_header) = self.cached_auth_header.as_ref() {
+            self.client
+                .get("https://openrouter.ai/api/v1/auth/key")
+                .header("Authorization", auth_header)
+                .send()
+                .await?
+                .error_for_status()?;
+        }
+        Ok(())
+    }
+
     async fn chat_with_system(
         &self,
         system_prompt: Option<&str>,
@@ -154,8 +158,7 @@ impl Provider for OpenAiProvider {
         let chat_response = self
             .call_api(system_prompt, message, model, temperature)
             .await?;
-
-        openai_compat::build_text_provider_response(chat_response, "OpenAI")
+        openai_compat::build_text_provider_response(chat_response, "OpenRouter")
     }
 
     async fn chat_with_tools(
@@ -168,7 +171,7 @@ impl Provider for OpenAiProvider {
     ) -> anyhow::Result<ProviderResponse> {
         let request = Self::build_tools_request(system_prompt, messages, tools, model, temperature);
         let chat_response = self.call_api_with_request(&request).await?;
-        openai_compat::build_tool_provider_response(chat_response, "OpenAI")
+        openai_compat::build_tool_provider_response(chat_response, "OpenRouter")
     }
 
     fn supports_tool_calling(&self) -> bool {

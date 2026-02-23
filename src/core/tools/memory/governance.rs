@@ -1,4 +1,4 @@
-use super::traits::{Tool, ToolResult};
+use crate::core::tools::traits::{Tool, ToolResult};
 use crate::core::memory::{BeliefSlot, ForgetMode, Memory, PrivacyLevel};
 use crate::core::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
