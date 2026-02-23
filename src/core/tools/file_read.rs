@@ -1,3 +1,4 @@
+use super::common::{failed_tool_result, workspace_path_property};
 use super::traits::{Tool, ToolResult};
 use crate::core::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
@@ -29,10 +30,7 @@ impl Tool for FileReadTool {
         json!({
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative path to the file within the workspace"
-                }
+                "path": workspace_path_property()
             },
             "required": ["path"]
         })
@@ -54,26 +52,16 @@ impl Tool for FileReadTool {
         let resolved_path = match tokio::fs::canonicalize(&full_path).await {
             Ok(p) => p,
             Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to resolve file path: {e}")),
-
-                    attachments: Vec::new(),
-                });
+                return Ok(failed_tool_result(format!(
+                    "Failed to resolve file path: {e}"
+                )));
             }
         };
 
         let mut file = match tokio::fs::File::open(&resolved_path).await {
             Ok(file) => file,
             Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to read file: {e}")),
-
-                    attachments: Vec::new(),
-                });
+                return Ok(failed_tool_result(format!("Failed to read file: {e}")));
             }
         };
 
@@ -81,38 +69,22 @@ impl Tool for FileReadTool {
         let metadata = match file.metadata().await {
             Ok(metadata) => metadata,
             Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to read file metadata: {e}")),
-
-                    attachments: Vec::new(),
-                });
+                return Ok(failed_tool_result(format!(
+                    "Failed to read file metadata: {e}"
+                )));
             }
         };
         if metadata.len() > MAX_FILE_SIZE {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "File too large: {} bytes (limit: {MAX_FILE_SIZE} bytes)",
-                    metadata.len()
-                )),
-
-                attachments: Vec::new(),
-            });
+            return Ok(failed_tool_result(format!(
+                "File too large: {} bytes (limit: {MAX_FILE_SIZE} bytes)",
+                metadata.len()
+            )));
         }
 
         #[allow(clippy::cast_possible_truncation)]
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
         if let Err(e) = file.read_to_end(&mut bytes).await {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Failed to read file: {e}")),
-
-                attachments: Vec::new(),
-            });
+            return Ok(failed_tool_result(format!("Failed to read file: {e}")));
         }
 
         match String::from_utf8(bytes) {
@@ -123,13 +95,9 @@ impl Tool for FileReadTool {
 
                 attachments: Vec::new(),
             }),
-            Err(_) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Failed to read file: file is not valid UTF-8".to_string()),
-
-                attachments: Vec::new(),
-            }),
+            Err(_) => Ok(failed_tool_result(
+                "Failed to read file: file is not valid UTF-8",
+            )),
         }
     }
 }
@@ -137,17 +105,8 @@ impl Tool for FileReadTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::tools::common::test_security_policy;
     use crate::core::tools::middleware::ExecutionContext;
-    use crate::security::{AutonomyLevel, SecurityPolicy};
-    use std::sync::Arc;
-
-    fn test_security(workspace: std::path::PathBuf) -> Arc<SecurityPolicy> {
-        Arc::new(SecurityPolicy {
-            autonomy: AutonomyLevel::Supervised,
-            workspace_dir: workspace,
-            ..SecurityPolicy::default()
-        })
-    }
 
     #[test]
     fn file_read_name() {
@@ -178,7 +137,7 @@ mod tests {
             .unwrap();
 
         let tool = FileReadTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "test.txt"}), &ctx)
             .await
@@ -197,7 +156,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
         let tool = FileReadTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "nope.txt"}), &ctx)
             .await
@@ -211,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn file_read_missing_path_param() {
         let tool = FileReadTool::new();
-        let ctx = ExecutionContext::test_default(test_security(std::env::temp_dir()));
+        let ctx = ExecutionContext::test_default(test_security_policy(std::env::temp_dir()));
         let result = tool.execute(json!({}), &ctx).await;
         assert!(result.is_err());
     }
@@ -224,7 +183,7 @@ mod tests {
         tokio::fs::write(dir.join("empty.txt"), "").await.unwrap();
 
         let tool = FileReadTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "empty.txt"}), &ctx)
             .await
@@ -247,7 +206,7 @@ mod tests {
             .unwrap();
 
         let tool = FileReadTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "sub/dir/deep.txt"}), &ctx)
             .await
@@ -269,7 +228,7 @@ mod tests {
         tokio::fs::write(dir.join("huge.bin"), &big).await.unwrap();
 
         let tool = FileReadTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "huge.bin"}), &ctx)
             .await

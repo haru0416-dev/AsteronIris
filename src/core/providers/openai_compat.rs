@@ -1,10 +1,11 @@
 use super::openai_types::{
     ChatCompletionChunk, ChatRequest, ChatResponse, ContentPart, ImageUrlContent, Message,
     MessageContent, OpenAiTool, OpenAiToolCall, OpenAiToolCallFunction, OpenAiToolDefinition,
-    StreamOptions,
+    StreamOptions, Usage,
 };
 use crate::core::providers::{
-    ContentBlock, ImageSource, MessageRole, ProviderMessage, StopReason, scrub_secret_patterns,
+    ContentBlock, ImageSource, MessageRole, ProviderMessage, ProviderResponse, StopReason,
+    scrub_secret_patterns,
     sse::{SseBuffer, parse_data_lines_without_done},
     streaming::{ProviderChatRequest, ProviderStream, StreamEvent},
     tool_convert::{ToolFields, map_tools_optional},
@@ -270,6 +271,114 @@ pub(super) fn parse_tool_calls(
             })
         })
         .collect()
+}
+
+pub(super) struct ChatCompletionsEndpoint<'a> {
+    pub(super) provider_name: &'a str,
+    pub(super) url: &'a str,
+    pub(super) missing_api_key_message: &'a str,
+    pub(super) extra_headers: &'a [(&'a str, &'a str)],
+}
+
+pub(super) async fn send_chat_completions_raw(
+    client: &reqwest::Client,
+    cached_auth_header: Option<&String>,
+    request: &ChatRequest,
+    endpoint: ChatCompletionsEndpoint<'_>,
+) -> anyhow::Result<reqwest::Response> {
+    let auth_header = cached_auth_header
+        .ok_or_else(|| anyhow::anyhow!("{}", endpoint.missing_api_key_message))?;
+
+    let mut request_builder = client
+        .post(endpoint.url)
+        .header("Authorization", auth_header)
+        .json(request);
+
+    for (name, value) in endpoint.extra_headers {
+        request_builder = request_builder.header(*name, *value);
+    }
+
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|error| anyhow::anyhow!("{} request failed: {error}", endpoint.provider_name))?;
+
+    if !response.status().is_success() {
+        return Err(super::api_error(endpoint.provider_name, response).await);
+    }
+
+    Ok(response)
+}
+
+pub(super) async fn send_chat_completions_json(
+    client: &reqwest::Client,
+    cached_auth_header: Option<&String>,
+    request: &ChatRequest,
+    endpoint: ChatCompletionsEndpoint<'_>,
+) -> anyhow::Result<ChatResponse> {
+    let provider_name = endpoint.provider_name;
+    let response = send_chat_completions_raw(client, cached_auth_header, request, endpoint).await?;
+
+    response
+        .json()
+        .await
+        .map_err(|error| anyhow::anyhow!("{provider_name} response JSON decode failed: {error}"))
+}
+
+fn provider_response_with_usage(text: String, usage: Option<&Usage>) -> ProviderResponse {
+    if let Some(usage) = usage {
+        ProviderResponse::with_usage(text, usage.prompt_tokens, usage.completion_tokens)
+    } else {
+        ProviderResponse::text_only(text)
+    }
+}
+
+pub(super) fn build_text_provider_response(
+    chat_response: ChatResponse,
+    provider_name: &str,
+) -> anyhow::Result<ProviderResponse> {
+    let text = extract_text(&chat_response, provider_name)?;
+    let mut provider_response = provider_response_with_usage(text, chat_response.usage.as_ref());
+
+    if let Some(api_model) = chat_response.model {
+        provider_response = provider_response.with_model(api_model);
+    }
+
+    Ok(provider_response)
+}
+
+pub(super) fn build_tool_provider_response(
+    chat_response: ChatResponse,
+    provider_name: &str,
+) -> anyhow::Result<ProviderResponse> {
+    let choice = chat_response
+        .choices
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No response from {provider_name}"))?;
+
+    let text = choice.message.content.clone().unwrap_or_default();
+    let scrubbed_text = scrub_secret_patterns(&text).into_owned();
+    let mut content_blocks = parse_tool_calls(choice.message.tool_calls.clone(), provider_name)?;
+
+    if !scrubbed_text.is_empty() {
+        content_blocks.insert(
+            0,
+            ContentBlock::Text {
+                text: scrubbed_text.clone(),
+            },
+        );
+    }
+
+    let mut provider_response =
+        provider_response_with_usage(scrubbed_text, chat_response.usage.as_ref());
+    provider_response.content_blocks = content_blocks;
+    provider_response.stop_reason = Some(map_finish_reason(choice.finish_reason.as_deref()));
+
+    if let Some(api_model) = chat_response.model {
+        provider_response = provider_response.with_model(api_model);
+    }
+
+    Ok(provider_response)
 }
 
 pub(super) fn sse_response_to_provider_stream(response: reqwest::Response) -> ProviderStream {

@@ -156,6 +156,39 @@ impl GeminiProvider {
         }
     }
 
+    fn api_key(&self) -> anyhow::Result<&str> {
+        self.api_key.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Gemini API key not found. Options:\n\
+                 1. Set GEMINI_API_KEY env var\n\
+                 2. Run `gemini` CLI to authenticate (tokens will be reused)\n\
+                 3. Get an API key from https://aistudio.google.com/app/apikey\n\
+                 4. Run `asteroniris onboard` to configure"
+            )
+        })
+    }
+
+    async fn send_api_request(
+        &self,
+        url: String,
+        request: &GenerateContentRequest,
+    ) -> anyhow::Result<reqwest::Response> {
+        let response = self.client.post(url).json(request).send().await?;
+        Self::ensure_success_status(response).await
+    }
+
+    async fn ensure_success_status(
+        response: reqwest::Response,
+    ) -> anyhow::Result<reqwest::Response> {
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Gemini API error ({status}): {error_text}");
+        }
+
+        Ok(response)
+    }
+
     fn extract_text(result: &GenerateContentResponse) -> anyhow::Result<String> {
         let text = result
             .candidates
@@ -363,28 +396,14 @@ impl GeminiProvider {
         model: &str,
         request: &GenerateContentRequest,
     ) -> anyhow::Result<GenerateContentResponse> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Gemini API key not found. Options:\n\
-                 1. Set GEMINI_API_KEY env var\n\
-                 2. Run `gemini` CLI to authenticate (tokens will be reused)\n\
-                 3. Get an API key from https://aistudio.google.com/app/apikey\n\
-             4. Run `asteroniris onboard` to configure"
-            )
-        })?;
+        let api_key = self.api_key()?;
 
         let model_name = Self::model_name(model);
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
         );
 
-        let response = self.client.post(&url).json(request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Gemini API error ({status}): {error_text}");
-        }
+        let response = self.send_api_request(url, request).await?;
 
         let result: GenerateContentResponse = response.json().await?;
 
@@ -400,30 +419,14 @@ impl GeminiProvider {
         model: &str,
         request: &GenerateContentRequest,
     ) -> anyhow::Result<reqwest::Response> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Gemini API key not found. Options:\n\
-                 1. Set GEMINI_API_KEY env var\n\
-                 2. Run `gemini` CLI to authenticate (tokens will be reused)\n\
-                 3. Get an API key from https://aistudio.google.com/app/apikey\n\
-             4. Run `asteroniris onboard` to configure"
-            )
-        })?;
+        let api_key = self.api_key()?;
 
         let model_name = Self::model_name(model);
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/{model_name}:streamGenerateContent?key={api_key}&alt=sse"
         );
 
-        let response = self.client.post(&url).json(request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Gemini API error ({status}): {error_text}");
-        }
-
-        Ok(response)
+        self.send_api_request(url, request).await
     }
 
     async fn chat_with_tools_stream_impl(

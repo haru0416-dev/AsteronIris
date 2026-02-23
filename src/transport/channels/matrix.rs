@@ -1,3 +1,5 @@
+use crate::transport::channels::attachments::media_attachment_url;
+use crate::transport::channels::policy::{AllowlistMatch, is_allowed_user};
 use crate::transport::channels::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
 use anyhow::Context;
 use async_trait::async_trait;
@@ -95,12 +97,11 @@ impl MatrixChannel {
     }
 
     fn is_user_allowed(&self, sender: &str) -> bool {
-        if self.allowed_users.iter().any(|u| u == "*") {
-            return true;
-        }
-        self.allowed_users
-            .iter()
-            .any(|u| u.eq_ignore_ascii_case(sender))
+        is_allowed_user(
+            &self.allowed_users,
+            sender,
+            AllowlistMatch::AsciiCaseInsensitive,
+        )
     }
 
     async fn get_my_user_id(&self) -> anyhow::Result<String> {
@@ -151,14 +152,13 @@ impl MatrixChannel {
             .info
             .as_ref()
             .and_then(|info| info.mimetype.as_deref())
-            .unwrap_or("application/octet-stream")
-            .to_string();
+            .map(str::to_string);
 
-        vec![MediaAttachment {
-            mime_type,
-            data: MediaData::Url(download_url),
-            filename: content.body.clone(),
-        }]
+        vec![media_attachment_url(
+            download_url,
+            mime_type.as_deref(),
+            content.body.clone(),
+        )]
     }
 }
 

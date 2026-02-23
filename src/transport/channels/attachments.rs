@@ -6,6 +6,18 @@ use std::sync::Arc;
 
 use super::traits::{MediaAttachment, MediaData};
 
+pub(crate) fn media_attachment_url(
+    url: String,
+    mime_type: Option<&str>,
+    filename: Option<String>,
+) -> MediaAttachment {
+    MediaAttachment {
+        mime_type: mime_type.unwrap_or("application/octet-stream").to_string(),
+        data: MediaData::Url(url),
+        filename,
+    }
+}
+
 pub(crate) fn convert_attachments_to_images(attachments: &[MediaAttachment]) -> Vec<ContentBlock> {
     use crate::core::providers::response::ImageSource;
 

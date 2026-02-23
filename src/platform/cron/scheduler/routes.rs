@@ -126,6 +126,46 @@ fn check_and_record_ingestion_rate_limit(job: &ParsedIngestionJob) -> anyhow::Re
     Ok(Some(interval - elapsed))
 }
 
+fn consume_security_or_output(
+    security: &SecurityPolicy,
+    route_marker: &str,
+) -> Option<(bool, String)> {
+    security
+        .consume_action_and_cost(0)
+        .err()
+        .map(|policy_error| {
+            (
+                false,
+                format!("{route_marker}\nblocked by security policy: {policy_error}"),
+            )
+        })
+}
+
+fn create_memory_or_output(
+    config: &Config,
+    route_marker: &str,
+) -> Result<Box<dyn crate::core::memory::Memory>, (bool, String)> {
+    create_memory(&config.memory, &config.workspace_dir, None).map_err(|error| {
+        (
+            false,
+            format!("{route_marker}\ncreate_memory failed: {error}"),
+        )
+    })
+}
+
+fn create_ingestion_pipeline_or_output(
+    config: &Config,
+    route_marker: &str,
+) -> Result<SqliteIngestionPipeline, (bool, String)> {
+    let memory = create_memory_or_output(config, route_marker)?;
+    let observer: Arc<dyn crate::runtime::observability::Observer> =
+        Arc::from(create_observer(&config.observability));
+    Ok(SqliteIngestionPipeline::new_with_observer(
+        Arc::from(memory),
+        observer,
+    ))
+}
+
 pub(super) fn parse_routed_job_command(command: &str) -> Option<ParsedRoutedJob> {
     let trimmed = command.trim();
     let (source_kind, rest, source_ref_prefix) =
@@ -357,25 +397,14 @@ pub(super) async fn run_ingestion_job_command(
         }
     }
 
-    if let Err(policy_error) = security.consume_action_and_cost(0) {
-        return (
-            false,
-            format!("{ROUTE_MARKER_INGEST_PIPELINE}\nblocked by security policy: {policy_error}"),
-        );
+    if let Some(output) = consume_security_or_output(security, ROUTE_MARKER_INGEST_PIPELINE) {
+        return output;
     }
 
-    let memory = match create_memory(&config.memory, &config.workspace_dir, None) {
-        Ok(memory) => memory,
-        Err(error) => {
-            return (
-                false,
-                format!("{ROUTE_MARKER_INGEST_PIPELINE}\ncreate_memory failed: {error}"),
-            );
-        }
+    let pipeline = match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_INGEST_PIPELINE) {
+        Ok(pipeline) => pipeline,
+        Err(output) => return output,
     };
-    let observer: Arc<dyn crate::runtime::observability::Observer> =
-        Arc::from(create_observer(&config.observability));
-    let pipeline = SqliteIngestionPipeline::new_with_observer(Arc::from(memory), observer);
     let envelope = SignalEnvelope::new(job.source_kind, job.source_ref, job.content, job.entity_id)
         .with_privacy_level(PrivacyLevel::Private);
 
@@ -401,21 +430,13 @@ pub(super) async fn run_trend_aggregation_job_command(
     security: &SecurityPolicy,
     job: ParsedTrendAggregationJob,
 ) -> (bool, String) {
-    if let Err(policy_error) = security.consume_action_and_cost(0) {
-        return (
-            false,
-            format!("{ROUTE_MARKER_TREND_AGGREGATION}\nblocked by security policy: {policy_error}"),
-        );
+    if let Some(output) = consume_security_or_output(security, ROUTE_MARKER_TREND_AGGREGATION) {
+        return output;
     }
 
-    let memory = match create_memory(&config.memory, &config.workspace_dir, None) {
+    let memory = match create_memory_or_output(config, ROUTE_MARKER_TREND_AGGREGATION) {
         Ok(memory) => memory,
-        Err(error) => {
-            return (
-                false,
-                format!("{ROUTE_MARKER_TREND_AGGREGATION}\ncreate_memory failed: {error}"),
-            );
-        }
+        Err(output) => return output,
     };
 
     let recalled = match memory
@@ -507,11 +528,8 @@ pub(super) async fn run_rss_poll_job_command(
     security: &SecurityPolicy,
     job: ParsedRssPollJob,
 ) -> (bool, String) {
-    if let Err(policy_error) = security.consume_action_and_cost(0) {
-        return (
-            false,
-            format!("{ROUTE_MARKER_RSS_POLL}\nblocked by security policy: {policy_error}"),
-        );
+    if let Some(output) = consume_security_or_output(security, ROUTE_MARKER_RSS_POLL) {
+        return output;
     }
 
     let response = match reqwest::get(&job.url).await {
@@ -551,18 +569,10 @@ pub(super) async fn run_rss_poll_job_command(
         );
     }
 
-    let memory = match create_memory(&config.memory, &config.workspace_dir, None) {
-        Ok(memory) => memory,
-        Err(error) => {
-            return (
-                false,
-                format!("{ROUTE_MARKER_RSS_POLL}\ncreate_memory failed: {error}"),
-            );
-        }
+    let pipeline = match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_RSS_POLL) {
+        Ok(pipeline) => pipeline,
+        Err(output) => return output,
     };
-    let observer: Arc<dyn crate::runtime::observability::Observer> =
-        Arc::from(create_observer(&config.observability));
-    let pipeline = SqliteIngestionPipeline::new_with_observer(Arc::from(memory), observer);
 
     let envelopes = build_rss_poll_envelopes(&job.entity_id, items);
     match pipeline.ingest_batch(envelopes).await {
@@ -590,11 +600,8 @@ pub(super) async fn run_x_poll_job_command(
     security: &SecurityPolicy,
     job: ParsedXPollJob,
 ) -> (bool, String) {
-    if let Err(policy_error) = security.consume_action_and_cost(0) {
-        return (
-            false,
-            format!("{ROUTE_MARKER_X_POLL}\nblocked by security policy: {policy_error}"),
-        );
+    if let Some(output) = consume_security_or_output(security, ROUTE_MARKER_X_POLL) {
+        return output;
     }
 
     let token = match resolve_x_bearer_token(std::env::var("X_BEARER_TOKEN").ok()) {
@@ -654,18 +661,10 @@ pub(super) async fn run_x_poll_job_command(
         );
     }
 
-    let memory = match create_memory(&config.memory, &config.workspace_dir, None) {
-        Ok(memory) => memory,
-        Err(error) => {
-            return (
-                false,
-                format!("{ROUTE_MARKER_X_POLL}\ncreate_memory failed: {error}"),
-            );
-        }
+    let pipeline = match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_X_POLL) {
+        Ok(pipeline) => pipeline,
+        Err(output) => return output,
     };
-    let observer: Arc<dyn crate::runtime::observability::Observer> =
-        Arc::from(create_observer(&config.observability));
-    let pipeline = SqliteIngestionPipeline::new_with_observer(Arc::from(memory), observer);
 
     let envelopes = build_x_poll_envelopes(&job.entity_id, &job.query, parsed.data);
 

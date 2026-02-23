@@ -2,16 +2,15 @@
 use super::openai_types::Message;
 use super::{
     openai_compat,
-    openai_types::{ChatRequest, ChatResponse, OpenAiToolCall},
+    openai_types::{ChatRequest, ChatResponse},
 };
+#[cfg(test)]
+use crate::core::providers::sse::parse_data_lines_without_done;
 use crate::core::providers::{
-    ContentBlock, ProviderMessage, ProviderResponse, StopReason, build_provider_client,
-    scrub_secret_patterns,
+    ProviderMessage, ProviderResponse, build_provider_client,
     streaming::{ProviderChatRequest, ProviderStream},
     traits::Provider,
 };
-#[cfg(test)]
-use crate::core::providers::{ImageSource, MessageRole, sse::parse_data_lines_without_done};
 use crate::core::tools::traits::ToolSpec;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -21,6 +20,17 @@ pub struct OpenRouterProvider {
     cached_auth_header: Option<String>,
     client: Client,
 }
+
+const OPENROUTER_CHAT_COMPLETIONS_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_MISSING_API_KEY_MESSAGE: &str =
+    "OpenRouter API key not set. Run `asteroniris onboard` or set OPENROUTER_API_KEY env var.";
+const OPENROUTER_EXTRA_HEADERS: [(&str, &str); 2] = [
+    (
+        "HTTP-Referer",
+        "https://github.com/haru0416-dev/AsteronIris",
+    ),
+    ("X-Title", "AsteronIris"),
+];
 
 impl OpenRouterProvider {
     pub fn new(api_key: Option<&str>) -> Self {
@@ -58,68 +68,34 @@ impl OpenRouterProvider {
         openai_compat::build_tools_request(system_prompt, messages, tools, model, temperature)
     }
 
-    fn map_finish_reason(finish_reason: Option<&str>) -> StopReason {
-        openai_compat::map_finish_reason(finish_reason)
-    }
-
-    fn parse_tool_calls(
-        tool_calls: Option<Vec<OpenAiToolCall>>,
-    ) -> anyhow::Result<Vec<ContentBlock>> {
-        openai_compat::parse_tool_calls(tool_calls, "OpenRouter")
-    }
-
     async fn call_api_with_request(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse> {
-        let auth_header = self.cached_auth_header.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "OpenRouter API key not set. Run `asteroniris onboard` or set OPENROUTER_API_KEY env var."
-            )
-        })?;
-
-        let response = self
-            .client
-            .post("https://openrouter.ai/api/v1/chat/completions")
-            .header("Authorization", auth_header)
-            .header(
-                "HTTP-Referer",
-                "https://github.com/haru0416-dev/AsteronIris",
-            )
-            .header("X-Title", "AsteronIris")
-            .json(request)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(super::api_error("OpenRouter", response).await);
-        }
-
-        response.json().await.map_err(anyhow::Error::msg)
+        openai_compat::send_chat_completions_json(
+            &self.client,
+            self.cached_auth_header.as_ref(),
+            request,
+            openai_compat::ChatCompletionsEndpoint {
+                provider_name: "OpenRouter",
+                url: OPENROUTER_CHAT_COMPLETIONS_URL,
+                missing_api_key_message: OPENROUTER_MISSING_API_KEY_MESSAGE,
+                extra_headers: &OPENROUTER_EXTRA_HEADERS,
+            },
+        )
+        .await
     }
 
     async fn call_api_streaming(&self, request: &ChatRequest) -> anyhow::Result<reqwest::Response> {
-        let auth_header = self.cached_auth_header.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "OpenRouter API key not set. Run `asteroniris onboard` or set OPENROUTER_API_KEY env var."
-            )
-        })?;
-
-        let response = self
-            .client
-            .post("https://openrouter.ai/api/v1/chat/completions")
-            .header("Authorization", auth_header)
-            .header(
-                "HTTP-Referer",
-                "https://github.com/haru0416-dev/AsteronIris",
-            )
-            .header("X-Title", "AsteronIris")
-            .json(request)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(super::api_error("OpenRouter", response).await);
-        }
-
-        Ok(response)
+        openai_compat::send_chat_completions_raw(
+            &self.client,
+            self.cached_auth_header.as_ref(),
+            request,
+            openai_compat::ChatCompletionsEndpoint {
+                provider_name: "OpenRouter",
+                url: OPENROUTER_CHAT_COMPLETIONS_URL,
+                missing_api_key_message: OPENROUTER_MISSING_API_KEY_MESSAGE,
+                extra_headers: &OPENROUTER_EXTRA_HEADERS,
+            },
+        )
+        .await
     }
 
     async fn chat_with_tools_stream_impl(
@@ -182,16 +158,7 @@ impl Provider for OpenRouterProvider {
         let chat_response = self
             .call_api(system_prompt, message, model, temperature)
             .await?;
-        let text = Self::extract_text(&chat_response)?;
-        let mut provider_response = if let Some(usage) = chat_response.usage {
-            ProviderResponse::with_usage(text, usage.prompt_tokens, usage.completion_tokens)
-        } else {
-            ProviderResponse::text_only(text)
-        };
-        if let Some(api_model) = chat_response.model {
-            provider_response = provider_response.with_model(api_model);
-        }
-        Ok(provider_response)
+        openai_compat::build_text_provider_response(chat_response, "OpenRouter")
     }
 
     async fn chat_with_tools(
@@ -204,43 +171,7 @@ impl Provider for OpenRouterProvider {
     ) -> anyhow::Result<ProviderResponse> {
         let request = Self::build_tools_request(system_prompt, messages, tools, model, temperature);
         let chat_response = self.call_api_with_request(&request).await?;
-        let choice = chat_response
-            .choices
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenRouter"))?;
-
-        let text = choice.message.content.clone().unwrap_or_default();
-        let scrubbed_text = scrub_secret_patterns(&text).into_owned();
-        let mut content_blocks = Self::parse_tool_calls(choice.message.tool_calls.clone())?;
-
-        if !scrubbed_text.is_empty() {
-            content_blocks.insert(
-                0,
-                ContentBlock::Text {
-                    text: scrubbed_text.clone(),
-                },
-            );
-        }
-
-        let mut provider_response = if let Some(usage) = chat_response.usage {
-            ProviderResponse::with_usage(
-                scrubbed_text,
-                usage.prompt_tokens,
-                usage.completion_tokens,
-            )
-        } else {
-            ProviderResponse::text_only(scrubbed_text)
-        };
-
-        provider_response.content_blocks = content_blocks;
-        provider_response.stop_reason =
-            Some(Self::map_finish_reason(choice.finish_reason.as_deref()));
-
-        if let Some(api_model) = chat_response.model {
-            provider_response = provider_response.with_model(api_model);
-        }
-
-        Ok(provider_response)
+        openai_compat::build_tool_provider_response(chat_response, "OpenRouter")
     }
 
     fn supports_tool_calling(&self) -> bool {

@@ -379,6 +379,15 @@ fn parse_skillforge_unimplemented_sources_with_validation(source: &str) -> Resul
         .next()
         .ok_or_else(|| anyhow!("skillforge source is empty"))?;
 
+    let unimplemented = collect_skillforge_unimplemented_sources(scope);
+    for source_name in &unimplemented {
+        validate_scout_source_name(source_name)?;
+    }
+
+    Ok(unimplemented)
+}
+
+fn collect_skillforge_unimplemented_sources(scope: &str) -> Vec<String> {
     let mut unimplemented = Vec::new();
     let marker = "Source not yet implemented";
     let lines: Vec<&str> = scope.lines().collect();
@@ -393,10 +402,9 @@ fn parse_skillforge_unimplemented_sources_with_validation(source: &str) -> Resul
                 continue;
             }
 
-            let match_arm = candidate
-                .split("=>")
-                .next()
-                .ok_or_else(|| anyhow!("failed to parse skillforge match arm"))?;
+            let Some(match_arm) = candidate.split("=>").next() else {
+                continue;
+            };
 
             for segment in match_arm.split('|') {
                 if let Some(start) = segment.find("ScoutSource::") {
@@ -407,7 +415,6 @@ fn parse_skillforge_unimplemented_sources_with_validation(source: &str) -> Resul
                         .collect();
 
                     if !source_name.is_empty() {
-                        validate_scout_source_name(&source_name)?;
                         unimplemented.push(source_name);
                     }
                 }
@@ -420,7 +427,7 @@ fn parse_skillforge_unimplemented_sources_with_validation(source: &str) -> Resul
     unimplemented.sort_unstable();
     unimplemented.dedup();
 
-    Ok(unimplemented)
+    unimplemented
 }
 
 fn validate_scout_source_name(name: &str) -> Result<()> {
@@ -536,46 +543,7 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("skillforge source should have cfg(test) marker");
-
-        let lines: Vec<&str> = scope.lines().collect();
-        let marker = "Source not yet implemented";
-        let mut unimplemented = Vec::new();
-
-        for (index, line) in lines.iter().enumerate() {
-            if !line.contains(marker) {
-                continue;
-            }
-
-            for candidate in lines[..=index].iter().rev() {
-                if !candidate.contains("ScoutSource::") || !candidate.contains("=>") {
-                    continue;
-                }
-
-                let Some(match_arm) = candidate.split("=>").next() else {
-                    continue;
-                };
-
-                for segment in match_arm.split('|') {
-                    if let Some(start) = segment.find("ScoutSource::") {
-                        let suffix = &segment[start + "ScoutSource::".len()..];
-                        let source_name: String = suffix
-                            .chars()
-                            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-                            .collect();
-
-                        if !source_name.is_empty() {
-                            unimplemented.push(source_name);
-                        }
-                    }
-                }
-
-                break;
-            }
-        }
-
-        unimplemented.sort_unstable();
-        unimplemented.dedup();
-        unimplemented
+        collect_skillforge_unimplemented_sources(scope)
     }
 
     fn count_symbol_occurrences(text: &str, symbol: &str) -> usize {

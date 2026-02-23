@@ -1,17 +1,20 @@
 #[cfg(test)]
 use super::openai_types::Message;
+#[cfg(test)]
+use super::openai_types::OpenAiToolCall;
 use super::{
     openai_compat,
-    openai_types::{ChatRequest, ChatResponse, OpenAiToolCall},
+    openai_types::{ChatRequest, ChatResponse},
 };
+#[cfg(test)]
+use crate::core::providers::{ContentBlock, StopReason};
+#[cfg(test)]
+use crate::core::providers::{ImageSource, MessageRole, sse::parse_data_lines_without_done};
 use crate::core::providers::{
-    ContentBlock, ProviderMessage, ProviderResponse, StopReason, build_provider_client,
-    scrub_secret_patterns,
+    ProviderMessage, ProviderResponse, build_provider_client,
     streaming::{ProviderChatRequest, ProviderStream},
     traits::Provider,
 };
-#[cfg(test)]
-use crate::core::providers::{ImageSource, MessageRole, sse::parse_data_lines_without_done};
 use crate::core::tools::traits::ToolSpec;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -21,6 +24,10 @@ pub struct OpenAiProvider {
     cached_auth_header: Option<String>,
     client: Client,
 }
+
+const OPENAI_CHAT_COMPLETIONS_URL: &str = "https://api.openai.com/v1/chat/completions";
+const OPENAI_MISSING_API_KEY_MESSAGE: &str =
+    "OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.";
 
 impl OpenAiProvider {
     pub fn new(api_key: Option<&str>) -> Self {
@@ -58,10 +65,12 @@ impl OpenAiProvider {
         openai_compat::extract_text(chat_response, "OpenAI")
     }
 
+    #[cfg(test)]
     fn map_finish_reason(finish_reason: Option<&str>) -> StopReason {
         openai_compat::map_finish_reason(finish_reason)
     }
 
+    #[cfg(test)]
     fn parse_tool_calls(
         tool_calls: Option<Vec<OpenAiToolCall>>,
     ) -> anyhow::Result<Vec<ContentBlock>> {
@@ -81,48 +90,33 @@ impl OpenAiProvider {
     }
 
     async fn call_api_with_request(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse> {
-        let auth_header = self.cached_auth_header.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
-        })?;
-
-        let response = self
-            .client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", auth_header)
-            .json(request)
-            .send()
-            .await
-            .map_err(|error| anyhow::anyhow!("OpenAI request failed: {error}"))?;
-
-        if !response.status().is_success() {
-            return Err(super::api_error("OpenAI", response).await);
-        }
-
-        response
-            .json()
-            .await
-            .map_err(|error| anyhow::anyhow!("OpenAI response JSON decode failed: {error}"))
+        openai_compat::send_chat_completions_json(
+            &self.client,
+            self.cached_auth_header.as_ref(),
+            request,
+            openai_compat::ChatCompletionsEndpoint {
+                provider_name: "OpenAI",
+                url: OPENAI_CHAT_COMPLETIONS_URL,
+                missing_api_key_message: OPENAI_MISSING_API_KEY_MESSAGE,
+                extra_headers: &[],
+            },
+        )
+        .await
     }
 
     async fn call_api_streaming(&self, request: &ChatRequest) -> anyhow::Result<reqwest::Response> {
-        let auth_header = self.cached_auth_header.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("OpenAI API key not set. Set OPENAI_API_KEY or edit config.toml.")
-        })?;
-
-        let response = self
-            .client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", auth_header)
-            .json(request)
-            .send()
-            .await
-            .map_err(|error| anyhow::anyhow!("OpenAI request failed: {error}"))?;
-
-        if !response.status().is_success() {
-            return Err(super::api_error("OpenAI", response).await);
-        }
-
-        Ok(response)
+        openai_compat::send_chat_completions_raw(
+            &self.client,
+            self.cached_auth_header.as_ref(),
+            request,
+            openai_compat::ChatCompletionsEndpoint {
+                provider_name: "OpenAI",
+                url: OPENAI_CHAT_COMPLETIONS_URL,
+                missing_api_key_message: OPENAI_MISSING_API_KEY_MESSAGE,
+                extra_headers: &[],
+            },
+        )
+        .await
     }
 
     async fn chat_with_tools_stream_impl(
@@ -160,16 +154,8 @@ impl Provider for OpenAiProvider {
         let chat_response = self
             .call_api(system_prompt, message, model, temperature)
             .await?;
-        let text = Self::extract_text(&chat_response)?;
-        let mut provider_response = if let Some(usage) = chat_response.usage {
-            ProviderResponse::with_usage(text, usage.prompt_tokens, usage.completion_tokens)
-        } else {
-            ProviderResponse::text_only(text)
-        };
-        if let Some(api_model) = chat_response.model {
-            provider_response = provider_response.with_model(api_model);
-        }
-        Ok(provider_response)
+
+        openai_compat::build_text_provider_response(chat_response, "OpenAI")
     }
 
     async fn chat_with_tools(
@@ -182,43 +168,7 @@ impl Provider for OpenAiProvider {
     ) -> anyhow::Result<ProviderResponse> {
         let request = Self::build_tools_request(system_prompt, messages, tools, model, temperature);
         let chat_response = self.call_api_with_request(&request).await?;
-        let choice = chat_response
-            .choices
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No response from OpenAI"))?;
-
-        let text = choice.message.content.clone().unwrap_or_default();
-        let scrubbed_text = scrub_secret_patterns(&text).into_owned();
-        let mut content_blocks = Self::parse_tool_calls(choice.message.tool_calls.clone())?;
-
-        if !scrubbed_text.is_empty() {
-            content_blocks.insert(
-                0,
-                ContentBlock::Text {
-                    text: scrubbed_text.clone(),
-                },
-            );
-        }
-
-        let mut provider_response = if let Some(usage) = chat_response.usage {
-            ProviderResponse::with_usage(
-                scrubbed_text,
-                usage.prompt_tokens,
-                usage.completion_tokens,
-            )
-        } else {
-            ProviderResponse::text_only(scrubbed_text)
-        };
-
-        provider_response.content_blocks = content_blocks;
-        provider_response.stop_reason =
-            Some(Self::map_finish_reason(choice.finish_reason.as_deref()));
-
-        if let Some(api_model) = chat_response.model {
-            provider_response = provider_response.with_model(api_model);
-        }
-
-        Ok(provider_response)
+        openai_compat::build_tool_provider_response(chat_response, "OpenAI")
     }
 
     fn supports_tool_calling(&self) -> bool {

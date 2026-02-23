@@ -3,6 +3,7 @@ use crossterm::event::KeyCode;
 use crate::onboard::tui::state::{
     ChannelSubStep, ProviderSubStep, WizardState, WizardStep, WorkspaceSubStep,
 };
+use crate::onboard::tui::widgets::TextInput;
 
 use super::app_data::{
     model_id_for_selection, model_list_for_provider, provider_id_for_selection,
@@ -84,7 +85,7 @@ fn handle_workspace_key(state: &mut WizardState, key: KeyCode) {
         }
     } else {
         // Text input mode
-        match key {
+        match &key {
             KeyCode::Enter => {
                 if !state.workspace_custom_path.is_empty() {
                     let path = state.workspace_custom_path.value.clone();
@@ -97,14 +98,9 @@ fn handle_workspace_key(state: &mut WizardState, key: KeyCode) {
             KeyCode::Esc => {
                 state.workspace_sub_step = WorkspaceSubStep::Choice;
             }
-            KeyCode::Char(c) => state.workspace_custom_path.insert(c),
-            KeyCode::Backspace => state.workspace_custom_path.backspace(),
-            KeyCode::Delete => state.workspace_custom_path.delete(),
-            KeyCode::Left => state.workspace_custom_path.move_left(),
-            KeyCode::Right => state.workspace_custom_path.move_right(),
-            KeyCode::Home => state.workspace_custom_path.home(),
-            KeyCode::End => state.workspace_custom_path.end(),
-            _ => {}
+            _ => {
+                let _handled = handle_text_input_key(&mut state.workspace_custom_path, key);
+            }
         }
     }
 }
@@ -178,7 +174,7 @@ fn handle_provider_key(state: &mut WizardState, key: KeyCode) {
             KeyCode::Esc => state.provider_sub_step = ProviderSubStep::ProviderSelect,
             _ => {}
         },
-        ProviderSubStep::ApiKey => match key {
+        ProviderSubStep::ApiKey => match &key {
             KeyCode::Enter => {
                 state.selected_api_key = state.provider_api_key.value.clone();
                 let models = model_list_for_provider(&state.selected_provider);
@@ -192,12 +188,9 @@ fn handle_provider_key(state: &mut WizardState, key: KeyCode) {
                     state.provider_sub_step = ProviderSubStep::ProviderSelect;
                 }
             }
-            KeyCode::Char(c) => state.provider_api_key.insert(c),
-            KeyCode::Backspace => state.provider_api_key.backspace(),
-            KeyCode::Delete => state.provider_api_key.delete(),
-            KeyCode::Left => state.provider_api_key.move_left(),
-            KeyCode::Right => state.provider_api_key.move_right(),
-            _ => {}
+            _ => {
+                let _handled = handle_text_input_key(&mut state.provider_api_key, key);
+            }
         },
         ProviderSubStep::ModelSelect => match key {
             KeyCode::Up => state.provider_model_select.up(),
@@ -219,34 +212,28 @@ fn handle_provider_key(state: &mut WizardState, key: KeyCode) {
             }
             _ => {}
         },
-        ProviderSubStep::CustomBaseUrl => match key {
+        ProviderSubStep::CustomBaseUrl => match &key {
             KeyCode::Enter => {
                 if !state.provider_custom_base_url.is_empty() {
                     state.provider_sub_step = ProviderSubStep::CustomApiKey;
                 }
             }
             KeyCode::Esc => state.provider_sub_step = ProviderSubStep::TierSelect,
-            KeyCode::Char(c) => state.provider_custom_base_url.insert(c),
-            KeyCode::Backspace => state.provider_custom_base_url.backspace(),
-            KeyCode::Delete => state.provider_custom_base_url.delete(),
-            KeyCode::Left => state.provider_custom_base_url.move_left(),
-            KeyCode::Right => state.provider_custom_base_url.move_right(),
-            _ => {}
+            _ => {
+                let _handled = handle_text_input_key(&mut state.provider_custom_base_url, key);
+            }
         },
-        ProviderSubStep::CustomApiKey => match key {
+        ProviderSubStep::CustomApiKey => match &key {
             KeyCode::Enter => {
                 state.selected_api_key = state.provider_custom_api_key.value.clone();
                 state.provider_sub_step = ProviderSubStep::CustomModel;
             }
             KeyCode::Esc => state.provider_sub_step = ProviderSubStep::CustomBaseUrl,
-            KeyCode::Char(c) => state.provider_custom_api_key.insert(c),
-            KeyCode::Backspace => state.provider_custom_api_key.backspace(),
-            KeyCode::Delete => state.provider_custom_api_key.delete(),
-            KeyCode::Left => state.provider_custom_api_key.move_left(),
-            KeyCode::Right => state.provider_custom_api_key.move_right(),
-            _ => {}
+            _ => {
+                let _handled = handle_text_input_key(&mut state.provider_custom_api_key, key);
+            }
         },
-        ProviderSubStep::CustomModel => match key {
+        ProviderSubStep::CustomModel => match &key {
             KeyCode::Enter => {
                 let base = state.provider_custom_base_url.value.clone();
                 state.selected_provider = format!("custom:{base}");
@@ -254,12 +241,9 @@ fn handle_provider_key(state: &mut WizardState, key: KeyCode) {
                 state.next_step();
             }
             KeyCode::Esc => state.provider_sub_step = ProviderSubStep::CustomApiKey,
-            KeyCode::Char(c) => state.provider_custom_model.insert(c),
-            KeyCode::Backspace => state.provider_custom_model.backspace(),
-            KeyCode::Delete => state.provider_custom_model.delete(),
-            KeyCode::Left => state.provider_custom_model.move_left(),
-            KeyCode::Right => state.provider_custom_model.move_right(),
-            _ => {}
+            _ => {
+                let _handled = handle_text_input_key(&mut state.provider_custom_model, key);
+            }
         },
     }
 }
@@ -295,7 +279,7 @@ fn handle_channels_key(state: &mut WizardState, key: KeyCode) {
         },
         _ => {
             // Text input for channel configuration
-            match key {
+            match &key {
                 KeyCode::Enter => {
                     // Advance to next sub-step or back to picker
                     advance_channel_sub_step(state);
@@ -304,12 +288,9 @@ fn handle_channels_key(state: &mut WizardState, key: KeyCode) {
                     state.channel_sub_step = ChannelSubStep::Picker;
                     state.channel_connection_result = None;
                 }
-                KeyCode::Char(c) => state.channel_text_input.insert(c),
-                KeyCode::Backspace => state.channel_text_input.backspace(),
-                KeyCode::Delete => state.channel_text_input.delete(),
-                KeyCode::Left => state.channel_text_input.move_left(),
-                KeyCode::Right => state.channel_text_input.move_right(),
-                _ => {}
+                _ => {
+                    let _handled = handle_text_input_key(&mut state.channel_text_input, key);
+                }
             }
         }
     }
@@ -611,15 +592,12 @@ fn handle_context_key(state: &mut WizardState, key: KeyCode) {
     match sub {
         0 => {
             // Name input
-            match key {
+            match &key {
                 KeyCode::Enter => state.context_sub_field = 1,
                 KeyCode::Esc => state.prev_step(),
-                KeyCode::Char(c) => state.context_name.insert(c),
-                KeyCode::Backspace => state.context_name.backspace(),
-                KeyCode::Delete => state.context_name.delete(),
-                KeyCode::Left => state.context_name.move_left(),
-                KeyCode::Right => state.context_name.move_right(),
-                _ => {}
+                _ => {
+                    let _handled = handle_text_input_key(&mut state.context_name, key);
+                }
             }
         }
         1 => {
@@ -642,15 +620,12 @@ fn handle_context_key(state: &mut WizardState, key: KeyCode) {
         }
         2 => {
             // Agent name input
-            match key {
+            match &key {
                 KeyCode::Enter => state.context_sub_field = 3,
                 KeyCode::Esc => state.context_sub_field = 1,
-                KeyCode::Char(c) => state.context_agent_name.insert(c),
-                KeyCode::Backspace => state.context_agent_name.backspace(),
-                KeyCode::Delete => state.context_agent_name.delete(),
-                KeyCode::Left => state.context_agent_name.move_left(),
-                KeyCode::Right => state.context_agent_name.move_right(),
-                _ => {}
+                _ => {
+                    let _handled = handle_text_input_key(&mut state.context_agent_name, key);
+                }
             }
         }
         3 => {
@@ -674,19 +649,30 @@ fn handle_context_key(state: &mut WizardState, key: KeyCode) {
         }
         4 => {
             // Custom style text input
-            match key {
+            match &key {
                 KeyCode::Enter => state.next_step(),
                 KeyCode::Esc => state.context_sub_field = 3,
-                KeyCode::Char(c) => state.context_style_custom.insert(c),
-                KeyCode::Backspace => state.context_style_custom.backspace(),
-                KeyCode::Delete => state.context_style_custom.delete(),
-                KeyCode::Left => state.context_style_custom.move_left(),
-                KeyCode::Right => state.context_style_custom.move_right(),
-                _ => {}
+                _ => {
+                    let _handled = handle_text_input_key(&mut state.context_style_custom, key);
+                }
             }
         }
         _ => {}
     }
+}
+
+fn handle_text_input_key(input: &mut TextInput, key: KeyCode) -> bool {
+    match key {
+        KeyCode::Char(c) => input.insert(c),
+        KeyCode::Backspace => input.backspace(),
+        KeyCode::Delete => input.delete(),
+        KeyCode::Left => input.move_left(),
+        KeyCode::Right => input.move_right(),
+        KeyCode::Home => input.home(),
+        KeyCode::End => input.end(),
+        _ => return false,
+    }
+    true
 }
 
 fn handle_summary_key(state: &mut WizardState, key: KeyCode) {

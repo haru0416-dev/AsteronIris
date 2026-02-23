@@ -1,3 +1,4 @@
+use super::common::{failed_tool_result, workspace_path_property};
 use super::traits::{Tool, ToolResult};
 use crate::core::tools::middleware::ExecutionContext;
 use async_trait::async_trait;
@@ -26,10 +27,7 @@ impl Tool for FileWriteTool {
         json!({
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative path to the file within the workspace"
-                },
+                "path": workspace_path_property(),
                 "content": {
                     "type": "string",
                     "description": "Content to write to the file"
@@ -57,41 +55,25 @@ impl Tool for FileWriteTool {
         let full_path = ctx.workspace_dir.join(path);
 
         let Some(parent) = full_path.parent() else {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Invalid path: missing parent directory".into()),
-
-                attachments: Vec::new(),
-            });
+            return Ok(failed_tool_result("Invalid path: missing parent directory"));
         };
 
         match tokio::fs::metadata(parent).await {
             Ok(meta) => {
                 if !meta.is_dir() {
-                    return Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!(
-                            "Invalid path: parent is not a directory: {}",
-                            parent.display()
-                        )),
-
-                        attachments: Vec::new(),
-                    });
+                    return Ok(failed_tool_result(format!(
+                        "Invalid path: parent is not a directory: {}",
+                        parent.display()
+                    )));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tokio::fs::create_dir_all(parent).await?;
             }
             Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to inspect parent directory: {e}")),
-
-                    attachments: Vec::new(),
-                });
+                return Ok(failed_tool_result(format!(
+                    "Failed to inspect parent directory: {e}"
+                )));
             }
         }
 
@@ -99,24 +81,14 @@ impl Tool for FileWriteTool {
         let resolved_parent = match tokio::fs::canonicalize(parent).await {
             Ok(p) => p,
             Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to resolve file path: {e}")),
-
-                    attachments: Vec::new(),
-                });
+                return Ok(failed_tool_result(format!(
+                    "Failed to resolve file path: {e}"
+                )));
             }
         };
 
         let Some(file_name) = full_path.file_name() else {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Invalid path: missing file name".into()),
-
-                attachments: Vec::new(),
-            });
+            return Ok(failed_tool_result("Invalid path: missing file name"));
         };
 
         let resolved_target = resolved_parent.join(file_name);
@@ -125,16 +97,10 @@ impl Tool for FileWriteTool {
         if let Ok(meta) = tokio::fs::symlink_metadata(&resolved_target).await
             && meta.file_type().is_symlink()
         {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Refusing to write through symlink: {}",
-                    resolved_target.display()
-                )),
-
-                attachments: Vec::new(),
-            });
+            return Ok(failed_tool_result(format!(
+                "Refusing to write through symlink: {}",
+                resolved_target.display()
+            )));
         }
 
         match tokio::fs::write(&resolved_target, content).await {
@@ -145,13 +111,7 @@ impl Tool for FileWriteTool {
 
                 attachments: Vec::new(),
             }),
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Failed to write file: {e}")),
-
-                attachments: Vec::new(),
-            }),
+            Err(e) => Ok(failed_tool_result(format!("Failed to write file: {e}"))),
         }
     }
 }
@@ -159,17 +119,8 @@ impl Tool for FileWriteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::tools::common::test_security_policy;
     use crate::core::tools::middleware::ExecutionContext;
-    use crate::security::{AutonomyLevel, SecurityPolicy};
-    use std::sync::Arc;
-
-    fn test_security(workspace: std::path::PathBuf) -> Arc<SecurityPolicy> {
-        Arc::new(SecurityPolicy {
-            autonomy: AutonomyLevel::Supervised,
-            workspace_dir: workspace,
-            ..SecurityPolicy::default()
-        })
-    }
 
     #[test]
     fn file_write_name() {
@@ -195,7 +146,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
         let tool = FileWriteTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "out.txt", "content": "written!"}), &ctx)
             .await
@@ -218,7 +169,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
         let tool = FileWriteTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "a/b/c/deep.txt", "content": "deep"}), &ctx)
             .await
@@ -243,7 +194,7 @@ mod tests {
             .unwrap();
 
         let tool = FileWriteTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "exist.txt", "content": "new"}), &ctx)
             .await
@@ -261,7 +212,7 @@ mod tests {
     #[tokio::test]
     async fn file_write_missing_path_param() {
         let tool = FileWriteTool::new();
-        let ctx = ExecutionContext::test_default(test_security(std::env::temp_dir()));
+        let ctx = ExecutionContext::test_default(test_security_policy(std::env::temp_dir()));
         let result = tool.execute(json!({"content": "data"}), &ctx).await;
         assert!(result.is_err());
     }
@@ -269,7 +220,7 @@ mod tests {
     #[tokio::test]
     async fn file_write_missing_content_param() {
         let tool = FileWriteTool::new();
-        let ctx = ExecutionContext::test_default(test_security(std::env::temp_dir()));
+        let ctx = ExecutionContext::test_default(test_security_policy(std::env::temp_dir()));
         let result = tool.execute(json!({"path": "file.txt"}), &ctx).await;
         assert!(result.is_err());
     }
@@ -281,7 +232,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
         let tool = FileWriteTool::new();
-        let ctx = ExecutionContext::test_default(test_security(dir.clone()));
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
         let result = tool
             .execute(json!({"path": "empty.txt", "content": ""}), &ctx)
             .await

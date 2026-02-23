@@ -16,6 +16,12 @@ pub struct ChannelEntry {
     pub policy: ChannelPolicy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllowlistMatch {
+    Exact,
+    AsciiCaseInsensitive,
+}
+
 /// Effective autonomy = min(global, channel). Channel cannot escalate beyond global.
 #[must_use]
 pub fn min_autonomy(global: AutonomyLevel, channel: AutonomyLevel) -> AutonomyLevel {
@@ -25,6 +31,20 @@ pub fn min_autonomy(global: AutonomyLevel, channel: AutonomyLevel) -> AutonomyLe
             AutonomyLevel::Supervised
         }
         (AutonomyLevel::Full, AutonomyLevel::Full) => AutonomyLevel::Full,
+    }
+}
+
+#[must_use]
+pub fn is_allowed_user(allowed_users: &[String], user_id: &str, mode: AllowlistMatch) -> bool {
+    if allowed_users.iter().any(|user| user == "*") {
+        return true;
+    }
+
+    match mode {
+        AllowlistMatch::Exact => allowed_users.iter().any(|user| user == user_id),
+        AllowlistMatch::AsciiCaseInsensitive => allowed_users
+            .iter()
+            .any(|user| user.eq_ignore_ascii_case(user_id)),
     }
 }
 
@@ -62,5 +82,28 @@ mod tests {
             min_autonomy(AutonomyLevel::Full, AutonomyLevel::ReadOnly),
             AutonomyLevel::ReadOnly
         );
+    }
+
+    #[test]
+    fn is_allowed_user_supports_wildcard() {
+        let allowed = vec!["alice".to_string(), "*".to_string()];
+        assert!(is_allowed_user(&allowed, "anyone", AllowlistMatch::Exact));
+    }
+
+    #[test]
+    fn is_allowed_user_exact_match_is_case_sensitive() {
+        let allowed = vec!["Alice".to_string()];
+        assert!(!is_allowed_user(&allowed, "alice", AllowlistMatch::Exact));
+        assert!(is_allowed_user(&allowed, "Alice", AllowlistMatch::Exact));
+    }
+
+    #[test]
+    fn is_allowed_user_ascii_case_insensitive_mode() {
+        let allowed = vec!["Alice".to_string()];
+        assert!(is_allowed_user(
+            &allowed,
+            "alice",
+            AllowlistMatch::AsciiCaseInsensitive
+        ));
     }
 }

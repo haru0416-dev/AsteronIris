@@ -4,6 +4,8 @@ pub mod http_client;
 pub mod types;
 
 use crate::config::schema::DiscordConfig;
+use crate::transport::channels::attachments::media_attachment_url;
+use crate::transport::channels::policy::{AllowlistMatch, is_allowed_user};
 use crate::transport::channels::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
 use anyhow::Context;
 use async_trait::async_trait;
@@ -56,10 +58,7 @@ impl DiscordChannel {
     }
 
     fn is_user_allowed(&self, user_id: &str) -> bool {
-        self.config
-            .allowed_users
-            .iter()
-            .any(|u| u == "*" || u == user_id)
+        is_allowed_user(&self.config.allowed_users, user_id, AllowlistMatch::Exact)
     }
 
     fn intents(&self) -> u64 {
@@ -104,14 +103,11 @@ impl DiscordChannel {
     }
 
     fn attachment_to_media(att: &gateway::RawAttachment) -> MediaAttachment {
-        MediaAttachment {
-            mime_type: att
-                .content_type
-                .clone()
-                .unwrap_or_else(|| "application/octet-stream".to_string()),
-            data: MediaData::Url(att.url.clone()),
-            filename: att.filename.clone(),
-        }
+        media_attachment_url(
+            att.url.clone(),
+            att.content_type.as_deref(),
+            att.filename.clone(),
+        )
     }
 
     async fn handle_gateway_event(

@@ -1,4 +1,5 @@
 use crate::transport::channels::traits::{Channel, ChannelMessage};
+use crate::transport::channels::{policy::AllowlistMatch, policy::is_allowed_user};
 use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -87,12 +88,11 @@ impl IrcChannel {
     }
 
     pub(super) fn is_user_allowed(&self, nick: &str) -> bool {
-        if self.allowed_users.iter().any(|u| u == "*") {
-            return true;
-        }
-        self.allowed_users
-            .iter()
-            .any(|u| u.eq_ignore_ascii_case(nick))
+        is_allowed_user(
+            &self.allowed_users,
+            nick,
+            AllowlistMatch::AsciiCaseInsensitive,
+        )
     }
 
     /// Create a TLS connection to the IRC server.

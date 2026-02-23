@@ -1,5 +1,6 @@
 pub mod api;
 pub mod handler;
+use crate::transport::channels::policy::{AllowlistMatch, is_allowed_user};
 
 #[cfg(test)]
 mod tests;
@@ -25,7 +26,7 @@ impl TelegramChannel {
     }
 
     fn is_user_allowed(&self, username: &str) -> bool {
-        self.allowed_users.iter().any(|u| u == "*" || u == username)
+        is_allowed_user(&self.allowed_users, username, AllowlistMatch::Exact)
     }
 
     fn is_any_user_allowed<'a, I>(&self, identities: I) -> bool

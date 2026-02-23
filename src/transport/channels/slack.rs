@@ -1,4 +1,6 @@
+use super::attachments::media_attachment_url;
 use super::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
+use crate::transport::channels::policy::{AllowlistMatch, is_allowed_user};
 use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -26,7 +28,7 @@ impl SlackChannel {
     /// Empty list means deny everyone until explicitly configured.
     /// `"*"` means allow everyone.
     fn is_user_allowed(&self, user_id: &str) -> bool {
-        self.allowed_users.iter().any(|u| u == "*" || u == user_id)
+        is_allowed_user(&self.allowed_users, user_id, AllowlistMatch::Exact)
     }
 
     /// Get the bot's own user ID so we can ignore our own messages
@@ -55,20 +57,12 @@ impl SlackChannel {
                     .iter()
                     .filter_map(|file| {
                         let url = file.get("url_private").and_then(Value::as_str)?;
-                        let mime_type = file
-                            .get("mimetype")
-                            .and_then(Value::as_str)
-                            .unwrap_or("application/octet-stream")
-                            .to_string();
+                        let mime_type = file.get("mimetype").and_then(Value::as_str);
                         let filename = file
                             .get("name")
                             .and_then(Value::as_str)
                             .map(ToString::to_string);
-                        Some(MediaAttachment {
-                            mime_type,
-                            data: MediaData::Url(url.to_string()),
-                            filename,
-                        })
+                        Some(media_attachment_url(url.to_string(), mime_type, filename))
                     })
                     .collect()
             })

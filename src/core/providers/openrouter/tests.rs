@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::providers::Provider;
+use crate::core::providers::{ContentBlock, ImageSource, MessageRole, Provider};
 
 #[test]
 fn tools_request_serializes_in_openai_function_format() {

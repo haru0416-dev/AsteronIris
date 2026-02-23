@@ -535,32 +535,13 @@ pub(super) async fn execute_main_session_turn_with_accounting(
 
     let enriched = build_enriched_message(mem.as_ref(), write_context, user_message).await;
 
-    match security.consume_action_and_cost(0) {
-        Ok(()) => {
-            observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentPolicyAllowed);
-        }
-        Err(e) => {
-            observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentPolicyDenied);
-            return Err(anyhow::Error::msg(e));
-        }
-    }
+    enforce_intent_policy(security, observer)?;
     accounting
         .consume_answer_call()
         .context("consume answer call budget")?;
     let effective_autonomy_level = config.autonomy.effective_autonomy_level();
-    let requested_temperature = params.temperature;
-    let clamped_temperature = config.autonomy.clamp_temperature(requested_temperature);
-    if (requested_temperature - clamped_temperature).abs() > f64::EPSILON {
-        let band = config.autonomy.selected_temperature_band();
-        tracing::info!(
-            autonomy_level = ?effective_autonomy_level,
-            requested_temperature,
-            clamped_temperature,
-            band_min = band.min,
-            band_max = band.max,
-            "temperature clamped to autonomy band"
-        );
-    }
+    let clamped_temperature =
+        clamp_temperature_for_turn(config, params.temperature, effective_autonomy_level);
     let ctx =
         build_main_session_execution_context(config, security, params, effective_autonomy_level);
     let (response, tokens_used) = execute_turn_with_plan_or_tool_loop(
@@ -573,28 +554,16 @@ pub(super) async fn execute_main_session_turn_with_accounting(
     )
     .await?;
 
-    if config.persona.enabled_main_session {
-        security
-            .consume_action_and_cost(0)
-            .map_err(anyhow::Error::msg)
-            .context("consume rate limit for persona reflect")?;
-        accounting
-            .consume_reflect_call()
-            .context("consume reflect call budget")?;
-        if let Err(error) = run_persona_reflect_writeback(
-            config,
-            Arc::clone(&mem),
-            params.reflect_provider,
-            params.model_name,
-            params.person_id,
-            user_message,
-            &response,
-        )
-        .await
-        {
-            tracing::warn!(error = %error, "persona reflect/writeback failed; answer path preserved");
-        }
-    }
+    run_persona_reflect_if_enabled(
+        config,
+        security,
+        Arc::clone(&mem),
+        params,
+        user_message,
+        &response,
+        &mut accounting,
+    )
+    .await?;
 
     save_response_and_consolidate(
         config,
@@ -611,6 +580,78 @@ pub(super) async fn execute_main_session_turn_with_accounting(
         tokens_used,
         accounting,
     })
+}
+
+fn enforce_intent_policy(security: &SecurityPolicy, observer: &Arc<dyn Observer>) -> Result<()> {
+    match security.consume_action_and_cost(0) {
+        Ok(()) => {
+            observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentPolicyAllowed);
+            Ok(())
+        }
+        Err(error) => {
+            observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentPolicyDenied);
+            Err(anyhow::Error::msg(error))
+        }
+    }
+}
+
+fn clamp_temperature_for_turn(
+    config: &Config,
+    requested_temperature: f64,
+    effective_autonomy_level: AutonomyLevel,
+) -> f64 {
+    let clamped_temperature = config.autonomy.clamp_temperature(requested_temperature);
+    if (requested_temperature - clamped_temperature).abs() > f64::EPSILON {
+        let band = config.autonomy.selected_temperature_band();
+        tracing::info!(
+            autonomy_level = ?effective_autonomy_level,
+            requested_temperature,
+            clamped_temperature,
+            band_min = band.min,
+            band_max = band.max,
+            "temperature clamped to autonomy band"
+        );
+    }
+
+    clamped_temperature
+}
+
+async fn run_persona_reflect_if_enabled(
+    config: &Config,
+    security: &SecurityPolicy,
+    mem: Arc<dyn Memory>,
+    params: &MainSessionTurnParams<'_>,
+    user_message: &str,
+    response: &str,
+    accounting: &mut TurnCallAccounting,
+) -> Result<()> {
+    if !config.persona.enabled_main_session {
+        return Ok(());
+    }
+
+    security
+        .consume_action_and_cost(0)
+        .map_err(anyhow::Error::msg)
+        .context("consume rate limit for persona reflect")?;
+    accounting
+        .consume_reflect_call()
+        .context("consume reflect call budget")?;
+
+    if let Err(error) = run_persona_reflect_writeback(
+        config,
+        mem,
+        params.reflect_provider,
+        params.model_name,
+        params.person_id,
+        user_message,
+        response,
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "persona reflect/writeback failed; answer path preserved");
+    }
+
+    Ok(())
 }
 
 async fn save_user_message_if_enabled(
