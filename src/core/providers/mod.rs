@@ -1,6 +1,7 @@
 pub mod anthropic;
 mod anthropic_types;
 pub mod compatible;
+mod compatible_types;
 pub mod factory;
 pub mod fallback_tools;
 pub mod gemini;

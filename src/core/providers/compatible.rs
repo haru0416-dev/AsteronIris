@@ -2,6 +2,10 @@
 //! Most LLM APIs follow the same `/v1/chat/completions` format.
 //! This module provides a single implementation that works for all of them.
 
+use super::compatible_types::{
+    ChatRequest, ChatResponse, Message, ResponsesInput, ResponsesRequest, ResponsesResponse,
+    extract_chat_text, extract_responses_sse_text, extract_responses_text,
+};
 use super::sanitize_api_error;
 use crate::core::providers::{
     ProviderMessage, ProviderResponse, build_provider_client,
@@ -12,8 +16,6 @@ use crate::core::tools::traits::ToolSpec;
 use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 /// A provider that speaks the OpenAI-compatible chat completions API.
 /// Used by: Venice, Vercel AI Gateway, Cloudflare AI Gateway, Moonshot,
@@ -87,171 +89,6 @@ impl OpenAiCompatibleProvider {
     fn responses_url(&self) -> &str {
         &self.cached_responses_url
     }
-}
-
-#[derive(Debug, Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<Message>,
-    temperature: f64,
-}
-
-#[derive(Debug, Serialize)]
-struct Message {
-    role: &'static str,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
-    usage: Option<ChatUsage>,
-    model: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatUsage {
-    prompt_tokens: u64,
-    completion_tokens: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct Choice {
-    message: ResponseMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseMessage {
-    content: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ResponsesRequest {
-    model: String,
-    input: Vec<ResponsesInput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    instructions: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    store: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<bool>,
-}
-
-#[derive(Debug, Serialize)]
-struct ResponsesInput {
-    role: &'static str,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponsesResponse {
-    #[serde(default)]
-    output: Vec<ResponsesOutput>,
-    #[serde(default)]
-    output_text: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponsesOutput {
-    #[serde(default)]
-    content: Vec<ResponsesContent>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponsesContent {
-    #[serde(rename = "type")]
-    kind: Option<String>,
-    text: Option<String>,
-}
-
-fn first_nonempty(text: Option<&str>) -> Option<String> {
-    text.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
-fn extract_responses_text(response: &ResponsesResponse) -> Option<String> {
-    if let Some(text) = first_nonempty(response.output_text.as_deref()) {
-        return Some(text);
-    }
-
-    for item in &response.output {
-        for content in &item.content {
-            if content.kind.as_deref() == Some("output_text")
-                && let Some(text) = first_nonempty(content.text.as_deref())
-            {
-                return Some(text);
-            }
-        }
-    }
-
-    for item in &response.output {
-        for content in &item.content {
-            if let Some(text) = first_nonempty(content.text.as_deref()) {
-                return Some(text);
-            }
-        }
-    }
-
-    None
-}
-
-fn extract_responses_sse_text(body: &str) -> Option<String> {
-    let mut output_text = String::new();
-    let mut snapshot: Option<String> = None;
-
-    for line in body.lines() {
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let payload = data.trim();
-        if payload.is_empty() || payload == "[DONE]" {
-            continue;
-        }
-
-        let Ok(value) = serde_json::from_str::<Value>(payload) else {
-            continue;
-        };
-
-        if let Some(text) = value
-            .pointer("/response/output_text")
-            .and_then(Value::as_str)
-            .and_then(|v| first_nonempty(Some(v)))
-        {
-            snapshot = Some(text);
-        }
-
-        if let Some(text) = value
-            .pointer("/output_text")
-            .and_then(Value::as_str)
-            .and_then(|v| first_nonempty(Some(v)))
-        {
-            snapshot = Some(text);
-        }
-
-        if let Some(delta) = value.pointer("/delta").and_then(Value::as_str) {
-            output_text.push_str(delta);
-        }
-    }
-
-    if !output_text.trim().is_empty() {
-        return Some(output_text.trim().to_string());
-    }
-
-    snapshot
-}
-
-fn extract_chat_text(response: &ChatResponse, provider_name: &str) -> anyhow::Result<String> {
-    response
-        .choices
-        .first()
-        .map(|choice| choice.message.content.clone())
-        .ok_or_else(|| anyhow::anyhow!("No response from {provider_name}"))
 }
 
 impl OpenAiCompatibleProvider {

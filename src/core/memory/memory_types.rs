@@ -1,6 +1,14 @@
 use crate::security::policy::TenantPolicyContext;
 use serde::{Deserialize, Serialize};
 
+mod forget;
+mod ingress;
+
+pub use forget::{
+    ForgetArtifact, ForgetArtifactCheck, ForgetArtifactObservation, ForgetArtifactRequirement,
+    ForgetMode, ForgetOutcome, ForgetStatus,
+};
+
 /// A single memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -67,14 +75,6 @@ pub enum PrivacyLevel {
     Public,
     Private,
     Secret,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ForgetMode {
-    Soft,
-    Hard,
-    Tombstone,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -252,13 +252,7 @@ impl MemoryEventInput {
     }
 
     pub fn normalize_for_ingress(mut self) -> anyhow::Result<Self> {
-        self.entity_id = normalize_entity_id(&self.entity_id)?;
-        self.slot_key = normalize_slot_key(&self.slot_key)?;
-        self.confidence = normalize_score(self.confidence, "memory_event_input.confidence")?;
-        self.importance = normalize_score(self.importance, "memory_event_input.importance")?;
-        if let Some(provenance) = &self.provenance {
-            validate_provenance(self.source, provenance)?;
-        }
+        ingress::normalize_memory_event_input(&mut self)?;
         Ok(self)
     }
 }
@@ -278,94 +272,6 @@ pub struct MemoryEvent {
     pub privacy_level: PrivacyLevel,
     pub occurred_at: String,
     pub ingested_at: String,
-}
-
-fn normalize_score(score: f64, field: &str) -> anyhow::Result<f64> {
-    if !score.is_finite() {
-        anyhow::bail!("{field} must be finite");
-    }
-    Ok(score.clamp(0.0, 1.0))
-}
-
-fn normalize_entity_id(raw: &str) -> anyhow::Result<String> {
-    let normalized = normalize_identifier(raw, false);
-    if normalized.is_empty() {
-        anyhow::bail!("memory_event_input.entity_id must not be empty");
-    }
-    if normalized.len() > 128 {
-        anyhow::bail!("memory_event_input.entity_id must be <= 128 chars");
-    }
-    Ok(normalized)
-}
-
-fn normalize_slot_key(raw: &str) -> anyhow::Result<String> {
-    let normalized = normalize_identifier(raw, true);
-    if normalized.is_empty() {
-        anyhow::bail!("memory_event_input.slot_key must not be empty");
-    }
-    if normalized.len() > 256 {
-        anyhow::bail!("memory_event_input.slot_key must be <= 256 chars");
-    }
-    if !is_valid_slot_key_pattern(&normalized) {
-        anyhow::bail!("memory_event_input.slot_key must match taxonomy pattern");
-    }
-    Ok(normalized)
-}
-
-fn is_valid_slot_key_pattern(slot_key: &str) -> bool {
-    let mut chars = slot_key.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphanumeric() {
-        return false;
-    }
-
-    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | ':' | '/'))
-}
-
-fn normalize_identifier(raw: &str, allow_slash: bool) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut last_underscore = false;
-
-    for ch in raw.trim().chars() {
-        let allowed = ch.is_ascii_alphanumeric()
-            || matches!(ch, '.' | '_' | '-' | ':')
-            || (allow_slash && ch == '/');
-        if allowed {
-            out.push(ch);
-            last_underscore = false;
-        } else if !last_underscore {
-            out.push('_');
-            last_underscore = true;
-        }
-    }
-
-    out.trim_matches('_').to_string()
-}
-
-fn validate_provenance(source: MemorySource, provenance: &MemoryProvenance) -> anyhow::Result<()> {
-    if provenance.source_class != source {
-        anyhow::bail!(
-            "memory_event_input.provenance.source_class must match memory_event_input.source"
-        );
-    }
-
-    if provenance.reference.trim().is_empty() {
-        anyhow::bail!("memory_event_input.provenance.reference must not be empty");
-    }
-
-    if provenance.reference.len() > 256 {
-        anyhow::bail!("memory_event_input.provenance.reference must be <= 256 chars");
-    }
-
-    if let Some(uri) = &provenance.evidence_uri
-        && uri.trim().is_empty()
-    {
-        anyhow::bail!("memory_event_input.provenance.evidence_uri must not be empty");
-    }
-
-    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -615,160 +521,6 @@ pub struct BeliefSlot {
     pub importance: f64,
     pub privacy_level: PrivacyLevel,
     pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForgetOutcome {
-    pub entity_id: String,
-    pub slot_key: String,
-    pub mode: ForgetMode,
-    pub applied: bool,
-    pub complete: bool,
-    pub degraded: bool,
-    pub status: ForgetStatus,
-    pub artifact_checks: Vec<ForgetArtifactCheck>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ForgetStatus {
-    Complete,
-    Incomplete,
-    DegradedNonComplete,
-    NotApplied,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ForgetArtifact {
-    Slot,
-    RetrievalUnits,
-    RetrievalDocs,
-    Caches,
-    Ledger,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ForgetArtifactRequirement {
-    NotGoverned,
-    MustExist,
-    MustBeAbsent,
-    MustBeNonRetrievable,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ForgetArtifactObservation {
-    Absent,
-    PresentNonRetrievable,
-    PresentRetrievable,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ForgetArtifactCheck {
-    pub artifact: ForgetArtifact,
-    pub requirement: ForgetArtifactRequirement,
-    pub observed: ForgetArtifactObservation,
-    pub satisfied: bool,
-}
-
-impl ForgetArtifactCheck {
-    #[must_use]
-    pub fn new(
-        artifact: ForgetArtifact,
-        requirement: ForgetArtifactRequirement,
-        observed: ForgetArtifactObservation,
-    ) -> Self {
-        Self {
-            artifact,
-            requirement,
-            observed,
-            satisfied: requirement.is_satisfied_by(observed),
-        }
-    }
-}
-
-impl ForgetArtifactRequirement {
-    #[must_use]
-    pub const fn is_satisfied_by(self, observed: ForgetArtifactObservation) -> bool {
-        match self {
-            Self::NotGoverned => true,
-            Self::MustExist => !matches!(observed, ForgetArtifactObservation::Absent),
-            Self::MustBeAbsent => matches!(observed, ForgetArtifactObservation::Absent),
-            Self::MustBeNonRetrievable => {
-                !matches!(observed, ForgetArtifactObservation::PresentRetrievable)
-            }
-        }
-    }
-}
-
-impl ForgetMode {
-    #[must_use]
-    pub const fn artifact_requirement(self, artifact: ForgetArtifact) -> ForgetArtifactRequirement {
-        match (self, artifact) {
-            (
-                Self::Soft,
-                ForgetArtifact::Slot
-                | ForgetArtifact::RetrievalUnits
-                | ForgetArtifact::RetrievalDocs,
-            )
-            | (Self::Tombstone, ForgetArtifact::Slot) => {
-                ForgetArtifactRequirement::MustBeNonRetrievable
-            }
-            (Self::Soft, ForgetArtifact::Caches) => ForgetArtifactRequirement::NotGoverned,
-            (Self::Soft | Self::Hard | Self::Tombstone, ForgetArtifact::Ledger) => {
-                ForgetArtifactRequirement::MustExist
-            }
-            (
-                Self::Hard,
-                ForgetArtifact::Slot
-                | ForgetArtifact::RetrievalUnits
-                | ForgetArtifact::RetrievalDocs
-                | ForgetArtifact::Caches,
-            )
-            | (
-                Self::Tombstone,
-                ForgetArtifact::RetrievalUnits
-                | ForgetArtifact::RetrievalDocs
-                | ForgetArtifact::Caches,
-            ) => ForgetArtifactRequirement::MustBeAbsent,
-        }
-    }
-}
-
-impl ForgetOutcome {
-    #[must_use]
-    pub fn from_checks(
-        entity_id: impl Into<String>,
-        slot_key: impl Into<String>,
-        mode: ForgetMode,
-        applied: bool,
-        degraded: bool,
-        artifact_checks: Vec<ForgetArtifactCheck>,
-    ) -> Self {
-        let complete = applied && artifact_checks.iter().all(|check| check.satisfied);
-        let status = if complete {
-            ForgetStatus::Complete
-        } else if degraded {
-            ForgetStatus::DegradedNonComplete
-        } else if !applied {
-            ForgetStatus::NotApplied
-        } else {
-            ForgetStatus::Incomplete
-        };
-
-        Self {
-            entity_id: entity_id.into(),
-            slot_key: slot_key.into(),
-            mode,
-            applied,
-            complete,
-            degraded,
-            status,
-            artifact_checks,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
