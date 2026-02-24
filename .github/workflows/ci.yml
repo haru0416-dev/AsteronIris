@@ -73,7 +73,7 @@ jobs:
           echo "::notice::Coverage ${COVERAGE}% meets threshold ${COVERAGE_BASELINE_THRESHOLD}%"
       - name: Upload coverage report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-lcov
           path: lcov.info
@@ -131,7 +131,7 @@ jobs:
           THROUGHPUT_RECALL_LIMIT=10 \
           cargo test --release --test memory -- throughput --nocapture 2>&1 | tee memory_throughput.txt
       - name: Upload throughput output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: memory-throughput
           path: memory_throughput.txt
@@ -160,7 +160,7 @@ jobs:
           printf 'backend=%s\n' "${{ matrix.backend }}" | tee .sisyphus/evidence/task-24-ci-happy.txt
           BACKEND=${{ matrix.backend }} cargo test --test memory -- backend_parity --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-happy.txt
       - name: Upload lifecycle happy evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: task-24-ci-happy-${{ matrix.backend }}
           path: .sisyphus/evidence/task-24-ci-happy.txt
@@ -185,7 +185,7 @@ jobs:
           printf 'schema-migration-check\n' | tee .sisyphus/evidence/task-24-ci-happy.txt
           cargo test --lib init_schema_creates_expected_tables -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-happy.txt
       - name: Upload migration evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: task-24-ci-happy
           path: .sisyphus/evidence/task-24-ci-happy.txt
@@ -210,7 +210,7 @@ jobs:
           printf 'schema-rollback-check\n' | tee .sisyphus/evidence/task-24-ci-error.txt
           cargo test --lib init_schema_rejects_legacy_unversioned_database -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-error.txt
       - name: Upload rollback evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: task-24-ci-error
           path: .sisyphus/evidence/task-24-ci-error.txt
