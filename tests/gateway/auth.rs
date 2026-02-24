@@ -25,10 +25,10 @@ impl GatewayTestServer {
         defense_mode: GatewayDefenseMode,
         defense_kill_switch: bool,
     ) -> Self {
-        Self::start_with_ttl(
+        Self::start_with_optional_secret_and_ttl(
             require_pairing,
             paired_tokens,
-            webhook_secret,
+            Some(webhook_secret.to_string()),
             defense_mode,
             defense_kill_switch,
             2_592_000,
@@ -41,6 +41,44 @@ impl GatewayTestServer {
         require_pairing: bool,
         paired_tokens: Vec<String>,
         webhook_secret: &str,
+        defense_mode: GatewayDefenseMode,
+        defense_kill_switch: bool,
+        token_ttl_secs: u64,
+    ) -> Self {
+        Self::start_with_optional_secret_and_ttl(
+            require_pairing,
+            paired_tokens,
+            Some(webhook_secret.to_string()),
+            defense_mode,
+            defense_kill_switch,
+            token_ttl_secs,
+        )
+        .await
+    }
+
+    #[allow(clippy::field_reassign_with_default)]
+    async fn start_without_webhook_secret(
+        require_pairing: bool,
+        paired_tokens: Vec<String>,
+        defense_mode: GatewayDefenseMode,
+        defense_kill_switch: bool,
+    ) -> Self {
+        Self::start_with_optional_secret_and_ttl(
+            require_pairing,
+            paired_tokens,
+            None,
+            defense_mode,
+            defense_kill_switch,
+            2_592_000,
+        )
+        .await
+    }
+
+    #[allow(clippy::field_reassign_with_default)]
+    async fn start_with_optional_secret_and_ttl(
+        require_pairing: bool,
+        paired_tokens: Vec<String>,
+        webhook_secret: Option<String>,
         defense_mode: GatewayDefenseMode,
         defense_kill_switch: bool,
         token_ttl_secs: u64,
@@ -68,7 +106,7 @@ impl GatewayTestServer {
         config.gateway.defense_kill_switch = defense_kill_switch;
         config.channels_config.webhook = Some(WebhookConfig {
             port,
-            secret: Some(webhook_secret.to_string()),
+            secret: webhook_secret,
             autonomy_level: None,
             tool_allowlist: None,
         });
@@ -275,6 +313,64 @@ async fn gateway_kill_switch_does_not_bypass_authentication() {
         body.get("error")
             .and_then(Value::as_str)
             .is_some_and(|msg| msg.contains("X-Webhook-Secret"))
+    );
+}
+
+#[tokio::test]
+async fn gateway_audit_mode_blocks_when_no_auth_is_configured() {
+    let server = GatewayTestServer::start_without_webhook_secret(
+        false,
+        vec![],
+        GatewayDefenseMode::Audit,
+        false,
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(server.url("/webhook"))
+        .json(&serde_json::json!({"message": "hello"}))
+        .send()
+        .await
+        .expect("audit mode no-auth request should complete");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = response
+        .json()
+        .await
+        .expect("audit mode no-auth response should be json");
+    assert!(
+        body.get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("no authentication configured"))
+    );
+}
+
+#[tokio::test]
+async fn gateway_warn_mode_blocks_when_no_auth_is_configured() {
+    let server = GatewayTestServer::start_without_webhook_secret(
+        false,
+        vec![],
+        GatewayDefenseMode::Warn,
+        false,
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(server.url("/webhook"))
+        .json(&serde_json::json!({"message": "hello"}))
+        .send()
+        .await
+        .expect("warn mode no-auth request should complete");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = response
+        .json()
+        .await
+        .expect("warn mode no-auth response should be json");
+    assert!(
+        body.get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|msg| msg.contains("no authentication configured"))
     );
 }
 

@@ -4,7 +4,7 @@
 //! - Google Cloud ADC (`GOOGLE_APPLICATION_CREDENTIALS`)
 
 use crate::llm::{
-    build_provider_client, scrub_secret_patterns,
+    build_provider_client, sanitize_api_error, scrub_secret_patterns,
     sse::{SseBuffer, parse_data_lines},
     streaming::ProviderStream,
     tool_convert::{ToolFields, map_tools_optional},
@@ -188,7 +188,8 @@ impl GeminiProvider {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Gemini API error ({status}): {error_text}");
+            let sanitized_error = sanitize_api_error(&error_text);
+            anyhow::bail!("Gemini API error ({status}): {sanitized_error}");
         }
 
         Ok(response)
@@ -413,7 +414,7 @@ impl GeminiProvider {
         let result: GenerateContentResponse = response.json().await?;
 
         if let Some(err) = result.error.as_ref() {
-            anyhow::bail!("Gemini API error: {}", err.message);
+            anyhow::bail!("Gemini API error: {}", sanitize_api_error(&err.message));
         }
 
         Ok(result)
@@ -466,7 +467,10 @@ impl GeminiProvider {
                         };
 
                         if let Some(err) = gen_response.error.as_ref() {
-                            Err(anyhow::anyhow!("Gemini API error: {}", err.message))?;
+                            Err(anyhow::anyhow!(
+                                "Gemini API error: {}",
+                                sanitize_api_error(&err.message)
+                            ))?;
                         }
 
                         if !sent_start {

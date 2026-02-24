@@ -4,6 +4,7 @@ use chacha20poly1305::{
     aead::{Aead, OsRng, rand_core::RngCore},
 };
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
 
@@ -82,20 +83,73 @@ impl SecretStore {
         self.root.join(KEY_FILE)
     }
 
+    fn read_key_file(path: &Path) -> Result<Vec<u8>> {
+        let hex_key = fs::read_to_string(path).context("failed to read key file")?;
+        let key = hex::decode(hex_key.trim()).context("invalid hex in key file")?;
+        if key.len() != 32 {
+            anyhow::bail!("key file has invalid length (expected 32 bytes)");
+        }
+        Ok(key)
+    }
+
+    fn write_new_key_file(path: &Path, key: &[u8]) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+                .context("failed to create key file")?;
+            file.write_all(hex::encode(key).as_bytes())
+                .context("failed to write key file")?;
+            file.sync_all().context("failed to sync key file")?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            fs::write(path, hex::encode(key)).context("failed to write key file")?;
+        }
+
+        Self::enforce_key_permissions(path)
+    }
+
+    fn enforce_key_permissions(path: &Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .context("failed to set key file permissions")?;
+        }
+        Ok(())
+    }
+
     fn load_or_create_key(&self) -> Result<Vec<u8>> {
         let path = self.key_path();
         if path.exists() {
-            let hex_key = fs::read_to_string(&path).context("failed to read key file")?;
-            let key = hex::decode(hex_key.trim()).context("invalid hex in key file")?;
-            if key.len() != 32 {
-                anyhow::bail!("key file has invalid length (expected 32 bytes)");
-            }
+            Self::enforce_key_permissions(&path)?;
+            let key = Self::read_key_file(&path)?;
             Ok(key)
         } else {
             let mut key = vec![0u8; 32];
             OsRng.fill_bytes(&mut key);
-            fs::write(&path, hex::encode(&key)).context("failed to write key file")?;
-            Ok(key)
+            match Self::write_new_key_file(&path, &key) {
+                Ok(()) => Ok(key),
+                Err(error) => {
+                    let is_already_exists = error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists);
+                    if is_already_exists {
+                        Self::enforce_key_permissions(&path)?;
+                        Self::read_key_file(&path)
+                    } else {
+                        Err(error)
+                    }
+                }
+            }
         }
     }
 }
@@ -117,6 +171,19 @@ mod tests {
 
         let decrypted = store.decrypt(&encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn key_file_permissions_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let store = SecretStore::new(dir.path(), true);
+        let _ = store.encrypt("sk-test-secret-key-12345").unwrap();
+
+        let metadata = std::fs::metadata(dir.path().join(KEY_FILE)).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
     }
 
     #[test]

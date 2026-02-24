@@ -1,5 +1,6 @@
 use super::SecurityPolicy;
 use super::types::AutonomyLevel;
+use std::path::PathBuf;
 
 /// Skip leading environment variable assignments (e.g. `FOO=bar cmd args`).
 /// Returns the remainder starting at the first non-assignment word.
@@ -51,12 +52,58 @@ fn is_path_like_argument(arg: &str) -> bool {
     arg.starts_with('/') || arg.starts_with("~/") || arg.contains('/') || arg.contains("..")
 }
 
+fn trim_matching_quotes(token: &str) -> &str {
+    let bytes = token.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
+            return &token[1..token.len() - 1];
+        }
+    }
+    token
+}
+
+fn resolve_argument_path(policy: &SecurityPolicy, path: &str) -> PathBuf {
+    let expanded = if let Some(stripped) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(stripped)
+        } else {
+            PathBuf::from(path)
+        }
+    } else {
+        PathBuf::from(path)
+    };
+
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        policy.workspace_dir.join(expanded)
+    }
+}
+
+fn is_path_argument_allowed(policy: &SecurityPolicy, raw_arg: &str) -> bool {
+    let path = trim_matching_quotes(raw_arg);
+    if !is_path_like_argument(path) {
+        return true;
+    }
+    if !policy.is_path_allowed(path) {
+        return false;
+    }
+
+    // Canonicalize existing paths to block workspace symlink escapes.
+    let joined = resolve_argument_path(policy, path);
+    match joined.canonicalize() {
+        Ok(resolved) => policy.is_resolved_path_allowed(&resolved),
+        Err(_) => true,
+    }
+}
+
 fn has_forbidden_path_argument(policy: &SecurityPolicy, words: &[&str]) -> bool {
     words
         .iter()
         .copied()
-        .filter(|word| is_path_like_argument(word))
-        .any(|word| !policy.is_path_allowed(word))
+        .any(|word| !is_path_argument_allowed(policy, word))
 }
 
 fn has_forbidden_find_start_path(policy: &SecurityPolicy, words: &[&str]) -> bool {
@@ -64,7 +111,7 @@ fn has_forbidden_find_start_path(policy: &SecurityPolicy, words: &[&str]) -> boo
         if word.starts_with('-') || matches!(*word, "(" | ")" | "!" | ",") {
             break;
         }
-        if is_path_like_argument(word) && !policy.is_path_allowed(word) {
+        if !is_path_argument_allowed(policy, word) {
             return true;
         }
     }
@@ -78,8 +125,7 @@ fn has_forbidden_path_in_simple_file_commands(policy: &SecurityPolicy, words: &[
         .iter()
         .copied()
         .filter(|word| !word.starts_with('-'))
-        .filter(|word| is_path_like_argument(word))
-        .any(|word| !policy.is_path_allowed(word))
+        .any(|word| !is_path_argument_allowed(policy, word))
 }
 
 fn find_exec_terminator(token: &str) -> Option<(Option<&str>, bool)> {
@@ -183,7 +229,7 @@ fn has_blocked_arguments(
             "publish" | "login" | "adduser" | "owner" | "token" | "access" | "profile"
         ),
         "cargo" => matches!(subcommand, "publish" | "login" | "owner" | "yank"),
-        "cat" | "head" | "tail" | "ls" | "wc" => {
+        "cat" | "head" | "tail" | "ls" | "wc" | "grep" => {
             has_forbidden_path_in_simple_file_commands(policy, &words)
         }
         "find" => {
@@ -323,11 +369,24 @@ mod tests {
         AutonomyLevel, SecurityPolicy, has_blocked_arguments, is_git_config_injection,
         skip_env_assignments,
     };
+    use tempfile::TempDir;
 
     fn policy_with_allowed(allowed_commands: &[&str]) -> SecurityPolicy {
         SecurityPolicy {
             autonomy: AutonomyLevel::Supervised,
             allowed_commands: allowed_commands.iter().map(ToString::to_string).collect(),
+            ..SecurityPolicy::default()
+        }
+    }
+
+    fn policy_with_allowed_in_workspace(
+        allowed_commands: &[&str],
+        workspace_dir: &std::path::Path,
+    ) -> SecurityPolicy {
+        SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            allowed_commands: allowed_commands.iter().map(ToString::to_string).collect(),
+            workspace_dir: workspace_dir.to_path_buf(),
             ..SecurityPolicy::default()
         }
     }
@@ -479,6 +538,23 @@ mod tests {
     }
 
     #[test]
+    fn has_blocked_arguments_grep_blocks_forbidden_paths() {
+        let policy = SecurityPolicy::default();
+        assert!(has_blocked_arguments(
+            &policy,
+            "grep",
+            "grep root /etc/shadow",
+            &[]
+        ));
+        assert!(!has_blocked_arguments(
+            &policy,
+            "grep",
+            "grep root Cargo.toml",
+            &[]
+        ));
+    }
+
+    #[test]
     fn is_command_allowed_accepts_safe_allowed_commands() {
         let policy = policy_with_allowed(&["git", "npm", "cargo", "pip"]);
         assert!(policy.is_command_allowed("git status"));
@@ -584,5 +660,16 @@ mod tests {
     fn is_command_allowed_rejects_find_exec_with_disallowed_subcommands() {
         let policy = policy_with_allowed(&["find", "cat"]);
         assert!(!policy.is_command_allowed(r"find . -type f -exec curl https://example.com \;"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_command_allowed_rejects_symlink_escape_in_simple_file_commands() {
+        let workspace = TempDir::new().expect("tempdir");
+        let etc_link = workspace.path().join("etc");
+        std::os::unix::fs::symlink("/etc", &etc_link).expect("create symlink");
+
+        let policy = policy_with_allowed_in_workspace(&["cat"], workspace.path());
+        assert!(!policy.is_command_allowed("cat etc/shadow"));
     }
 }

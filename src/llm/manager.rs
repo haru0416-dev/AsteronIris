@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use super::cooldown::CooldownTracker;
@@ -26,6 +26,17 @@ impl LlmManager {
         }
     }
 
+    fn cooldown_tracker(&self) -> MutexGuard<'_, CooldownTracker> {
+        match self.cooldown.lock() {
+            Ok(tracker) => tracker,
+            Err(poisoned) => {
+                tracing::warn!("cooldown tracker lock poisoned; recovering inner state");
+                self.cooldown.clear_poison();
+                poisoned.into_inner()
+            }
+        }
+    }
+
     /// Build a provider from the current config, wrapped in the full
     /// resilient + OAuth-recovery decorator chain.
     ///
@@ -38,7 +49,7 @@ impl LlmManager {
 
         // Check cooldown before creating the provider.
         {
-            let tracker = self.cooldown.lock().expect("cooldown lock poisoned");
+            let tracker = self.cooldown_tracker();
             if tracker.is_cooling_down(provider_name) {
                 let remaining = tracker.remaining(provider_name).unwrap_or(Duration::ZERO);
                 anyhow::bail!(
@@ -65,7 +76,7 @@ impl LlmManager {
         api_key: Option<&str>,
     ) -> anyhow::Result<Box<dyn Provider>> {
         {
-            let tracker = self.cooldown.lock().expect("cooldown lock poisoned");
+            let tracker = self.cooldown_tracker();
             if tracker.is_cooling_down(name) {
                 let remaining = tracker.remaining(name).unwrap_or(Duration::ZERO);
                 anyhow::bail!(
@@ -80,20 +91,20 @@ impl LlmManager {
     /// Returns `true` if the named provider is not currently in a cooldown
     /// window.
     pub fn is_provider_available(&self, name: &str) -> bool {
-        let tracker = self.cooldown.lock().expect("cooldown lock poisoned");
+        let tracker = self.cooldown_tracker();
         !tracker.is_cooling_down(name)
     }
 
     /// Record a rate-limit cooldown for the named provider.
     pub fn set_cooldown(&self, provider: &str, duration: Duration) {
-        let mut tracker = self.cooldown.lock().expect("cooldown lock poisoned");
+        let mut tracker = self.cooldown_tracker();
         tracker.set_cooldown(provider, duration);
     }
 
     /// Clear the cooldown for a specific provider, making it immediately
     /// available again.
     pub fn clear_cooldown(&self, provider: &str) {
-        let mut tracker = self.cooldown.lock().expect("cooldown lock poisoned");
+        let mut tracker = self.cooldown_tracker();
         tracker.clear(provider);
     }
 
@@ -209,5 +220,23 @@ mod tests {
         mgr.set_cooldown("anthropic", Duration::ZERO);
         assert!(mgr.is_provider_available("anthropic"));
         assert!(mgr.get_provider().is_ok());
+    }
+
+    #[test]
+    fn poisoned_cooldown_lock_is_recovered_and_cleared() {
+        let mgr = LlmManager::new(test_config());
+
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mgr
+                .cooldown
+                .lock()
+                .expect("cooldown lock should be available");
+            panic!("intentional poison for recovery test");
+        }));
+        assert!(poisoned.is_err());
+
+        // Recovery helper should prevent panic and clear poison flag.
+        assert!(mgr.is_provider_available("anthropic"));
+        assert!(mgr.cooldown.lock().is_ok());
     }
 }

@@ -471,24 +471,27 @@ pub(super) async fn handle_whatsapp_message(
         return whatsapp_not_configured_response();
     };
 
-    // ── Security: Verify X-Hub-Signature-256 if app_secret is configured ──
-    if let Some(ref app_secret) = state.whatsapp_app_secret {
-        let signature = headers
-            .get("X-Hub-Signature-256")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+    // ── Security: require and verify X-Hub-Signature-256 ──
+    let Some(ref app_secret) = state.whatsapp_app_secret else {
+        tracing::warn!("WhatsApp webhook rejected: app_secret is not configured");
+        return invalid_whatsapp_signature_response();
+    };
 
-        if !verify_whatsapp_signature(app_secret, &body, signature) {
-            tracing::warn!(
-                "WhatsApp webhook signature verification failed (signature: {})",
-                if signature.is_empty() {
-                    "missing"
-                } else {
-                    "invalid"
-                }
-            );
-            return invalid_whatsapp_signature_response();
-        }
+    let signature = headers
+        .get("X-Hub-Signature-256")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !verify_whatsapp_signature(app_secret, &body, signature) {
+        tracing::warn!(
+            "WhatsApp webhook signature verification failed (signature: {})",
+            if signature.is_empty() {
+                "missing"
+            } else {
+                "invalid"
+            }
+        );
+        return invalid_whatsapp_signature_response();
     }
 
     // ── Replay protection: check if we've seen this body before ──

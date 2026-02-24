@@ -511,6 +511,40 @@ fn policy_accounting_response_returns_429() {
 }
 
 #[test]
+fn policy_violation_no_auth_configured_is_blocked_in_audit_mode() {
+    let mut state = make_test_state(PairingGuard::new(false, &[], None));
+    state.defense_mode = GatewayDefenseMode::Audit;
+
+    let response =
+        defense::policy_violation_response(&state, defense::PolicyViolation::NoAuthConfigured)
+            .expect("no-auth violation should return a blocking response");
+    assert_eq!(response.0, StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn policy_violation_no_auth_configured_is_blocked_in_warn_mode() {
+    let mut state = make_test_state(PairingGuard::new(false, &[], None));
+    state.defense_mode = GatewayDefenseMode::Warn;
+
+    let response =
+        defense::policy_violation_response(&state, defense::PolicyViolation::NoAuthConfigured)
+            .expect("no-auth violation should return a blocking response");
+    assert_eq!(response.0, StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn policy_violation_no_auth_configured_is_blocked_with_kill_switch() {
+    let mut state = make_test_state(PairingGuard::new(false, &[], None));
+    state.defense_mode = GatewayDefenseMode::Enforce;
+    state.defense_kill_switch = true;
+
+    let response =
+        defense::policy_violation_response(&state, defense::PolicyViolation::NoAuthConfigured)
+            .expect("no-auth violation should return a blocking response");
+    assert_eq!(response.0, StatusCode::FORBIDDEN);
+}
+
+#[test]
 fn effective_defense_mode_kill_switch_forces_audit() {
     let tmp = TempDir::new().unwrap();
     let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
@@ -751,6 +785,13 @@ fn make_whatsapp_state() -> AppState {
 }
 
 #[cfg(feature = "whatsapp")]
+fn make_whatsapp_state_without_app_secret() -> AppState {
+    let mut state = make_whatsapp_state();
+    state.whatsapp_app_secret = None;
+    state
+}
+
+#[cfg(feature = "whatsapp")]
 #[tokio::test]
 async fn whatsapp_verify_returns_challenge_on_valid() {
     let state = make_whatsapp_state();
@@ -867,6 +908,17 @@ async fn whatsapp_message_rejects_invalid_signature() {
     let response = handle_whatsapp_message(State(state), headers, Bytes::from_static(b"{}"))
         .await
         .into_response();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[cfg(feature = "whatsapp")]
+#[tokio::test]
+async fn whatsapp_message_rejects_when_app_secret_is_missing() {
+    let state = make_whatsapp_state_without_app_secret();
+    let response =
+        handle_whatsapp_message(State(state), HeaderMap::new(), Bytes::from_static(b"{}"))
+            .await
+            .into_response();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 

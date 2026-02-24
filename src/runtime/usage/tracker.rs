@@ -54,12 +54,12 @@ impl UsageTracker for SqliteUsageTracker {
         &self,
         record: &UsageRecord,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
-        let input_tokens = record.input_tokens.map(u64::cast_signed);
-        let output_tokens = record.output_tokens.map(u64::cast_signed);
         let id = record.id.clone();
         let session_id = record.session_id.clone();
         let provider = record.provider.clone();
         let model = record.model.clone();
+        let input_tokens = record.input_tokens.map(u64::cast_signed);
+        let output_tokens = record.output_tokens.map(u64::cast_signed);
         let cost = record.estimated_cost_micros;
         let created_at = record.created_at.clone();
 
@@ -67,14 +67,14 @@ impl UsageTracker for SqliteUsageTracker {
             sqlx::query(
                 "INSERT INTO usage_records (id, session_id, provider, model, input_tokens, output_tokens, estimated_cost_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             )
-            .bind(&id)
-            .bind(&session_id)
-            .bind(&provider)
-            .bind(&model)
+            .bind(id)
+            .bind(session_id)
+            .bind(provider)
+            .bind(model)
             .bind(input_tokens)
             .bind(output_tokens)
             .bind(cost)
-            .bind(&created_at)
+            .bind(created_at)
             .execute(&self.pool)
             .await?;
             Ok(())

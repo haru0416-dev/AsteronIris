@@ -92,6 +92,19 @@ pub(super) fn policy_violation_response(
 
     let mode = effective_defense_mode(state);
     let reason = violation.reason();
+
+    // Missing all authentication mechanisms must always be blocked.
+    // Audit/warn modes may relax non-auth policy checks, but this condition
+    // would otherwise expose the webhook as unauthenticated.
+    if matches!(violation, PolicyViolation::NoAuthConfigured) {
+        tracing::warn!(
+            mode = ?mode,
+            violation = reason,
+            "Webhook policy violation blocked (hard-enforced auth configuration)"
+        );
+        return Some(violation.enforce_response());
+    }
+
     match mode {
         GatewayDefenseMode::Audit => {
             tracing::warn!(

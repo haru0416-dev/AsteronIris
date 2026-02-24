@@ -1,5 +1,5 @@
-use super::AppState;
 use super::events::{ClientMessage, ServerMessage};
+use super::{AppState, MAX_BODY_SIZE};
 use crate::agent::{
     IntegrationRuntimeTurnOptions, IntegrationTurnParams, LoopStopReason,
     run_main_session_turn_for_runtime_with_policy,
@@ -84,22 +84,35 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         };
 
         match message {
-            Message::Text(text) => match serde_json::from_str::<ClientMessage>(&text) {
-                Ok(client_message) => {
-                    if handle_client_message(&mut socket, &state, client_message)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    let server_message = ServerMessage::error(format!("invalid message: {error}"));
+            Message::Text(text) => {
+                if text.len() > MAX_BODY_SIZE {
+                    let server_message = ServerMessage::error(format!(
+                        "message too large: max {MAX_BODY_SIZE} bytes"
+                    ));
                     if send_message(&mut socket, &server_message).await.is_err() {
                         break;
                     }
+                    continue;
                 }
-            },
+
+                match serde_json::from_str::<ClientMessage>(&text) {
+                    Ok(client_message) => {
+                        if handle_client_message(&mut socket, &state, client_message)
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let server_message =
+                            ServerMessage::error(format!("invalid message: {error}"));
+                        if send_message(&mut socket, &server_message).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
             Message::Close(_) => break,
             Message::Ping(data) => {
                 if socket.send(Message::Pong(data)).await.is_err() {

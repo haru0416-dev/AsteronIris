@@ -99,9 +99,13 @@ impl PairingGuard {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = Instant::now();
-        hashes
-            .iter()
-            .any(|(h, created)| h == &hash && self.is_within_ttl(now, *created))
+        let mut authenticated = false;
+        for (stored_hash, created) in hashes.iter() {
+            let hash_matches = constant_time_eq(stored_hash, &hash);
+            let within_ttl = self.is_within_ttl(now, *created);
+            authenticated |= hash_matches && within_ttl;
+        }
+        authenticated
     }
 
     /// Remove expired tokens from storage.
