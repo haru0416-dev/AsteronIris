@@ -7,9 +7,8 @@ use tokio::time::Duration;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub(super) struct DaemonStatus {
-    #[serde(flatten)]
-    snapshot: serde_json::Map<String, serde_json::Value>,
-    written_at: String,
+    pub(super) started_at: String,
+    pub(super) written_at: String,
 }
 
 pub(super) fn state_file_path(config: &Config) -> PathBuf {
@@ -21,6 +20,7 @@ pub(super) fn state_file_path(config: &Config) -> PathBuf {
 }
 
 pub(super) fn spawn_state_writer(config: Arc<Config>) -> JoinHandle<()> {
+    let started_at = Utc::now().to_rfc3339();
     tokio::spawn(async move {
         let path = state_file_path(&config);
         if let Some(parent) = path.parent()
@@ -32,14 +32,11 @@ pub(super) fn spawn_state_writer(config: Arc<Config>) -> JoinHandle<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(super::STATUS_FLUSH_SECONDS));
         loop {
             interval.tick().await;
-            let mut json = crate::runtime::diagnostics::health::snapshot_json();
-            if let Some(snapshot) = json.as_object().cloned() {
-                let status = DaemonStatus {
-                    snapshot,
-                    written_at: Utc::now().to_rfc3339(),
-                };
-                json = serde_json::to_value(status).unwrap_or_else(|_| serde_json::json!({}));
-            }
+            let status = DaemonStatus {
+                started_at: started_at.clone(),
+                written_at: Utc::now().to_rfc3339(),
+            };
+            let json = serde_json::to_value(&status).unwrap_or_else(|_| serde_json::json!({}));
 
             let data = serde_json::to_vec_pretty(&json).unwrap_or_else(|_| b"{}".to_vec());
             if let Err(error) = tokio::fs::write(&path, data).await {

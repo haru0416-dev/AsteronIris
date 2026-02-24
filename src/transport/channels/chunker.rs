@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn chunk_unicode_by_character_count() {
-        let text = "🦀世界こんにちは";
+        let text = "\u{1f980}\u{4e16}\u{754c}\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}";
         let chunks = chunk_message(text, 3);
         assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 3));
         assert_eq!(chunks.concat(), text);

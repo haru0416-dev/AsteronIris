@@ -1,12 +1,9 @@
 use crate::config::Config;
-use crate::platform::daemon;
-use crate::security::auth::AuthProfileStore;
 use anyhow::Result;
 use chrono::Utc;
-use serde::Serialize;
 use std::fs;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EvolutionRecommendation {
     pub id: String,
     pub reason: String,
@@ -14,7 +11,7 @@ pub struct EvolutionRecommendation {
     pub proposed: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EvolutionReport {
     pub generated_at: String,
     pub apply_mode: bool,
@@ -28,20 +25,15 @@ enum Proposal {
     SchedulerPollSecs(u64),
     ProviderBackoffMs(u64),
     ProviderRetries(u32),
+    #[allow(dead_code)]
     EnsureFallback(String),
 }
 
 pub fn run_cycle(config: &Config, apply: bool) -> Result<()> {
     let daemon_snapshot = load_daemon_snapshot(config);
-    let auth_store = AuthProfileStore::load_or_init_for_config(config)?;
 
-    let mut observations = collect_observations(config, daemon_snapshot.as_ref(), &auth_store);
-    let proposals = build_proposals(
-        config,
-        daemon_snapshot.as_ref(),
-        &auth_store,
-        &mut observations,
-    );
+    let mut observations = collect_observations(config, daemon_snapshot.as_ref());
+    let proposals = build_proposals(config, daemon_snapshot.as_ref(), &mut observations);
     let recommendations = proposals
         .iter()
         .map(proposal_to_recommendation)
@@ -77,7 +69,11 @@ pub fn run_cycle(config: &Config, apply: bool) -> Result<()> {
 }
 
 fn load_daemon_snapshot(config: &Config) -> Option<serde_json::Value> {
-    let path = daemon::state_file_path(config);
+    let path = config
+        .config_path
+        .parent()
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from)
+        .join("daemon_state.json");
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
 }
@@ -85,7 +81,6 @@ fn load_daemon_snapshot(config: &Config) -> Option<serde_json::Value> {
 fn collect_observations(
     config: &Config,
     daemon_snapshot: Option<&serde_json::Value>,
-    auth_store: &AuthProfileStore,
 ) -> Vec<String> {
     let mut observations = Vec::new();
     observations.push(format!(
@@ -96,15 +91,9 @@ fn collect_observations(
         config.reliability.provider_backoff_ms
     ));
 
-    let total_errors: u32 = auth_store
-        .usage_stats
-        .values()
-        .map(|value| value.error_count)
-        .sum();
-    observations.push(format!(
-        "auth_profiles={} total_profile_errors={total_errors}",
-        auth_store.profiles.len()
-    ));
+    // TODO: Port security::auth::AuthProfileStore to v2 for profile error tracking.
+    // For now, skip auth profile analysis.
+    observations.push("auth_profiles: not yet ported to v2".to_string());
 
     if let Some(snapshot) = daemon_snapshot
         && let Some(components) = snapshot
@@ -127,7 +116,6 @@ fn collect_observations(
 fn build_proposals(
     config: &Config,
     daemon_snapshot: Option<&serde_json::Value>,
-    auth_store: &AuthProfileStore,
     observations: &mut Vec<String>,
 ) -> Vec<Proposal> {
     let mut proposals = Vec::new();
@@ -146,22 +134,12 @@ fn build_proposals(
         proposals.push(Proposal::ProviderRetries(2));
     }
 
-    let total_errors: u32 = auth_store
-        .usage_stats
-        .values()
-        .map(|value| value.error_count)
-        .sum();
     let provider = config.default_provider.as_deref().unwrap_or_default();
     let fallback_exists = !config.reliability.fallback_providers.is_empty();
-    if total_errors >= 3
-        && !fallback_exists
-        && matches!(provider, "openai" | "openai-codex" | "anthropic")
-    {
-        proposals.push(Proposal::EnsureFallback("openrouter".to_string()));
-        observations.push(
-            "high auth profile error count detected; fallback diversification recommended"
-                .to_string(),
-        );
+    // TODO: Once AuthProfileStore is ported, check total_errors >= 3 before recommending fallback
+    if !fallback_exists && matches!(provider, "openai" | "openai-codex" | "anthropic") {
+        observations
+            .push("no fallback provider configured; diversification recommended".to_string());
     }
 
     if let Some(snapshot) = daemon_snapshot
@@ -263,7 +241,6 @@ fn write_report(config: &Config, report: &EvolutionReport) -> Result<std::path::
 mod tests {
     use super::{Proposal, apply_proposals, build_proposals};
     use crate::config::Config;
-    use crate::security::auth::AuthProfileStore;
 
     #[test]
     fn build_proposals_normalizes_out_of_bounds_reliability() {
@@ -272,9 +249,8 @@ mod tests {
         config.reliability.provider_backoff_ms = 15;
         config.reliability.provider_retries = 8;
 
-        let store = AuthProfileStore::default();
         let mut observations = Vec::new();
-        let proposals = build_proposals(&config, None, &store, &mut observations);
+        let proposals = build_proposals(&config, None, &mut observations);
 
         assert!(proposals.contains(&Proposal::SchedulerPollSecs(15)));
         assert!(proposals.contains(&Proposal::ProviderBackoffMs(500)));

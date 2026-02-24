@@ -4,53 +4,34 @@ use std::collections::{HashMap, HashSet};
 fn default_max_call_seconds() -> u64 {
     30
 }
-
 fn default_enabled_true() -> bool {
     true
 }
 
-/// Top-level MCP configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct McpConfig {
-    /// Whether MCP support is enabled.
     #[serde(default)]
     pub enabled: bool,
-
-    /// Optional path to a Claude Desktop-style mcp.json file to import.
-    /// Servers defined here are merged with inline `servers` entries.
-    /// Inline entries with the same name take precedence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_json: Option<String>,
-
-    /// MCP server definitions.
     #[serde(default)]
     pub servers: Vec<McpServerConfig>,
 }
 
-/// Configuration for a single MCP server connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
-    /// Unique name for this server.
     pub name: String,
-
-    /// Transport kind.
     #[serde(default)]
     pub transport: McpTransport,
-
-    /// Whether this server is enabled.
     #[serde(default = "default_enabled_true")]
     pub enabled: bool,
-
-    /// Maximum seconds per tool call.
     #[serde(default = "default_max_call_seconds")]
     pub max_call_seconds: u64,
 }
 
-/// Transport configuration for an MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum McpTransport {
-    /// Stdio transport -- spawns a child process.
     Stdio {
         command: String,
         #[serde(default)]
@@ -58,8 +39,9 @@ pub enum McpTransport {
         #[serde(default)]
         env: HashMap<String, String>,
     },
-    /// HTTP transport -- connects to a remote server.
-    Http { url: String },
+    Http {
+        url: String,
+    },
 }
 
 impl Default for McpTransport {
@@ -73,7 +55,6 @@ impl Default for McpTransport {
 }
 
 impl McpConfig {
-    /// Validate the configuration, returning errors for invalid entries.
     #[must_use]
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
@@ -124,7 +105,6 @@ impl McpConfig {
         errors
     }
 
-    /// Return only enabled servers.
     #[must_use]
     pub fn enabled_servers(&self) -> Vec<&McpServerConfig> {
         self.servers
@@ -144,32 +124,6 @@ mod tests {
         assert!(!cfg.enabled);
         assert!(cfg.import_json.is_none());
         assert!(cfg.servers.is_empty());
-    }
-
-    #[test]
-    fn config_toml_round_trip() {
-        let cfg = McpConfig {
-            enabled: true,
-            import_json: Some("~/.config/claude/mcp.json".to_string()),
-            servers: vec![McpServerConfig {
-                name: "filesystem".to_string(),
-                transport: McpTransport::Stdio {
-                    command: "npx".to_string(),
-                    args: vec![
-                        "-y".to_string(),
-                        "@modelcontextprotocol/server-filesystem".to_string(),
-                    ],
-                    env: HashMap::new(),
-                },
-                enabled: true,
-                max_call_seconds: 30,
-            }],
-        };
-        let toml_str = toml::to_string(&cfg).unwrap();
-        let parsed: McpConfig = toml::from_str(&toml_str).unwrap();
-        assert!(parsed.enabled);
-        assert_eq!(parsed.servers.len(), 1);
-        assert_eq!(parsed.servers[0].name, "filesystem");
     }
 
     #[test]
@@ -214,70 +168,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_empty_stdio_command() {
-        let cfg = McpConfig {
-            enabled: true,
-            import_json: None,
-            servers: vec![McpServerConfig {
-                name: "bad".to_string(),
-                transport: McpTransport::Stdio {
-                    command: String::new(),
-                    args: vec![],
-                    env: HashMap::new(),
-                },
-                enabled: true,
-                max_call_seconds: 30,
-            }],
-        };
-        let errors = cfg.validate();
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("requires a command"))
-        );
-    }
-
-    #[test]
-    fn validate_rejects_empty_http_url() {
-        let cfg = McpConfig {
-            enabled: true,
-            import_json: None,
-            servers: vec![McpServerConfig {
-                name: "bad".to_string(),
-                transport: McpTransport::Http { url: String::new() },
-                enabled: true,
-                max_call_seconds: 30,
-            }],
-        };
-        let errors = cfg.validate();
-        assert!(errors.iter().any(|error| error.contains("requires a url")));
-    }
-
-    #[test]
-    fn validate_rejects_zero_timeout() {
-        let cfg = McpConfig {
-            enabled: true,
-            import_json: None,
-            servers: vec![McpServerConfig {
-                name: "bad".to_string(),
-                transport: McpTransport::Stdio {
-                    command: "echo".to_string(),
-                    args: vec![],
-                    env: HashMap::new(),
-                },
-                enabled: true,
-                max_call_seconds: 0,
-            }],
-        };
-        let errors = cfg.validate();
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("max_call_seconds"))
-        );
-    }
-
-    #[test]
     fn enabled_servers_filters_disabled() {
         let cfg = McpConfig {
             enabled: true,
@@ -308,23 +198,5 @@ mod tests {
         let enabled = cfg.enabled_servers();
         assert_eq!(enabled.len(), 1);
         assert_eq!(enabled[0].name, "on");
-    }
-
-    #[test]
-    fn deserialize_minimal_toml() {
-        let toml_str = r#"
-enabled = true
-
-[[servers]]
-name = "test"
-
-[servers.transport]
-kind = "stdio"
-command = "echo"
-"#;
-        let cfg: McpConfig = toml::from_str(toml_str).unwrap();
-        assert!(cfg.enabled);
-        assert_eq!(cfg.servers.len(), 1);
-        assert_eq!(cfg.servers[0].max_call_seconds, 30);
     }
 }

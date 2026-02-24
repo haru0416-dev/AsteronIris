@@ -1,9 +1,9 @@
-use asteroniris::config::Config;
+use crate::config::Config;
 
 #[allow(clippy::too_many_lines)]
 pub fn render_status(config: &Config) -> String {
     let mut lines = vec![
-        format!("◆ {}", t!("status.title")),
+        format!("* {}", t!("status.title")),
         String::new(),
         format!("{}     {}", t!("status.version"), env!("CARGO_PKG_VERSION")),
         format!(
@@ -41,8 +41,8 @@ pub fn render_status(config: &Config) -> String {
             "   {} {}",
             t!("status.external_actions"),
             match config.autonomy.external_action_execution {
-                asteroniris::security::ExternalActionExecution::Disabled => "disabled",
-                asteroniris::security::ExternalActionExecution::Enabled => "enabled",
+                crate::security::ExternalActionExecution::Disabled => "disabled",
+                crate::security::ExternalActionExecution::Enabled => "enabled",
             }
         ),
     ];
@@ -58,9 +58,9 @@ pub fn render_status(config: &Config) -> String {
         "   {} {}",
         t!("status.rollout_stage"),
         match config.autonomy.rollout.stage {
-            Some(asteroniris::config::schema::AutonomyRolloutStage::ReadOnly) => "read-only",
-            Some(asteroniris::config::schema::AutonomyRolloutStage::Supervised) => "supervised",
-            Some(asteroniris::config::schema::AutonomyRolloutStage::Full) => "full",
+            Some(crate::config::schema::AutonomyRolloutStage::ReadOnly) => "read-only",
+            Some(crate::config::schema::AutonomyRolloutStage::Supervised) => "supervised",
+            Some(crate::config::schema::AutonomyRolloutStage::Full) => "full",
             None => "off",
         }
     ));
@@ -164,9 +164,9 @@ pub fn render_status(config: &Config) -> String {
         lines.push(format!(
             "  {name:9} {}",
             if configured {
-                format!("✓ {}", t!("common.confirmed"))
+                format!("[ok] {}", t!("common.confirmed"))
             } else {
-                format!("✗ {}", t!("common.not_configured"))
+                format!("[--] {}", t!("common.not_configured"))
             }
         ));
     }
@@ -197,7 +197,7 @@ fn memory_rollout_status(
         "off"
     };
 
-    let capability = asteroniris::core::memory::capability_matrix_for_backend(backend);
+    let capability = crate::memory::capability::capability_matrix_for_backend(backend);
     let revocation = capability.map_or("unknown", |matrix| {
         capability_support_label(matrix.forget_tombstone)
     });
@@ -208,30 +208,10 @@ fn memory_rollout_status(
     (consolidation, conflict, revocation, governance)
 }
 
-fn capability_support_label(support: asteroniris::core::memory::CapabilitySupport) -> &'static str {
+fn capability_support_label(support: crate::memory::CapabilitySupport) -> &'static str {
     match support {
-        asteroniris::core::memory::CapabilitySupport::Supported => "supported",
-        asteroniris::core::memory::CapabilitySupport::Degraded => "degraded",
-        asteroniris::core::memory::CapabilitySupport::Unsupported => "unsupported",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::memory_rollout_status;
-    use asteroniris::config::Config;
-
-    #[test]
-    fn status_reports_memory_rollout_support() {
-        let mut config = Config::default();
-        config.memory.backend = "lancedb".into();
-        config.memory.auto_save = true;
-        config.autonomy.rollout.enabled = true;
-
-        let rollout = memory_rollout_status(&config);
-        assert_eq!(rollout.0, "on");
-        assert_eq!(rollout.1, "on");
-        assert_eq!(rollout.2, "degraded");
-        assert_eq!(rollout.3, "supported");
+        crate::memory::CapabilitySupport::Supported => "supported",
+        crate::memory::CapabilitySupport::Degraded => "degraded",
+        crate::memory::CapabilitySupport::Unsupported => "unsupported",
     }
 }

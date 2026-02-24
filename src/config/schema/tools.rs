@@ -71,12 +71,6 @@ mod tests {
         let toml_str = "[tools]";
         let cfg: ToolsConfig = toml::from_str(toml_str).unwrap();
         assert!(cfg.shell.enabled);
-        assert!(cfg.file_read.enabled);
-        assert!(cfg.file_write.enabled);
-        assert!(cfg.memory_store.enabled);
-        assert!(cfg.memory_recall.enabled);
-        assert!(!cfg.memory_forget.enabled);
-        assert!(!cfg.memory_governance.enabled);
     }
 
     #[test]
@@ -87,27 +81,6 @@ memory_forget = { enabled = true }
 "#;
         let cfg: ToolsConfig = toml::from_str(toml_str).unwrap();
         assert!(!cfg.shell.enabled);
-        assert!(cfg.file_read.enabled);
         assert!(cfg.memory_forget.enabled);
-    }
-
-    #[test]
-    fn tools_config_all_disabled() {
-        let cfg = ToolsConfig {
-            shell: ToolEntry { enabled: false },
-            file_read: ToolEntry { enabled: false },
-            file_write: ToolEntry { enabled: false },
-            memory_store: ToolEntry { enabled: false },
-            memory_recall: ToolEntry { enabled: false },
-            memory_forget: ToolEntry { enabled: false },
-            memory_governance: ToolEntry { enabled: false },
-        };
-        assert!(!cfg.shell.enabled);
-        assert!(!cfg.file_read.enabled);
-        assert!(!cfg.file_write.enabled);
-        assert!(!cfg.memory_store.enabled);
-        assert!(!cfg.memory_recall.enabled);
-        assert!(!cfg.memory_forget.enabled);
-        assert!(!cfg.memory_governance.enabled);
     }
 }

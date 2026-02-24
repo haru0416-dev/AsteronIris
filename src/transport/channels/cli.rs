@@ -4,7 +4,7 @@ use std::pin::Pin;
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
-/// CLI channel — stdin/stdout, always available, zero deps
+/// CLI channel -- stdin/stdout, always available, zero deps
 pub struct CliChannel;
 
 impl CliChannel {

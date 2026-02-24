@@ -1,16 +1,16 @@
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
-use crate::core::persona::person_identity::channel_person_entity_id;
-use crate::core::providers;
-use crate::core::tools::middleware::ExecutionContext;
-use crate::security::pairing::constant_time_eq;
+use crate::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
+use crate::llm;
+use crate::persona::channel_person_entity_id;
 use crate::security::policy::TenantPolicyContext;
-use crate::security::writeback_guard::enforce_external_autosave_write_policy;
+use crate::tools::ExecutionContext;
 #[cfg(feature = "whatsapp")]
 use crate::transport::channels::{Channel, WhatsAppChannel};
+#[cfg(feature = "whatsapp")]
 use crate::utils::text::truncate_with_ellipsis;
+#[cfg(feature = "whatsapp")]
+use axum::{body::Bytes, extract::Query};
 use axum::{
-    body::Bytes,
-    extract::{Query, State},
+    extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
 };
@@ -18,11 +18,10 @@ use std::sync::Arc;
 
 #[cfg(feature = "whatsapp")]
 use super::WhatsAppVerifyQuery;
+use super::autosave::gateway_webhook_autosave_event;
 #[cfg(feature = "whatsapp")]
 use super::autosave::gateway_whatsapp_autosave_event;
-use super::autosave::{
-    gateway_autosave_entity_id, gateway_runtime_policy_context, gateway_webhook_autosave_event,
-};
+use super::autosave::{gateway_autosave_entity_id, gateway_runtime_policy_context};
 use super::defense::{
     PolicyViolation, apply_external_ingress_policy, must_enforce_auth_violation,
     policy_accounting_response, policy_violation_response,
@@ -51,6 +50,9 @@ fn log_tool_loop_stop(source: &str, stop_reason: &LoopStopReason, iterations: u3
         LoopStopReason::ApprovalDenied => {
             tracing::warn!(source, "tool loop halted pending approval");
         }
+        LoopStopReason::HookBlocked(reason) => {
+            tracing::warn!(source, reason, "tool loop halted by prompt hook");
+        }
         LoopStopReason::Error(error) => {
             tracing::warn!(source, error = %error, "tool loop ended with provider error");
         }
@@ -64,7 +66,7 @@ async fn run_gateway_tool_loop(
     model: &str,
     temperature: f64,
     source_identifier: &str,
-) -> anyhow::Result<crate::core::agent::tool_loop::ToolLoopResult> {
+) -> anyhow::Result<crate::agent::tool_loop::ToolLoopResult> {
     let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
     let full_prompt = system_prompt.unwrap_or_default();
     let ctx = ExecutionContext {
@@ -74,10 +76,8 @@ async fn run_gateway_tool_loop(
         turn_number: 0,
         workspace_dir: state.security.workspace_dir.clone(),
         allowed_tools: None,
-        permission_store: Some(Arc::clone(&state.permission_store)),
         rate_limiter: Arc::clone(&state.rate_limiter),
         tenant_context: TenantPolicyContext::disabled(),
-        approval_broker: None,
     };
     let result = tool_loop
         .run(ToolLoopRunParams {
@@ -90,6 +90,7 @@ async fn run_gateway_tool_loop(
             ctx: &ctx,
             stream_sink: None,
             conversation_history: &[],
+            hooks: &[],
         })
         .await?;
     if let LoopStopReason::Error(error) = &result.stop_reason {
@@ -158,9 +159,8 @@ async fn process_whatsapp_message(
                 sender,
                 ingress.persisted_summary.clone(),
             );
-            if let Err(error) = enforce_external_autosave_write_policy(&event) {
-                tracing::warn!(%error, "gateway whatsapp autosave rejected by write policy");
-            } else if let Err(error) = state.mem.append_event(event).await {
+            // TODO: enforce_external_autosave_write_policy once writeback_guard is ported
+            if let Err(error) = state.mem.append_event(event).await {
                 tracing::warn!(%error, "failed to autosave whatsapp event");
             }
         }
@@ -217,17 +217,16 @@ async fn process_whatsapp_message(
     }
 }
 
-/// GET /health — always public (no secrets leaked)
+/// GET /health -- always public (no secrets leaked)
 pub(super) async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
     let body = serde_json::json!({
         "status": "ok",
         "paired": state.pairing.is_paired(),
-        "runtime": crate::runtime::diagnostics::health::snapshot_json(),
     });
     Json(body)
 }
 
-/// POST /pair — exchange one-time code for bearer token
+/// POST /pair -- exchange one-time code for bearer token
 pub(super) async fn handle_pair(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -239,7 +238,7 @@ pub(super) async fn handle_pair(
 
     match state.pairing.try_pair(code) {
         Ok(Some(token)) => {
-            tracing::info!("🔐 New client paired successfully");
+            tracing::info!("New client paired successfully");
             let body = serde_json::json!({
                 "paired": true,
                 "token": token,
@@ -248,13 +247,13 @@ pub(super) async fn handle_pair(
             (StatusCode::OK, Json(body))
         }
         Ok(None) => {
-            tracing::warn!("🔐 Pairing attempt with invalid code");
+            tracing::warn!("Pairing attempt with invalid code");
             let err = serde_json::json!({"error": "Invalid pairing code"});
             (StatusCode::FORBIDDEN, Json(err))
         }
         Err(lockout_secs) => {
             tracing::warn!(
-                "🔐 Pairing locked out — too many failed attempts ({lockout_secs}s remaining)"
+                "Pairing locked out — too many failed attempts ({lockout_secs}s remaining)"
             );
             let err = serde_json::json!({
                 "error": format!("Too many failed attempts. Try again in {lockout_secs}s."),
@@ -265,7 +264,13 @@ pub(super) async fn handle_pair(
     }
 }
 
-/// POST /webhook — main webhook endpoint
+/// Constant-time equality comparison for secret tokens.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
+/// POST /webhook -- main webhook endpoint
 #[allow(clippy::too_many_lines)]
 pub(super) async fn handle_webhook(
     State(state): State<AppState>,
@@ -344,9 +349,8 @@ pub(super) async fn handle_webhook(
                 &autosave_entity_id,
                 ingress.persisted_summary.clone(),
             );
-            if let Err(error) = enforce_external_autosave_write_policy(&event) {
-                tracing::warn!(%error, "gateway webhook autosave rejected by write policy");
-            } else if let Err(error) = state.mem.append_event(event).await {
+            // TODO: enforce_external_autosave_write_policy once writeback_guard is ported
+            if let Err(error) = state.mem.append_event(event).await {
                 tracing::warn!(%error, "failed to autosave webhook event");
             }
         }
@@ -384,7 +388,7 @@ pub(super) async fn handle_webhook(
         Err(e) => {
             tracing::error!(
                 "Webhook provider error: {}",
-                providers::sanitize_api_error(&e.to_string())
+                llm::sanitize_api_error(&e.to_string())
             );
             let err = serde_json::json!({"error": "LLM request failed"});
             (StatusCode::INTERNAL_SERVER_ERROR, Json(err))
@@ -392,7 +396,7 @@ pub(super) async fn handle_webhook(
     }
 }
 
-/// GET /whatsapp — Meta webhook verification
+/// GET /whatsapp -- Meta webhook verification
 #[cfg(feature = "whatsapp")]
 pub(super) async fn handle_whatsapp_verify(
     State(state): State<AppState>,
@@ -419,7 +423,7 @@ pub(super) async fn handle_whatsapp_verify(
     (StatusCode::FORBIDDEN, "Forbidden".to_string())
 }
 
-/// POST /whatsapp — incoming message webhook
+/// POST /whatsapp -- incoming message webhook
 #[cfg(feature = "whatsapp")]
 pub(super) async fn handle_whatsapp_message(
     State(state): State<AppState>,

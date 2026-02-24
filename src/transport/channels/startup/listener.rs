@@ -11,15 +11,14 @@ pub async fn start_channels(config: Arc<Config>) -> Result<()> {
     let rt = init_channel_runtime(&config).await?;
 
     if rt.channels.is_empty() {
-        println!("{}", t!("channels.no_channels"));
+        println!("No channels configured. Run `asteroniris onboard` to set up.");
         return Ok(());
     }
 
-    println!("◆ {}", t!("channels.server_title"));
-    println!("  › {} {}", t!("channels.model"), rt.model);
+    println!("Channel server:");
+    println!("  > model: {}", rt.model);
     println!(
-        "  › {} {} (auto-save: {})",
-        t!("channels.memory"),
+        "  > memory: {} (auto-save: {})",
         rt.config.memory.backend,
         if rt.config.memory.auto_save {
             "on"
@@ -28,8 +27,7 @@ pub async fn start_channels(config: Arc<Config>) -> Result<()> {
         }
     );
     println!(
-        "  › {} {}",
-        t!("channels.channels"),
+        "  > channels: {}",
         rt.channels
             .iter()
             .map(|c| c.name())
@@ -37,10 +35,8 @@ pub async fn start_channels(config: Arc<Config>) -> Result<()> {
             .join(", ")
     );
     println!();
-    println!("  {}", t!("channels.listening"));
+    println!("  Listening...");
     println!();
-
-    crate::runtime::diagnostics::health::mark_component_ok("channels");
 
     let (initial_backoff_secs, max_backoff_secs) = channel_backoff_settings(&rt.config.reliability);
 

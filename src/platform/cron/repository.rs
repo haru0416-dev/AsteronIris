@@ -3,14 +3,15 @@ use super::types::{AGENT_PENDING_CAP, CronJob, CronJobKind, CronJobMetadata, Cro
 use crate::config::Config;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-pub fn add_job(config: &Config, expression: &str, command: &str) -> Result<CronJob> {
-    add_job_with_metadata(config, expression, command, &CronJobMetadata::default())
+pub async fn add_job(config: &Config, expression: &str, command: &str) -> Result<CronJob> {
+    add_job_with_metadata(config, expression, command, &CronJobMetadata::default()).await
 }
 
-pub fn add_job_with_metadata(
+pub async fn add_job_with_metadata(
     config: &Config,
     expression: &str,
     command: &str,
@@ -21,34 +22,33 @@ pub fn add_job_with_metadata(
     let id = Uuid::new_v4().to_string();
     let max_attempts = metadata.max_attempts.max(1);
 
-    with_connection(config, |conn| {
-        if metadata.origin.is_agent() {
-            cleanup_expired_jobs(conn, now)?;
-            let pending = pending_agent_jobs(conn, now)?;
-            if pending >= AGENT_PENDING_CAP {
-                anyhow::bail!("agent-origin queue cap reached ({AGENT_PENDING_CAP} pending jobs)");
-            }
-        }
+    let pool = open_pool(config).await?;
 
-        conn.execute(
-            "INSERT INTO cron_jobs (
-                id, expression, command, created_at, next_run, job_kind, origin, expires_at, max_attempts
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                id,
-                expression,
-                command,
-                now.to_rfc3339(),
-                next_run.to_rfc3339(),
-                metadata.job_kind.as_db(),
-                metadata.origin.as_db(),
-                metadata.expires_at.as_ref().map(DateTime::to_rfc3339),
-                max_attempts
-            ],
-        )
-        .context("Failed to insert cron job")?;
-        Ok(())
-    })?;
+    if metadata.origin.is_agent() {
+        cleanup_expired_jobs(&pool, now).await?;
+        let pending = pending_agent_jobs(&pool, now).await?;
+        if pending >= AGENT_PENDING_CAP {
+            anyhow::bail!("agent-origin queue cap reached ({AGENT_PENDING_CAP} pending jobs)");
+        }
+    }
+
+    sqlx::query(
+        "INSERT INTO cron_jobs (
+            id, expression, command, created_at, next_run, job_kind, origin, expires_at, max_attempts
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(expression)
+    .bind(command)
+    .bind(now.to_rfc3339())
+    .bind(next_run.to_rfc3339())
+    .bind(metadata.job_kind.as_db())
+    .bind(metadata.origin.as_db())
+    .bind(metadata.expires_at.as_ref().map(DateTime::to_rfc3339))
+    .bind(i64::from(max_attempts))
+    .execute(&pool)
+    .await
+    .context("Failed to insert cron job")?;
 
     Ok(CronJob {
         id,
@@ -64,150 +64,64 @@ pub fn add_job_with_metadata(
     })
 }
 
-pub fn list_jobs(config: &Config) -> Result<Vec<CronJob>> {
-    with_connection(config, |conn| {
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, expression, command, next_run, last_run, last_status,
-                    job_kind, origin, expires_at, max_attempts
-             FROM cron_jobs ORDER BY next_run ASC",
-        )?;
+pub async fn list_jobs(config: &Config) -> Result<Vec<CronJob>> {
+    let pool = open_pool(config).await?;
+    let rows = sqlx::query(
+        "SELECT id, expression, command, next_run, last_run, last_status,
+                job_kind, origin, expires_at, max_attempts
+         FROM cron_jobs ORDER BY next_run ASC",
+    )
+    .fetch_all(&pool)
+    .await?;
 
-        let rows = stmt.query_map([], |row| {
-            let next_run_raw: String = row.get(3)?;
-            let last_run_raw: Option<String> = row.get(4)?;
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                next_run_raw,
-                last_run_raw,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, i64>(9)?,
-            ))
-        })?;
-
-        let mut jobs = Vec::new();
-        for row in rows {
-            let (
-                id,
-                expression,
-                command,
-                next_run_raw,
-                last_run_raw,
-                last_status,
-                job_kind_raw,
-                origin_raw,
-                expires_at_raw,
-                max_attempts_raw,
-            ) = row?;
-            jobs.push(CronJob {
-                id,
-                expression,
-                command,
-                next_run: parse_rfc3339(&next_run_raw)?,
-                last_run: match last_run_raw {
-                    Some(raw) => Some(parse_rfc3339(&raw)?),
-                    None => None,
-                },
-                last_status,
-                job_kind: CronJobKind::from_db(&job_kind_raw),
-                origin: CronJobOrigin::from_db(&origin_raw),
-                expires_at: match expires_at_raw {
-                    Some(raw) => Some(parse_rfc3339(&raw)?),
-                    None => None,
-                },
-                max_attempts: parse_max_attempts(max_attempts_raw),
-            });
-        }
-        Ok(jobs)
-    })
+    let mut jobs = Vec::with_capacity(rows.len());
+    for row in rows {
+        jobs.push(row_to_cron_job(&row)?);
+    }
+    Ok(jobs)
 }
 
-pub fn remove_job(config: &Config, id: &str) -> Result<()> {
-    let changed = with_connection(config, |conn| {
-        conn.execute("DELETE FROM cron_jobs WHERE id = ?1", params![id])
-            .context("Failed to delete cron job")
-    })?;
+pub async fn remove_job(config: &Config, id: &str) -> Result<()> {
+    let pool = open_pool(config).await?;
+    let result = sqlx::query("DELETE FROM cron_jobs WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .context("Failed to delete cron job")?;
 
-    if changed == 0 {
+    if result.rows_affected() == 0 {
         anyhow::bail!("Cron job '{id}' not found");
     }
 
-    println!("✅ Removed cron job {id}");
+    println!("Removed cron job {id}");
     Ok(())
 }
 
-pub fn due_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJob>> {
-    with_connection(config, |conn| {
-        cleanup_expired_jobs(conn, now)?;
+pub async fn due_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJob>> {
+    let pool = open_pool(config).await?;
+    cleanup_expired_jobs(&pool, now).await?;
 
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, expression, command, next_run, last_run, last_status,
-                    job_kind, origin, expires_at, max_attempts
-             FROM cron_jobs
-             WHERE next_run <= ?1
-               AND (expires_at IS NULL OR expires_at > ?1)
-             ORDER BY next_run ASC",
-        )?;
+    let rows = sqlx::query(
+        "SELECT id, expression, command, next_run, last_run, last_status,
+                job_kind, origin, expires_at, max_attempts
+         FROM cron_jobs
+         WHERE next_run <= ?
+           AND (expires_at IS NULL OR expires_at > ?)
+         ORDER BY next_run ASC",
+    )
+    .bind(now.to_rfc3339())
+    .bind(now.to_rfc3339())
+    .fetch_all(&pool)
+    .await?;
 
-        let rows = stmt.query_map(params![now.to_rfc3339()], |row| {
-            let next_run_raw: String = row.get(3)?;
-            let last_run_raw: Option<String> = row.get(4)?;
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                next_run_raw,
-                last_run_raw,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, i64>(9)?,
-            ))
-        })?;
-
-        let mut jobs = Vec::new();
-        for row in rows {
-            let (
-                id,
-                expression,
-                command,
-                next_run_raw,
-                last_run_raw,
-                last_status,
-                job_kind_raw,
-                origin_raw,
-                expires_at_raw,
-                max_attempts_raw,
-            ) = row?;
-            jobs.push(CronJob {
-                id,
-                expression,
-                command,
-                next_run: parse_rfc3339(&next_run_raw)?,
-                last_run: match last_run_raw {
-                    Some(raw) => Some(parse_rfc3339(&raw)?),
-                    None => None,
-                },
-                last_status,
-                job_kind: CronJobKind::from_db(&job_kind_raw),
-                origin: CronJobOrigin::from_db(&origin_raw),
-                expires_at: match expires_at_raw {
-                    Some(raw) => Some(parse_rfc3339(&raw)?),
-                    None => None,
-                },
-                max_attempts: parse_max_attempts(max_attempts_raw),
-            });
-        }
-        Ok(jobs)
-    })
+    let mut jobs = Vec::with_capacity(rows.len());
+    for row in rows {
+        jobs.push(row_to_cron_job(&row)?);
+    }
+    Ok(jobs)
 }
 
-pub fn reschedule_after_run(
+pub async fn reschedule_after_run(
     config: &Config,
     job: &CronJob,
     success: bool,
@@ -217,69 +131,47 @@ pub fn reschedule_after_run(
     let next_run = next_run_for(&job.expression, now)?;
     let status = if success { "ok" } else { "error" };
 
-    with_connection(config, |conn| {
-        conn.execute(
-            "UPDATE cron_jobs
-             SET next_run = ?1, last_run = ?2, last_status = ?3, last_output = ?4
-             WHERE id = ?5",
-            params![
-                next_run.to_rfc3339(),
-                now.to_rfc3339(),
-                status,
-                output,
-                job.id
-            ],
-        )
-        .context("Failed to update cron job run state")?;
-        Ok(())
-    })
-}
-
-fn cleanup_expired_jobs(conn: &Connection, now: DateTime<Utc>) -> Result<()> {
-    conn.execute(
-        "DELETE FROM cron_jobs WHERE expires_at IS NOT NULL AND expires_at <= ?1",
-        params![now.to_rfc3339()],
+    let pool = open_pool(config).await?;
+    sqlx::query(
+        "UPDATE cron_jobs
+         SET next_run = ?, last_run = ?, last_status = ?, last_output = ?
+         WHERE id = ?",
     )
-    .context("Failed to cleanup expired cron jobs")?;
+    .bind(next_run.to_rfc3339())
+    .bind(now.to_rfc3339())
+    .bind(status)
+    .bind(output)
+    .bind(&job.id)
+    .execute(&pool)
+    .await
+    .context("Failed to update cron job run state")?;
+
     Ok(())
 }
 
-fn pending_agent_jobs(conn: &Connection, now: DateTime<Utc>) -> Result<usize> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*)
-         FROM cron_jobs
-         WHERE origin = 'agent'
-           AND (expires_at IS NULL OR expires_at > ?1)",
-        params![now.to_rfc3339()],
-        |row| row.get(0),
-    )?;
-    Ok(usize::try_from(count).unwrap_or(usize::MAX))
-}
+// ── Pool management ─────────────────────────────────────────────────────────
 
-fn add_column_if_missing(conn: &Connection, sql: &str) -> Result<()> {
-    match conn.execute(sql, []) {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            if error.to_string().contains("duplicate column name") {
-                Ok(())
-            } else {
-                Err(error.into())
-            }
-        }
-    }
-}
-
-fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+pub(crate) async fn open_pool(config: &Config) -> Result<SqlitePool> {
     let db_path = config.workspace_dir.join("cron").join("jobs.db");
     if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)
+        tokio::fs::create_dir_all(parent)
+            .await
             .with_context(|| format!("Failed to create cron directory: {}", parent.display()))?;
     }
 
-    let conn = Connection::open(&db_path)
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
         .with_context(|| format!("Failed to open cron DB: {}", db_path.display()))?;
 
-    conn.execute_batch(
+    ensure_schema(&pool).await?;
+    Ok(pool)
+}
+
+async fn ensure_schema(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS cron_jobs (
             id          TEXT PRIMARY KEY,
             expression  TEXT NOT NULL,
@@ -293,24 +185,74 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
             origin      TEXT NOT NULL DEFAULT 'user',
             expires_at  TEXT,
             max_attempts INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE INDEX IF NOT EXISTS idx_cron_jobs_next_run ON cron_jobs(next_run);",
+        )",
     )
-    .context("Failed to initialize cron schema")?;
+    .execute(pool)
+    .await
+    .context("Failed to create cron_jobs table")?;
 
-    add_column_if_missing(
-        &conn,
-        "ALTER TABLE cron_jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'user'",
-    )?;
-    add_column_if_missing(
-        &conn,
-        "ALTER TABLE cron_jobs ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'",
-    )?;
-    add_column_if_missing(&conn, "ALTER TABLE cron_jobs ADD COLUMN expires_at TEXT")?;
-    add_column_if_missing(
-        &conn,
-        "ALTER TABLE cron_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1",
-    )?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_cron_jobs_next_run ON cron_jobs(next_run)")
+        .execute(pool)
+        .await
+        .context("Failed to create cron_jobs index")?;
 
-    f(&conn)
+    Ok(())
+}
+
+// ── Internal helpers ────────────────────────────────────────────────────────
+
+async fn cleanup_expired_jobs(pool: &SqlitePool, now: DateTime<Utc>) -> Result<()> {
+    sqlx::query("DELETE FROM cron_jobs WHERE expires_at IS NOT NULL AND expires_at <= ?")
+        .bind(now.to_rfc3339())
+        .execute(pool)
+        .await
+        .context("Failed to cleanup expired cron jobs")?;
+    Ok(())
+}
+
+async fn pending_agent_jobs(pool: &SqlitePool, now: DateTime<Utc>) -> Result<usize> {
+    let row = sqlx::query(
+        "SELECT COUNT(*)
+         FROM cron_jobs
+         WHERE origin = 'agent'
+           AND (expires_at IS NULL OR expires_at > ?)",
+    )
+    .bind(now.to_rfc3339())
+    .fetch_one(pool)
+    .await?;
+
+    let count: i64 = row.get(0);
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
+}
+
+fn row_to_cron_job(row: &sqlx::sqlite::SqliteRow) -> Result<CronJob> {
+    let id: String = row.get("id");
+    let expression: String = row.get("expression");
+    let command: String = row.get("command");
+    let next_run_raw: String = row.get("next_run");
+    let last_run_raw: Option<String> = row.get("last_run");
+    let last_status: Option<String> = row.get("last_status");
+    let job_kind_raw: String = row.get("job_kind");
+    let origin_raw: String = row.get("origin");
+    let expires_at_raw: Option<String> = row.get("expires_at");
+    let max_attempts_raw: i64 = row.get("max_attempts");
+
+    Ok(CronJob {
+        id,
+        expression,
+        command,
+        next_run: parse_rfc3339(&next_run_raw)?,
+        last_run: match last_run_raw {
+            Some(raw) => Some(parse_rfc3339(&raw)?),
+            None => None,
+        },
+        last_status,
+        job_kind: CronJobKind::from_db(&job_kind_raw),
+        origin: CronJobOrigin::from_db(&origin_raw),
+        expires_at: match expires_at_raw {
+            Some(raw) => Some(parse_rfc3339(&raw)?),
+            None => None,
+        },
+        max_attempts: parse_max_attempts(max_attempts_raw),
+    })
 }

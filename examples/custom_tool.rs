@@ -1,12 +1,19 @@
 //! Example: Implementing a custom Tool for AsteronIris
 //!
-//! This shows how to add a new tool the agent can use.
 //! Tools are the agent's hands — they let it interact with the world.
+//! The trait uses `Pin<Box<dyn Future<...> + Send>>` for dyn-safety,
+//! so tools are collected as `Vec<Box<dyn Tool>>`.
+//!
+//! Run: `cargo run --example custom_tool`
+
+use std::future::Future;
+use std::pin::Pin;
 
 use anyhow::Result;
 use serde_json::{Value, json};
 
-/// Mirrors src/tools/traits.rs
+// ── Minimal types (mirrors src/core/tools/traits.rs) ────────────────
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolResult {
     pub success: bool,
@@ -14,14 +21,21 @@ pub struct ToolResult {
     pub error: Option<String>,
 }
 
+// ── Minimal Tool trait ──────────────────────────────────────────────
+
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Value;
-    async fn execute(&self, args: Value) -> Result<ToolResult>;
+
+    fn execute<'a>(
+        &'a self,
+        args: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>>;
 }
 
-/// Example: A tool that fetches a URL and returns the status code
+// ── Example: A tool that fetches a URL ──────────────────────────────
+
 pub struct HttpGetTool;
 
 impl Tool for HttpGetTool {
@@ -43,31 +57,40 @@ impl Tool for HttpGetTool {
         })
     }
 
-    async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let url = args["url"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?;
+    fn execute<'a>(
+        &'a self,
+        args: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let url = args["url"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?;
 
-        match reqwest::get(url).await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let len = resp.content_length().unwrap_or(0);
-                Ok(ToolResult {
-                    success: status < 400,
-                    output: format!("HTTP {status} — {len} bytes"),
-                    error: None,
-                })
+            match reqwest::get(url).await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let len = resp.content_length().unwrap_or(0);
+                    Ok(ToolResult {
+                        success: status < 400,
+                        output: format!("HTTP {status} — {len} bytes"),
+                        error: None,
+                    })
+                }
+                Err(e) => Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Request failed: {e}")),
+                }),
             }
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Request failed: {e}")),
-            }),
-        }
+        })
     }
 }
 
+// ── Demo ─────────────────────────────────────────────────────────────
+
 fn main() {
-    println!("This is an example — see CONTRIBUTING.md for integration steps.");
-    println!("Register your tool in src/tools/mod.rs default_tools()");
+    // Tools are stored as `Vec<Box<dyn Tool>>` — the trait is dyn-safe.
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(HttpGetTool)];
+    println!("Registered {} tool(s): {}", tools.len(), tools[0].name());
+    println!("Register your tool in src/core/tools/ default_tools()");
 }

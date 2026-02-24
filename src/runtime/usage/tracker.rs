@@ -1,21 +1,36 @@
 use super::types::{UsageRecord, UsageSummary};
 use anyhow::Result;
-use rusqlite::{Connection, Error as SqlError, params, types::Type};
+use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{Row, SqlitePool};
 use std::path::Path;
 
-pub trait UsageTracker {
-    fn record(&self, record: &UsageRecord) -> Result<()>;
-    fn summarize(&self, since: Option<&str>) -> Result<UsageSummary>;
+/// Async usage tracking trait.
+pub trait UsageTracker: Send + Sync {
+    fn record(
+        &self,
+        record: &UsageRecord,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>>;
+
+    fn summarize(
+        &self,
+        since: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<UsageSummary>> + Send + '_>>;
 }
 
+/// SQLite-backed usage tracker using sqlx async pool.
 pub struct SqliteUsageTracker {
-    conn: Connection,
+    pool: SqlitePool,
 }
 
 impl SqliteUsageTracker {
-    pub fn new(db_path: &Path) -> Result<Self> {
-        let conn = Connection::open(db_path)?;
-        conn.execute_batch(
+    pub async fn new(db_path: &Path) -> Result<Self> {
+        let url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await?;
+
+        sqlx::query(
             "CREATE TABLE IF NOT EXISTS usage_records (
                 id TEXT PRIMARY KEY,
                 session_id TEXT,
@@ -25,85 +40,93 @@ impl SqliteUsageTracker {
                 output_tokens INTEGER,
                 estimated_cost_micros INTEGER,
                 created_at TEXT NOT NULL
-            );",
-        )?;
-        Ok(Self { conn })
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        Ok(Self { pool })
     }
 }
 
 impl UsageTracker for SqliteUsageTracker {
-    fn record(&self, record: &UsageRecord) -> Result<()> {
-        let input_tokens = record.input_tokens.map(i64::try_from).transpose()?;
-        let output_tokens = record.output_tokens.map(i64::try_from).transpose()?;
+    fn record(
+        &self,
+        record: &UsageRecord,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        let input_tokens = record.input_tokens.map(u64::cast_signed);
+        let output_tokens = record.output_tokens.map(u64::cast_signed);
+        let id = record.id.clone();
+        let session_id = record.session_id.clone();
+        let provider = record.provider.clone();
+        let model = record.model.clone();
+        let cost = record.estimated_cost_micros;
+        let created_at = record.created_at.clone();
 
-        self.conn.execute(
-            "INSERT INTO usage_records (id, session_id, provider, model, input_tokens, output_tokens, estimated_cost_micros, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                record.id,
-                record.session_id,
-                record.provider,
-                record.model,
-                input_tokens,
-                output_tokens,
-                record.estimated_cost_micros,
-                record.created_at
-            ],
-        )?;
-        Ok(())
+        Box::pin(async move {
+            sqlx::query(
+                "INSERT INTO usage_records (id, session_id, provider, model, input_tokens, output_tokens, estimated_cost_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&id)
+            .bind(&session_id)
+            .bind(&provider)
+            .bind(&model)
+            .bind(input_tokens)
+            .bind(output_tokens)
+            .bind(cost)
+            .bind(&created_at)
+            .execute(&self.pool)
+            .await?;
+            Ok(())
+        })
     }
 
-    fn summarize(&self, since: Option<&str>) -> Result<UsageSummary> {
-        let summary = if let Some(since_ts) = since {
-            let mut stmt = self.conn.prepare_cached(
-                "SELECT
-                    COALESCE(SUM(input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(estimated_cost_micros), 0),
-                    COUNT(*)
-                 FROM usage_records
-                 WHERE created_at >= ?1",
-            )?;
-            stmt.query_row([since_ts], |row| {
-                let total_input_tokens = i64_to_u64(row.get::<_, i64>(0)?, 0)?;
-                let total_output_tokens = i64_to_u64(row.get::<_, i64>(1)?, 1)?;
-                let record_count = i64_to_u64(row.get::<_, i64>(3)?, 3)?;
-                Ok(UsageSummary {
-                    total_input_tokens,
-                    total_output_tokens,
-                    total_estimated_cost_micros: row.get(2)?,
-                    record_count,
-                })
-            })?
-        } else {
-            let mut stmt = self.conn.prepare_cached(
-                "SELECT
-                    COALESCE(SUM(input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(estimated_cost_micros), 0),
-                    COUNT(*)
-                 FROM usage_records",
-            )?;
-            stmt.query_row([], |row| {
-                let total_input_tokens = i64_to_u64(row.get::<_, i64>(0)?, 0)?;
-                let total_output_tokens = i64_to_u64(row.get::<_, i64>(1)?, 1)?;
-                let record_count = i64_to_u64(row.get::<_, i64>(3)?, 3)?;
-                Ok(UsageSummary {
-                    total_input_tokens,
-                    total_output_tokens,
-                    total_estimated_cost_micros: row.get(2)?,
-                    record_count,
-                })
-            })?
-        };
+    fn summarize(
+        &self,
+        since: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<UsageSummary>> + Send + '_>>
+    {
+        let since_owned = since.map(ToString::to_string);
 
-        Ok(summary)
+        Box::pin(async move {
+            let row = if let Some(since_ts) = since_owned {
+                sqlx::query(
+                    "SELECT
+                        COALESCE(SUM(input_tokens), 0) as ti,
+                        COALESCE(SUM(output_tokens), 0) as to_,
+                        COALESCE(SUM(estimated_cost_micros), 0) as tc,
+                        COUNT(*) as rc
+                     FROM usage_records
+                     WHERE created_at >= ?",
+                )
+                .bind(since_ts)
+                .fetch_one(&self.pool)
+                .await?
+            } else {
+                sqlx::query(
+                    "SELECT
+                        COALESCE(SUM(input_tokens), 0) as ti,
+                        COALESCE(SUM(output_tokens), 0) as to_,
+                        COALESCE(SUM(estimated_cost_micros), 0) as tc,
+                        COUNT(*) as rc
+                     FROM usage_records",
+                )
+                .fetch_one(&self.pool)
+                .await?
+            };
+
+            Ok(UsageSummary {
+                total_input_tokens: i64_to_u64(row.get::<i64, _>("ti")),
+                total_output_tokens: i64_to_u64(row.get::<i64, _>("to_")),
+                total_estimated_cost_micros: row.get::<i64, _>("tc"),
+                record_count: i64_to_u64(row.get::<i64, _>("rc")),
+            })
+        })
     }
 }
 
-fn i64_to_u64(value: i64, column_index: usize) -> rusqlite::Result<u64> {
-    u64::try_from(value).map_err(|error| {
-        SqlError::FromSqlConversionFailure(column_index, Type::Integer, Box::new(error))
-    })
+fn i64_to_u64(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -131,17 +154,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn create_tracker_with_temp_file_succeeds() {
+    #[tokio::test]
+    async fn create_tracker_with_temp_file_succeeds() {
         let file = NamedTempFile::new().unwrap();
-        let tracker = SqliteUsageTracker::new(file.path());
+        let tracker = SqliteUsageTracker::new(file.path()).await;
         assert!(tracker.is_ok());
     }
 
-    #[test]
-    fn record_usage_entry_and_summarize() {
+    #[tokio::test]
+    async fn record_usage_entry_and_summarize() {
         let file = NamedTempFile::new().unwrap();
-        let tracker = SqliteUsageTracker::new(file.path()).unwrap();
+        let tracker = SqliteUsageTracker::new(file.path()).await.unwrap();
 
         tracker
             .record(&sample_record(
@@ -151,34 +174,36 @@ mod tests {
                 80,
                 1_000,
             ))
+            .await
             .unwrap();
 
-        let summary = tracker.summarize(None).unwrap();
+        let summary = tracker.summarize(None).await.unwrap();
         assert_eq!(summary.total_input_tokens, 120);
         assert_eq!(summary.total_output_tokens, 80);
         assert_eq!(summary.total_estimated_cost_micros, 1_000);
         assert_eq!(summary.record_count, 1);
     }
 
-    #[test]
-    fn summarize_empty_database_returns_zeros() {
+    #[tokio::test]
+    async fn summarize_empty_database_returns_zeros() {
         let file = NamedTempFile::new().unwrap();
-        let tracker = SqliteUsageTracker::new(file.path()).unwrap();
+        let tracker = SqliteUsageTracker::new(file.path()).await.unwrap();
 
-        let summary = tracker.summarize(None).unwrap();
+        let summary = tracker.summarize(None).await.unwrap();
         assert_eq!(summary.total_input_tokens, 0);
         assert_eq!(summary.total_output_tokens, 0);
         assert_eq!(summary.total_estimated_cost_micros, 0);
         assert_eq!(summary.record_count, 0);
     }
 
-    #[test]
-    fn summarize_with_since_filter_respects_date_filter() {
+    #[tokio::test]
+    async fn summarize_with_since_filter_respects_date_filter() {
         let file = NamedTempFile::new().unwrap();
-        let tracker = SqliteUsageTracker::new(file.path()).unwrap();
+        let tracker = SqliteUsageTracker::new(file.path()).await.unwrap();
 
         tracker
             .record(&sample_record("id-1", "2026-02-19T10:00:00Z", 100, 50, 900))
+            .await
             .unwrap();
         tracker
             .record(&sample_record(
@@ -188,19 +213,23 @@ mod tests {
                 80,
                 1_700,
             ))
+            .await
             .unwrap();
 
-        let summary = tracker.summarize(Some("2026-02-20T00:00:00Z")).unwrap();
+        let summary = tracker
+            .summarize(Some("2026-02-20T00:00:00Z"))
+            .await
+            .unwrap();
         assert_eq!(summary.total_input_tokens, 200);
         assert_eq!(summary.total_output_tokens, 80);
         assert_eq!(summary.total_estimated_cost_micros, 1_700);
         assert_eq!(summary.record_count, 1);
     }
 
-    #[test]
-    fn multiple_records_aggregate_correctly() {
+    #[tokio::test]
+    async fn multiple_records_aggregate_correctly() {
         let file = NamedTempFile::new().unwrap();
-        let tracker = SqliteUsageTracker::new(file.path()).unwrap();
+        let tracker = SqliteUsageTracker::new(file.path()).await.unwrap();
 
         tracker
             .record(&sample_record(
@@ -210,6 +239,7 @@ mod tests {
                 50,
                 1_000,
             ))
+            .await
             .unwrap();
         tracker
             .record(&sample_record(
@@ -219,6 +249,7 @@ mod tests {
                 75,
                 1_500,
             ))
+            .await
             .unwrap();
         tracker
             .record(&sample_record(
@@ -228,9 +259,10 @@ mod tests {
                 100,
                 2_000,
             ))
+            .await
             .unwrap();
 
-        let summary = tracker.summarize(None).unwrap();
+        let summary = tracker.summarize(None).await.unwrap();
         assert_eq!(summary.total_input_tokens, 450);
         assert_eq!(summary.total_output_tokens, 225);
         assert_eq!(summary.total_estimated_cost_micros, 4_500);

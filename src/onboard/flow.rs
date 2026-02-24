@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use dialoguer::Confirm;
 use std::fs;
 
-use crate::security::auth::AuthProfileStore;
 use crate::ui::style as ui;
 
 use super::domain::default_model_for_provider;
@@ -26,21 +25,7 @@ pub async fn run_wizard(install_daemon_flag: bool) -> Result<(Config, bool)> {
         rust_i18n::set_locale(&lang);
     }
 
-    // TUI dispatch: use full-screen TUI if stdout is a terminal
-    #[cfg(feature = "tui")]
-    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-        match super::tui::run_tui_wizard() {
-            Ok(config) => {
-                print_summary(&config);
-                offer_install_daemon(install_daemon_flag, &config)?;
-                let autostart = offer_launch_channels(&config)?;
-                return Ok((config, autostart));
-            }
-            Err(e) => {
-                tracing::warn!("TUI wizard failed, falling back to CLI: {e}");
-            }
-        }
-    }
+    // TODO: Port onboard TUI — re-enable TUI dispatch when TUI module is ported.
 
     run_wizard_cli(install_daemon_flag).await
 }
@@ -53,7 +38,7 @@ async fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
     let (workspace_dir, config_path) = setup_workspace()?;
 
     print_step(2, 8, &t!("onboard.step.provider"));
-    let (provider, api_key, model, oauth_source) = setup_provider()?;
+    let (provider, api_key, model, _oauth_source) = setup_provider()?;
 
     print_step(3, 8, &t!("onboard.step.channels"));
     let channels_config = setup_channels().await?;
@@ -123,31 +108,14 @@ async fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
 
     config.save()?;
 
+    // TODO: Port security::auth::AuthProfileStore to v2 for credential profile management.
+    // For now, the API key is stored directly in config.toml.
     if !api_key.trim().is_empty() {
-        let mut auth_store = AuthProfileStore::load_or_init_for_config(&config)?;
-        let profile_id = format!(
-            "{}-onboard-default",
-            provider.replace([':', '/'], "-").to_ascii_lowercase()
+        println!(
+            "  {} API key saved to config (provider: {})",
+            ui::success("✓"),
+            ui::value(&provider)
         );
-        auth_store.upsert_profile(
-            crate::security::auth::AuthProfile {
-                id: profile_id.clone(),
-                provider: provider.clone(),
-                label: Some("Created by onboarding".into()),
-                api_key: Some(api_key.clone()),
-                refresh_token: None,
-                auth_scheme: Some(if oauth_source.is_some() {
-                    "oauth".into()
-                } else {
-                    "api_key".into()
-                }),
-                oauth_source,
-                disabled: false,
-            },
-            true,
-        )?;
-        auth_store.mark_profile_used(&provider, &profile_id);
-        auth_store.save_for_config(&config)?;
     }
 
     print_summary(&config);
@@ -159,7 +127,10 @@ async fn run_wizard_cli(install_daemon_flag: bool) -> Result<(Config, bool)> {
 
 fn offer_install_daemon(install_daemon_flag: bool, config: &Config) -> Result<()> {
     if install_daemon_flag {
-        crate::platform::service::handle_command(&crate::ServiceCommands::Install, config)?;
+        crate::platform::service::handle_command(
+            &crate::platform::service::ServiceCommand::Install,
+            config,
+        )?;
         println!("  {} Daemon installed as OS service", ui::success("✓"));
     } else {
         let install: bool = Confirm::new()
@@ -168,7 +139,10 @@ fn offer_install_daemon(install_daemon_flag: bool, config: &Config) -> Result<()
             .interact()?;
 
         if install {
-            crate::platform::service::handle_command(&crate::ServiceCommands::Install, config)?;
+            crate::platform::service::handle_command(
+                &crate::platform::service::ServiceCommand::Install,
+                config,
+            )?;
             println!("  {} Daemon installed as OS service", ui::success("✓"));
         } else {
             println!(

@@ -15,6 +15,7 @@ pub(crate) mod openai_compat_auth;
 pub(crate) mod openai_compat_handler;
 pub(crate) mod openai_compat_streaming;
 pub(crate) mod openai_compat_types;
+pub(crate) mod pairing;
 mod replay_guard;
 mod server;
 mod signature;
@@ -29,13 +30,13 @@ pub use server::run_gateway_with_listener;
 pub use signature::verify_whatsapp_signature;
 
 use crate::config::GatewayDefenseMode;
-use crate::core::memory::Memory;
-use crate::core::providers::Provider;
-use crate::core::tools::ToolRegistry;
-use crate::security::pairing::PairingGuard;
-use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
+use crate::llm::Provider;
+use crate::memory::Memory;
+use crate::security::policy::{EntityRateLimiter, SecurityPolicy};
+use crate::tools::ToolRegistry;
 #[cfg(feature = "whatsapp")]
 use crate::transport::channels::WhatsAppChannel;
+use pairing::PairingGuard;
 use replay_guard::ReplayGuard;
 use std::sync::Arc;
 
@@ -46,9 +47,9 @@ use handlers::{handle_health, handle_pair, handle_webhook};
 #[cfg(all(test, feature = "whatsapp"))]
 use handlers::{handle_whatsapp_message, handle_whatsapp_verify};
 
-/// Maximum request body size (64KB) — prevents memory exhaustion
+/// Maximum request body size (64KB) -- prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;
-/// Request timeout (30s) — prevents slow-loris attacks
+/// Request timeout (30s) -- prevents slow-loris attacks
 pub const REQUEST_TIMEOUT_SECS: u64 = 30;
 
 /// Shared state for all axum handlers
@@ -58,7 +59,6 @@ pub struct AppState {
     pub registry: Arc<ToolRegistry>,
     pub rate_limiter: Arc<EntityRateLimiter>,
     pub max_tool_loop_iterations: u32,
-    pub permission_store: Arc<PermissionStore>,
     pub model: String,
     pub temperature: f64,
     pub openai_compat_api_keys: Option<Vec<String>>,

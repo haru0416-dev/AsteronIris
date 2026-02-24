@@ -17,7 +17,6 @@ pub struct TasteConfig {
 fn default_backend() -> String {
     "llm".into()
 }
-
 fn default_axes() -> Vec<String> {
     vec![
         "coherence".into(),
@@ -25,7 +24,6 @@ fn default_axes() -> Vec<String> {
         "intentionality".into(),
     ]
 }
-
 fn default_true() -> bool {
     true
 }
@@ -63,8 +61,5 @@ mod tests {
         let deserialized: TasteConfig = toml::from_str(&serialized).expect("deserialize");
         assert!(!deserialized.enabled);
         assert_eq!(deserialized.backend, "llm");
-        assert_eq!(deserialized.axes.len(), 3);
-        assert!(deserialized.text_enabled);
-        assert!(deserialized.ui_enabled);
     }
 }

@@ -72,12 +72,12 @@ rand = { version = "0.9", default-features = false, features = ["std", "thread_r
 zeroize = { version = "1", default-features = false, features = ["derive"] }
 
 # Memory / persistence
-rusqlite    = { version = "0.38" }
 chrono      = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 cron        = { version = "0.15", default-features = false }
 lancedb     = { version = "0.26.2", default-features = false, optional = true }
 arrow-array  = { version = "57.2", optional = true }
 arrow-schema = { version = "57.2", optional = true }
+sqlx         = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 
 # Interactive CLI prompts
 dialoguer = { version = "0.12", default-features = false, features = ["fuzzy-select", "password"] }
@@ -109,6 +109,21 @@ async-stream = { version = "0.3", default-features = false }
 tokio-stream = { version = "0.1", features = ["sync"] }
 rmcp = { version = "0.16.0", features = ["client", "transport-child-process", "transport-io"], optional = true }
 
+# Atomic pointer swap
+arc-swap = "1"
+
+# Template engine
+tera = "1"
+
+# Tokio utilities
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# Base64 encoding
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
+# Embedding (optional)
+fastembed = { version = "4", optional = true }
+
 [features]
 default = [
     "discord", "email", "vector-search", "tui", "bundled-sqlite",
@@ -122,7 +137,7 @@ matrix = []
 irc = []
 whatsapp = []
 imessage = []
-bundled-sqlite = ["rusqlite/bundled"]
+bundled-sqlite = ["sqlx/sqlite"]
 email = ["dep:lettre", "dep:mail-parser"]
 vector-search = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema"]
 tui = ["dep:ratatui", "dep:crossterm"]
@@ -130,6 +145,7 @@ media = ["dep:infer", "dep:mime"]
 mcp = ["dep:rmcp"]
 link-extraction = ["dep:scraper"]
 taste = []
+fastembed = ["dep:fastembed"]
 
 [profile.dev]
 codegen-units = 256

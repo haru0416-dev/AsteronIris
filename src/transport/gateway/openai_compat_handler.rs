@@ -1,6 +1,6 @@
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
-use crate::core::tools::middleware::ExecutionContext;
+use crate::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
 use crate::security::policy::TenantPolicyContext;
+use crate::tools::ExecutionContext;
 use crate::transport::gateway::AppState;
 use crate::transport::gateway::openai_compat_auth::validate_api_key;
 use crate::transport::gateway::openai_compat_streaming::build_sse_response;
@@ -41,10 +41,8 @@ pub async fn handle_chat_completions(
         turn_number: 0,
         workspace_dir: state.security.workspace_dir.clone(),
         allowed_tools: None,
-        permission_store: Some(Arc::clone(&state.permission_store)),
         rate_limiter: Arc::clone(&state.rate_limiter),
         tenant_context: TenantPolicyContext::disabled(),
-        approval_broker: None,
     };
 
     match tool_loop
@@ -58,6 +56,7 @@ pub async fn handle_chat_completions(
             ctx: &ctx,
             stream_sink: None,
             conversation_history: &[],
+            hooks: &[],
         })
         .await
     {

@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod attachments;
 pub mod chunker;
 pub mod cli;
@@ -53,39 +54,3 @@ pub use telegram::TelegramChannel;
 pub use traits::Channel;
 #[cfg(feature = "whatsapp")]
 pub use whatsapp::WhatsAppChannel;
-
-use crate::config::Config;
-use anyhow::Result;
-
-pub fn handle_command(command: crate::ChannelCommands, config: &Config) -> Result<()> {
-    match command {
-        crate::ChannelCommands::Start => {
-            anyhow::bail!("Start must be handled in main.rs (requires async runtime)")
-        }
-        crate::ChannelCommands::Doctor => {
-            anyhow::bail!("Doctor must be handled in main.rs (requires async runtime)")
-        }
-        crate::ChannelCommands::List => {
-            println!("{}", t!("channels.list_header"));
-            println!("  ✓ {}", t!("channels.cli_always"));
-            for (name, configured) in config.channels_config.configured_channel_flags() {
-                println!("  {} {name}", if configured { "✓" } else { "✗" });
-            }
-            println!("\n{}", t!("channels.to_start"));
-            println!("{}", t!("channels.to_check"));
-            println!("{}", t!("channels.to_configure"));
-            Ok(())
-        }
-        crate::ChannelCommands::Add {
-            channel_type,
-            config: _,
-        } => {
-            anyhow::bail!(
-                "Channel type '{channel_type}' — use `asteroniris onboard` to configure channels"
-            );
-        }
-        crate::ChannelCommands::Remove { name } => {
-            anyhow::bail!("Remove channel '{name}' — edit ~/.asteroniris/config.toml directly");
-        }
-    }
-}

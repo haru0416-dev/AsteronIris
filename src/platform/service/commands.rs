@@ -7,13 +7,23 @@ use super::SERVICE_LABEL;
 use super::platform::{install_linux, install_macos, linux_service_file, macos_service_file};
 use super::utils::{run_capture, run_checked};
 
-pub fn handle_command(command: &crate::ServiceCommands, config: &Config) -> Result<()> {
+/// Service management commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceCommand {
+    Install,
+    Start,
+    Stop,
+    Status,
+    Uninstall,
+}
+
+pub fn handle_command(command: &ServiceCommand, config: &Config) -> Result<()> {
     match command {
-        crate::ServiceCommands::Install => install(config),
-        crate::ServiceCommands::Start => start(config),
-        crate::ServiceCommands::Stop => stop(config),
-        crate::ServiceCommands::Status => status(config),
-        crate::ServiceCommands::Uninstall => uninstall(config),
+        ServiceCommand::Install => install(config),
+        ServiceCommand::Start => start(config),
+        ServiceCommand::Stop => stop(config),
+        ServiceCommand::Status => status(config),
+        ServiceCommand::Uninstall => uninstall(config),
     }
 }
 
@@ -32,12 +42,12 @@ fn start(config: &Config) -> Result<()> {
         let plist = macos_service_file()?;
         run_checked(Command::new("launchctl").arg("load").arg("-w").arg(&plist))?;
         run_checked(Command::new("launchctl").arg("start").arg(SERVICE_LABEL))?;
-        println!("✅ Service started");
+        println!("Service started");
         Ok(())
     } else if cfg!(target_os = "linux") {
         run_checked(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
         run_checked(Command::new("systemctl").args(["--user", "start", "asteroniris.service"]))?;
-        println!("✅ Service started");
+        println!("Service started");
         Ok(())
     } else {
         let _ = config;
@@ -55,12 +65,12 @@ fn stop(config: &Config) -> Result<()> {
                 .arg("-w")
                 .arg(&plist),
         );
-        println!("✅ Service stopped");
+        println!("Service stopped");
         Ok(())
     } else if cfg!(target_os = "linux") {
         let _ =
             run_checked(Command::new("systemctl").args(["--user", "stop", "asteroniris.service"]));
-        println!("✅ Service stopped");
+        println!("Service stopped");
         Ok(())
     } else {
         let _ = config;
@@ -75,9 +85,9 @@ fn status(config: &Config) -> Result<()> {
         println!(
             "Service: {}",
             if running {
-                "✅ running/loaded"
+                "running/loaded"
             } else {
-                "❌ not loaded"
+                "not loaded"
             }
         );
         println!("Unit: {}", macos_service_file()?.display());
@@ -108,7 +118,7 @@ fn uninstall(config: &Config) -> Result<()> {
             fs::remove_file(&file)
                 .with_context(|| format!("Failed to remove {}", file.display()))?;
         }
-        println!("✅ Service uninstalled ({})", file.display());
+        println!("Service uninstalled ({})", file.display());
         return Ok(());
     }
 
@@ -119,7 +129,7 @@ fn uninstall(config: &Config) -> Result<()> {
                 .with_context(|| format!("Failed to remove {}", file.display()))?;
         }
         let _ = run_checked(Command::new("systemctl").args(["--user", "daemon-reload"]));
-        println!("✅ Service uninstalled ({})", file.display());
+        println!("Service uninstalled ({})", file.display());
         return Ok(());
     }
 

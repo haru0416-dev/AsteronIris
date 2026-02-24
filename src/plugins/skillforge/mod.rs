@@ -1,6 +1,6 @@
 //! `SkillForge` — Skill auto-discovery, evaluation, and integration engine.
 //!
-//! Pipeline: Scout → Gate → Evaluate → Integrate
+//! Pipeline: Scout -> Gate -> Evaluate -> Integrate
 //! Discovers skills from external sources, runs them through a 4-layer
 //! security gate, scores qualified candidates, and generates manifests.
 

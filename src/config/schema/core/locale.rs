@@ -8,7 +8,6 @@ fn detect_system_locale() -> Option<String> {
         .filter(|lang| !lang.is_empty())
 }
 
-/// Detect locale: `ASTERONIRIS_LANG` env -> config value -> system `LANG` -> `"en"`.
 fn detect_locale(config_locale: &str) -> String {
     if let Ok(lang) = std::env::var("ASTERONIRIS_LANG") {
         let lang = lang.trim().to_lowercase();
@@ -16,19 +15,15 @@ fn detect_locale(config_locale: &str) -> String {
             return normalise_locale(&lang);
         }
     }
-
     if config_locale != "en" && !config_locale.is_empty() {
         return normalise_locale(config_locale);
     }
-
     if let Some(system_locale) = detect_system_locale() {
         return normalise_locale(&system_locale);
     }
-
     "en".into()
 }
 
-/// Normalise `"ja_JP.UTF-8"` -> `"ja"`, `"en_US"` -> `"en"`, passthrough `"ja"`.
 fn normalise_locale(raw: &str) -> String {
     let base = raw.split('.').next().unwrap_or(raw);
     let lang = base.split('_').next().unwrap_or(base);
@@ -36,7 +31,6 @@ fn normalise_locale(raw: &str) -> String {
 }
 
 impl Config {
-    /// Detect locale from env -> config -> system, then set `rust_i18n::set_locale`.
     pub fn apply_locale(&self) {
         let locale = detect_locale(&self.locale);
         rust_i18n::set_locale(&locale);
@@ -51,7 +45,6 @@ mod tests {
     #[test]
     fn detect_locale_uses_expected_priority_order() {
         let _lock = ENV_LOCK.lock().unwrap();
-
         let _lang = EnvVarGuard::set("LANG", "pt_BR.UTF-8");
         let _lc_messages = EnvVarGuard::set("LC_MESSAGES", "es_ES.UTF-8");
 

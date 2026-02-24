@@ -54,7 +54,7 @@ pub(super) fn install_macos(config: &Config) -> Result<()> {
     );
 
     fs::write(&file, plist)?;
-    println!("✅ Installed launchd service: {}", file.display());
+    println!("Installed launchd service: {}", file.display());
     println!("   Start with: asteroniris service start");
     Ok(())
 }
@@ -75,7 +75,7 @@ pub(super) fn install_linux(config: &Config) -> Result<()> {
     let _ = run_checked(Command::new("systemctl").args(["--user", "daemon-reload"]));
     let _ =
         run_checked(Command::new("systemctl").args(["--user", "enable", "asteroniris.service"]));
-    println!("✅ Installed systemd user service: {}", file.display());
+    println!("Installed systemd user service: {}", file.display());
     println!("   Start with: asteroniris service start");
     Ok(())
 }

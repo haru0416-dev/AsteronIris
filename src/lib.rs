@@ -16,22 +16,42 @@ extern crate rust_i18n;
 
 i18n!("locales", fallback = "en");
 
-pub mod cli;
+// ── Phase 0: Foundation ──────────────────────────────────────────────────────
 pub mod config;
-pub mod core;
+pub mod error;
 pub mod media;
-pub mod onboard;
-#[doc(hidden)]
-pub mod platform;
-pub mod plugins;
-pub mod runtime;
 pub mod security;
-pub mod transport;
 pub mod ui;
 pub mod utils;
 
-pub use cli::commands::{
-    AuthCommands, ChannelCommands, CronCommands, IntegrationCommands, ServiceCommands,
-    SkillCommands,
-};
+// ── Phase 1: Abstract layer ──────────────────────────────────────────────────
+pub mod llm;
+pub mod memory;
+pub mod prompt;
+pub mod session;
+pub mod tools;
+
+// ── Phase 2: Agent ──────────────────────────────────────────────────────────
+pub mod agent;
+pub mod persona;
+pub mod subagents;
+
+// ── Phase 3: Process model ──────────────────────────────────────────────────
+pub mod process;
+
+// ── Phase 4: Transport + orchestration ──────────────────────────────────────
+pub mod planner;
+pub mod transport;
+
+// ── Phase 5: Platform services + plugins ────────────────────────────────────
+pub mod platform;
+pub mod plugins;
+pub mod runtime;
+
+// ── Phase 6: Entry points ───────────────────────────────────────────────────
+pub mod app;
+pub mod cli;
+pub mod onboard;
+
+// ── Re-exports ───────────────────────────────────────────────────────────────
 pub use config::Config;

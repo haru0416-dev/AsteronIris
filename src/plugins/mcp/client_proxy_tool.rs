@@ -1,7 +1,6 @@
-use crate::core::tools::middleware::ExecutionContext;
-use crate::core::tools::{Tool, ToolResult};
 use crate::plugins::mcp::client_connection::McpConnection;
 use crate::plugins::mcp::content::{ToolContent, render_content_to_text};
+use crate::tools::{ExecutionContext, Tool, ToolResult};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;

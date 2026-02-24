@@ -25,7 +25,7 @@ pub const MAX_GATEWAY_COMMANDS_PER_MINUTE: u32 = 120;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum GatewayOpcode {
-    /// An event was dispatched (server → client).
+    /// An event was dispatched (server -> client).
     Dispatch = 0,
     /// Fired periodically to keep the connection alive.
     Heartbeat = 1,

@@ -12,11 +12,9 @@ fn decrypt_secret_string(
     if current.is_empty() {
         return Ok(false);
     }
-
     let needs_encrypt_persist = encrypt_enabled && !SecretStore::is_encrypted(current);
     let decrypted = store.decrypt(current)?;
     *value = decrypted;
-
     Ok(needs_encrypt_persist)
 }
 
@@ -28,16 +26,13 @@ fn decrypt_secret_option(
     let Some(current) = value.as_deref() else {
         return Ok(false);
     };
-
     let trimmed = current.trim();
     if trimmed.is_empty() {
         return Ok(false);
     }
-
     let needs_encrypt_persist = encrypt_enabled && !SecretStore::is_encrypted(trimmed);
     let decrypted = store.decrypt(trimmed)?;
     *value = Some(decrypted);
-
     Ok(needs_encrypt_persist)
 }
 
@@ -49,7 +44,6 @@ fn encrypt_secret_string(value: &mut String, store: &SecretStore) -> Result<()> 
         }
         return Ok(());
     }
-
     *value = store.encrypt(trimmed)?;
     Ok(())
 }
@@ -58,7 +52,6 @@ fn encrypt_secret_option(value: &mut Option<String>, store: &SecretStore) -> Res
     let Some(current) = value.as_deref() else {
         return Ok(());
     };
-
     let trimmed = current.trim();
     if trimmed.is_empty() || SecretStore::is_encrypted(trimmed) {
         if trimmed != current {
@@ -66,7 +59,6 @@ fn encrypt_secret_option(value: &mut Option<String>, store: &SecretStore) -> Res
         }
         return Ok(());
     }
-
     *value = Some(store.encrypt(trimmed)?);
     Ok(())
 }
@@ -92,29 +84,24 @@ impl Config {
             needs_persist |=
                 decrypt_secret_string(&mut telegram.bot_token, &store, self.secrets.encrypt)?;
         }
-
         if let Some(discord) = self.channels_config.discord.as_mut() {
             needs_persist |=
                 decrypt_secret_string(&mut discord.bot_token, &store, self.secrets.encrypt)?;
         }
-
         if let Some(slack) = self.channels_config.slack.as_mut() {
             needs_persist |=
                 decrypt_secret_string(&mut slack.bot_token, &store, self.secrets.encrypt)?;
             needs_persist |=
                 decrypt_secret_option(&mut slack.app_token, &store, self.secrets.encrypt)?;
         }
-
         if let Some(webhook) = self.channels_config.webhook.as_mut() {
             needs_persist |=
                 decrypt_secret_option(&mut webhook.secret, &store, self.secrets.encrypt)?;
         }
-
         if let Some(matrix) = self.channels_config.matrix.as_mut() {
             needs_persist |=
                 decrypt_secret_string(&mut matrix.access_token, &store, self.secrets.encrypt)?;
         }
-
         if let Some(whatsapp) = self.channels_config.whatsapp.as_mut() {
             needs_persist |=
                 decrypt_secret_string(&mut whatsapp.access_token, &store, self.secrets.encrypt)?;
@@ -123,7 +110,6 @@ impl Config {
             needs_persist |=
                 decrypt_secret_option(&mut whatsapp.app_secret, &store, self.secrets.encrypt)?;
         }
-
         if let Some(irc) = self.channels_config.irc.as_mut() {
             needs_persist |=
                 decrypt_secret_option(&mut irc.server_password, &store, self.secrets.encrypt)?;
@@ -132,17 +118,14 @@ impl Config {
             needs_persist |=
                 decrypt_secret_option(&mut irc.sasl_password, &store, self.secrets.encrypt)?;
         }
-
         if let Some(cloudflare) = self.tunnel.cloudflare.as_mut() {
             needs_persist |=
                 decrypt_secret_string(&mut cloudflare.token, &store, self.secrets.encrypt)?;
         }
-
         if let Some(ngrok) = self.tunnel.ngrok.as_mut() {
             needs_persist |=
                 decrypt_secret_string(&mut ngrok.auth_token, &store, self.secrets.encrypt)?;
         }
-
         Ok(needs_persist)
     }
 
@@ -150,7 +133,6 @@ impl Config {
         if !self.secrets.encrypt {
             return Ok(());
         }
-
         let store = self.secret_store();
 
         encrypt_secret_option(&mut self.api_key, &store)?;
@@ -159,44 +141,35 @@ impl Config {
         if let Some(telegram) = self.channels_config.telegram.as_mut() {
             encrypt_secret_string(&mut telegram.bot_token, &store)?;
         }
-
         if let Some(discord) = self.channels_config.discord.as_mut() {
             encrypt_secret_string(&mut discord.bot_token, &store)?;
         }
-
         if let Some(slack) = self.channels_config.slack.as_mut() {
             encrypt_secret_string(&mut slack.bot_token, &store)?;
             encrypt_secret_option(&mut slack.app_token, &store)?;
         }
-
         if let Some(webhook) = self.channels_config.webhook.as_mut() {
             encrypt_secret_option(&mut webhook.secret, &store)?;
         }
-
         if let Some(matrix) = self.channels_config.matrix.as_mut() {
             encrypt_secret_string(&mut matrix.access_token, &store)?;
         }
-
         if let Some(whatsapp) = self.channels_config.whatsapp.as_mut() {
             encrypt_secret_string(&mut whatsapp.access_token, &store)?;
             encrypt_secret_string(&mut whatsapp.verify_token, &store)?;
             encrypt_secret_option(&mut whatsapp.app_secret, &store)?;
         }
-
         if let Some(irc) = self.channels_config.irc.as_mut() {
             encrypt_secret_option(&mut irc.server_password, &store)?;
             encrypt_secret_option(&mut irc.nickserv_password, &store)?;
             encrypt_secret_option(&mut irc.sasl_password, &store)?;
         }
-
         if let Some(cloudflare) = self.tunnel.cloudflare.as_mut() {
             encrypt_secret_string(&mut cloudflare.token, &store)?;
         }
-
         if let Some(ngrok) = self.tunnel.ngrok.as_mut() {
             encrypt_secret_string(&mut ngrok.auth_token, &store)?;
         }
-
         Ok(())
     }
 

@@ -171,7 +171,7 @@ pub fn setup_provider() -> Result<(String, String, String, Option<String>)> {
     let provider_name = providers[provider_idx].0;
 
     // ── API key ──
-    let mut oauth_source: Option<String> = None;
+    let oauth_source: Option<String> = None;
     let api_key = if provider_name == "ollama" {
         print_bullet(&t!("onboard.provider.ollama_no_key"));
         String::new()
@@ -179,7 +179,7 @@ pub fn setup_provider() -> Result<(String, String, String, Option<String>)> {
         || provider_name == "google"
         || provider_name == "google-gemini"
     {
-        if crate::core::providers::gemini::GeminiProvider::has_cli_credentials() {
+        if crate::llm::gemini::GeminiProvider::has_cli_credentials() {
             print_bullet(&format!(
                 "{} {}",
                 ui::success("✓"),
@@ -243,28 +243,10 @@ pub fn setup_provider() -> Result<(String, String, String, Option<String>)> {
             .interact()?;
 
         if selected_auth == 1 {
-            print_bullet(&t!("onboard.provider.oauth_import_start"));
-            match crate::security::auth::import_oauth_access_token_for_provider(provider_name) {
-                Ok(Some((token, source))) => {
-                    oauth_source = Some(source);
-                    print_bullet(&t!(
-                        "onboard.provider.oauth_import_success",
-                        source = ui::value(oauth_source.as_deref().unwrap_or("oauth"))
-                    ));
-                    token
-                }
-                Ok(None) => {
-                    print_bullet(&t!("onboard.provider.oauth_import_unavailable"));
-                    prompt_api_key_for_provider(provider_name)?
-                }
-                Err(err) => {
-                    print_bullet(&t!(
-                        "onboard.provider.oauth_import_failed",
-                        error = ui::yellow(err.to_string())
-                    ));
-                    prompt_api_key_for_provider(provider_name)?
-                }
-            }
+            // TODO: Port security::auth::import_oauth_access_token_for_provider to v2.
+            // For now, OAuth import is not available — fall back to API key.
+            print_bullet(&t!("onboard.provider.oauth_import_unavailable"));
+            prompt_api_key_for_provider(provider_name)?
         } else {
             prompt_api_key_for_provider(provider_name)?
         }

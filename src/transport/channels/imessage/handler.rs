@@ -3,10 +3,12 @@ use super::auth::{escape_applescript, is_valid_imessage_target};
 use crate::transport::channels::traits::{Channel, ChannelMessage};
 use anyhow::Context;
 use directories::UserDirs;
-use rusqlite::{Connection, OpenFlags};
+use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::str::FromStr;
 use tokio::sync::mpsc;
 
 impl Channel for IMessageChannel {
@@ -147,69 +149,62 @@ end tell"#
     }
 }
 
+/// Open a read-only sqlx connection pool to the Messages database.
+async fn open_readonly_pool(db_path: &Path) -> anyhow::Result<sqlx::SqlitePool> {
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+        .context("parse iMessage database path")?
+        .read_only(true)
+        .create_if_missing(false);
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .context("open iMessage database")
+}
+
 /// Get the current max ROWID from the messages table.
-/// Uses rusqlite with parameterized queries for security (CWE-89 prevention).
+/// Uses sqlx with parameterized queries for security (CWE-89 prevention).
 pub(super) async fn get_max_rowid(db_path: &Path) -> anyhow::Result<i64> {
-    let path = db_path.to_path_buf();
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<i64> {
-        let conn = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .context("open iMessage database")?;
-        let mut stmt = conn
-            .prepare("SELECT MAX(ROWID) FROM message WHERE is_from_me = 0")
-            .context("prepare iMessage database query")?;
-        let rowid: Option<i64> = stmt
-            .query_row([], |row| row.get(0))
+    let pool = open_readonly_pool(db_path).await?;
+    let rowid: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(ROWID) FROM message WHERE is_from_me = 0")
+            .fetch_one(&pool)
+            .await
             .context("query iMessage max row ID")?;
-        Ok(rowid.unwrap_or(0))
-    })
-    .await
-    .context("join iMessage max row ID task")??;
-    Ok(result)
+    Ok(rowid.unwrap_or(0))
 }
 
 /// Fetch messages newer than `since_rowid`.
-/// Uses rusqlite with parameterized queries for security (CWE-89 prevention).
+/// Uses sqlx with parameterized queries for security (CWE-89 prevention).
 /// The `since_rowid` parameter is bound safely, preventing SQL injection.
 pub(super) async fn fetch_new_messages(
     db_path: &Path,
     since_rowid: i64,
 ) -> anyhow::Result<Vec<(i64, String, String)>> {
-    let path = db_path.to_path_buf();
-    let results =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(i64, String, String)>> {
-            let conn = Connection::open_with_flags(
-                &path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
-            .context("open iMessage database")?;
-            let mut stmt = conn
-                .prepare(
-                    "SELECT m.ROWID, h.id, m.text \
-             FROM message m \
-             JOIN handle h ON m.handle_id = h.ROWID \
-             WHERE m.ROWID > ?1 \
-             AND m.is_from_me = 0 \
-             AND m.text IS NOT NULL \
-             ORDER BY m.ROWID ASC \
-             LIMIT 20",
-                )
-                .context("prepare iMessage message query")?;
-            let rows = stmt
-                .query_map([since_rowid], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })
-                .context("query iMessage new messages")?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .context("collect iMessage query rows")
+    let pool = open_readonly_pool(db_path).await?;
+    let rows = sqlx::query(
+        "SELECT m.ROWID, h.id, m.text \
+         FROM message m \
+         JOIN handle h ON m.handle_id = h.ROWID \
+         WHERE m.ROWID > ?1 \
+         AND m.is_from_me = 0 \
+         AND m.text IS NOT NULL \
+         ORDER BY m.ROWID ASC \
+         LIMIT 20",
+    )
+    .bind(since_rowid)
+    .fetch_all(&pool)
+    .await
+    .context("query iMessage new messages")?;
+
+    let results = rows
+        .iter()
+        .map(|row| {
+            let rowid: i64 = row.get("ROWID");
+            let sender: String = row.get("id");
+            let text: String = row.get("text");
+            (rowid, sender, text)
         })
-        .await
-        .context("join iMessage new messages task")??;
+        .collect();
     Ok(results)
 }

@@ -5,7 +5,7 @@ use crate::plugins::integrations::{IntegrationCategory, IntegrationEntry};
 #[allow(clippy::too_many_lines)]
 pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
     vec![
-        // ── Chat Providers ──────────────────────────────────────
+        // -- Chat Providers --
         IntegrationEntry {
             name: "Telegram",
             description: "Bot API — long-polling",
@@ -84,7 +84,7 @@ pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
             category: IntegrationCategory::Chat,
             status_fn: status::coming_soon,
         },
-        // ── AI Models ───────────────────────────────────────────
+        // -- AI Models --
         IntegrationEntry {
             name: "OpenRouter",
             description: "200+ models, 1 API key",
@@ -241,7 +241,7 @@ pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
             category: IntegrationCategory::AiModel,
             status_fn: status::cohere,
         },
-        // ── Productivity ────────────────────────────────────────
+        // -- Productivity --
         IntegrationEntry {
             name: "GitHub",
             description: "Code, issues, PRs",
@@ -296,7 +296,7 @@ pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
             category: IntegrationCategory::Productivity,
             status_fn: status::coming_soon,
         },
-        // ── Music & Audio ───────────────────────────────────────
+        // -- Music & Audio --
         IntegrationEntry {
             name: "Spotify",
             description: "Music playback control",
@@ -315,7 +315,7 @@ pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
             category: IntegrationCategory::MusicAudio,
             status_fn: status::coming_soon,
         },
-        // ── Smart Home ──────────────────────────────────────────
+        // -- Smart Home --
         IntegrationEntry {
             name: "Home Assistant",
             description: "Home automation hub",
@@ -334,7 +334,7 @@ pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
             category: IntegrationCategory::SmartHome,
             status_fn: status::coming_soon,
         },
-        // ── Tools & Automation ──────────────────────────────────
+        // -- Tools & Automation --
         IntegrationEntry {
             name: "Browser",
             description: "Chrome/Chromium control",
@@ -389,7 +389,7 @@ pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
             category: IntegrationCategory::ToolsAutomation,
             status_fn: status::coming_soon,
         },
-        // ── Media & Creative ────────────────────────────────────
+        // -- Media & Creative --
         IntegrationEntry {
             name: "Image Gen",
             description: "AI image generation",
@@ -414,7 +414,7 @@ pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
             category: IntegrationCategory::MediaCreative,
             status_fn: status::coming_soon,
         },
-        // ── Social ──────────────────────────────────────────────
+        // -- Social --
         IntegrationEntry {
             name: "Twitter/X",
             description: "Tweet, reply, search",
@@ -427,7 +427,7 @@ pub(super) fn all_integrations() -> Vec<IntegrationEntry> {
             category: IntegrationCategory::Social,
             status_fn: status::coming_soon,
         },
-        // ── Platforms ───────────────────────────────────────────
+        // -- Platforms --
         IntegrationEntry {
             name: "macOS",
             description: "Native support + AppleScript",

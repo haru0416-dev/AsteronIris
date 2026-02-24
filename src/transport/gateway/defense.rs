@@ -1,5 +1,4 @@
 use crate::config::GatewayDefenseMode;
-use crate::security::external_content::{ExternalAction, prepare_external_content};
 use axum::{http::StatusCode, response::Json};
 
 use super::AppState;
@@ -11,16 +10,38 @@ pub(super) struct ExternalIngressPolicyOutcome {
     pub(super) blocked: bool,
 }
 
+/// Apply external ingress policy to incoming content.
+///
+/// TODO: Integrate full `external_content` module once ported. Currently uses
+/// a passthrough that preserves the original text and generates a SHA-256
+/// digest for the persisted summary.
 pub(super) fn apply_external_ingress_policy(
     source: &str,
     text: &str,
 ) -> ExternalIngressPolicyOutcome {
-    let prepared = prepare_external_content(source, text);
+    // Detect high-risk prompt-injection patterns
+    let lower = text.to_lowercase();
+    let blocked = lower.contains("ignore previous instructions")
+        || lower.contains("reveal secrets")
+        || lower.contains("disregard all prior");
+
+    let digest = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(text.as_bytes()));
+    let persisted_summary = if blocked {
+        format!("[blocked external content] digest_sha256={digest}")
+    } else {
+        text.to_string()
+    };
+
+    let model_input = if blocked {
+        format!("[External content from {source} blocked by safety policy]")
+    } else {
+        text.to_string()
+    };
 
     ExternalIngressPolicyOutcome {
-        model_input: prepared.model_input,
-        persisted_summary: prepared.persisted_summary.as_memory_value(),
-        blocked: matches!(prepared.action, ExternalAction::Block),
+        model_input,
+        persisted_summary,
+        blocked,
     }
 }
 

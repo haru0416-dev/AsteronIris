@@ -4,12 +4,13 @@ use super::{
     TREND_AGGREGATION_LIMIT, TREND_AGGREGATION_TOP_ITEMS, X_RECENT_SEARCH_ENDPOINT,
 };
 use crate::config::Config;
-use crate::core::memory::traits::MemoryLayer;
-use crate::core::memory::{
-    IngestionPipeline, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource,
-    PrivacyLevel, RecallQuery, SignalEnvelope, SourceKind, SqliteIngestionPipeline, create_memory,
+use crate::memory::factory::create_memory;
+use crate::memory::ingestion::{IngestionPipeline, SignalEnvelope, SqliteIngestionPipeline};
+use crate::memory::traits::Memory;
+use crate::memory::types::{
+    MemoryEventInput, MemoryEventType, MemoryLayer, MemoryProvenance, MemorySource, PrivacyLevel,
+    RecallQuery, SourceKind,
 };
-use crate::runtime::observability::create_observer;
 use crate::security::SecurityPolicy;
 use chrono::Utc;
 use serde::Deserialize;
@@ -141,29 +142,26 @@ fn consume_security_or_output(
         })
 }
 
-fn create_memory_or_output(
+async fn create_memory_or_output(
     config: &Config,
     route_marker: &str,
-) -> Result<Box<dyn crate::core::memory::Memory>, (bool, String)> {
-    create_memory(&config.memory, &config.workspace_dir, None).map_err(|error| {
-        (
-            false,
-            format!("{route_marker}\ncreate_memory failed: {error}"),
-        )
-    })
+) -> Result<Box<dyn Memory>, (bool, String)> {
+    create_memory(&config.memory, &config.workspace_dir, None)
+        .await
+        .map_err(|error| {
+            (
+                false,
+                format!("{route_marker}\ncreate_memory failed: {error}"),
+            )
+        })
 }
 
-fn create_ingestion_pipeline_or_output(
+async fn create_ingestion_pipeline_or_output(
     config: &Config,
     route_marker: &str,
 ) -> Result<SqliteIngestionPipeline, (bool, String)> {
-    let memory = create_memory_or_output(config, route_marker)?;
-    let observer: Arc<dyn crate::runtime::observability::Observer> =
-        Arc::from(create_observer(&config.observability));
-    Ok(SqliteIngestionPipeline::new_with_observer(
-        Arc::from(memory),
-        observer,
-    ))
+    let memory = create_memory_or_output(config, route_marker).await?;
+    Ok(SqliteIngestionPipeline::new(Arc::from(memory)))
 }
 
 pub(super) fn parse_routed_job_command(command: &str) -> Option<ParsedRoutedJob> {
@@ -401,10 +399,11 @@ pub(super) async fn run_ingestion_job_command(
         return output;
     }
 
-    let pipeline = match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_INGEST_PIPELINE) {
-        Ok(pipeline) => pipeline,
-        Err(output) => return output,
-    };
+    let pipeline =
+        match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_INGEST_PIPELINE).await {
+            Ok(pipeline) => pipeline,
+            Err(output) => return output,
+        };
     let envelope = SignalEnvelope::new(job.source_kind, job.source_ref, job.content, job.entity_id)
         .with_privacy_level(PrivacyLevel::Private);
 
@@ -434,7 +433,7 @@ pub(super) async fn run_trend_aggregation_job_command(
         return output;
     }
 
-    let memory = match create_memory_or_output(config, ROUTE_MARKER_TREND_AGGREGATION) {
+    let memory = match create_memory_or_output(config, ROUTE_MARKER_TREND_AGGREGATION).await {
         Ok(memory) => memory,
         Err(output) => return output,
     };
@@ -569,7 +568,7 @@ pub(super) async fn run_rss_poll_job_command(
         );
     }
 
-    let pipeline = match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_RSS_POLL) {
+    let pipeline = match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_RSS_POLL).await {
         Ok(pipeline) => pipeline,
         Err(output) => return output,
     };
@@ -661,7 +660,7 @@ pub(super) async fn run_x_poll_job_command(
         );
     }
 
-    let pipeline = match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_X_POLL) {
+    let pipeline = match create_ingestion_pipeline_or_output(config, ROUTE_MARKER_X_POLL).await {
         Ok(pipeline) => pipeline,
         Err(output) => return output,
     };

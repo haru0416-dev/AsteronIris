@@ -8,26 +8,18 @@
     dead_code
 )]
 
-#[macro_use]
-extern crate rust_i18n;
-
-i18n!("locales", fallback = "en");
-
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::sync::Arc;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-mod app;
 use asteroniris::Config;
 use asteroniris::cli::commands::Cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install default crypto provider for Rustls TLS.
-    // This prevents the error: "could not automatically determine the process-level CryptoProvider"
-    // when both aws-lc-rs and ring features are available (or neither is explicitly selected).
     if let Err(e) = rustls::crypto::ring::default_provider().install_default() {
         eprintln!("Warning: Failed to install default crypto provider: {e:?}");
     }
@@ -41,5 +33,5 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let config = Arc::new(Config::load_or_init()?);
-    app::dispatch::dispatch(cli, config).await
+    asteroniris::app::dispatch::dispatch(cli, config).await
 }

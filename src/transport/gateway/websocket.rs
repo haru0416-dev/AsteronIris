@@ -1,8 +1,8 @@
 use super::AppState;
 use super::events::{ClientMessage, ServerMessage};
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
-use crate::core::tools::middleware::ExecutionContext;
+use crate::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
 use crate::security::policy::TenantPolicyContext;
+use crate::tools::ExecutionContext;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
@@ -78,10 +78,8 @@ async fn handle_client_message(
                 turn_number: 0,
                 workspace_dir: state.security.workspace_dir.clone(),
                 allowed_tools: None,
-                permission_store: Some(Arc::clone(&state.permission_store)),
                 rate_limiter: Arc::clone(&state.rate_limiter),
                 tenant_context: TenantPolicyContext::disabled(),
-                approval_broker: None,
             };
 
             match tool_loop
@@ -95,6 +93,7 @@ async fn handle_client_message(
                     ctx: &ctx,
                     stream_sink: None,
                     conversation_history: &[],
+                    hooks: &[],
                 })
                 .await
             {

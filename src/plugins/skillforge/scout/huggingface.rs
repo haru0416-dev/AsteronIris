@@ -2,7 +2,8 @@
 
 use super::{Scout, ScoutResult, ScoutSource, dedup, urlencoding};
 use anyhow::{Context, Result};
-
+use std::future::Future;
+use std::pin::Pin;
 use tracing::{debug, warn};
 
 pub struct HuggingFaceScout {
@@ -102,69 +103,71 @@ impl HuggingFaceScout {
 }
 
 impl Scout for HuggingFaceScout {
-    async fn discover(&self) -> Result<Vec<ScoutResult>> {
-        let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
+    fn discover(&self) -> Pin<Box<dyn Future<Output = Result<Vec<ScoutResult>>> + Send + '_>> {
+        Box::pin(async move {
+            let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
 
-        for query in &self.queries {
-            let url = format!(
-                "{}/api/models?search={}&limit=30",
-                self.api_base,
-                urlencoding(query)
-            );
-            debug!(query = query.as_str(), "Searching HuggingFace");
+            for query in &self.queries {
+                let url = format!(
+                    "{}/api/models?search={}&limit=30",
+                    self.api_base,
+                    urlencoding(query)
+                );
+                debug!(query = query.as_str(), "Searching HuggingFace");
 
-            let resp = match self.client.get(&url).send().await {
-                Ok(r) => r,
-                Err(e) => {
+                let resp = match self.client.get(&url).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(
+                            query = query.as_str(),
+                            error = %e,
+                            "HuggingFace API request failed, skipping query"
+                        );
+                        continue;
+                    }
+                };
+
+                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
                     warn!(
                         query = query.as_str(),
-                        error = %e,
-                        "HuggingFace API request failed, skipping query"
+                        "HuggingFace rate-limited request, skipping query"
                     );
                     continue;
                 }
-            };
 
-            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                warn!(
-                    query = query.as_str(),
-                    "HuggingFace rate-limited request, skipping query"
-                );
-                continue;
-            }
-
-            if !resp.status().is_success() {
-                warn!(
-                    status = %resp.status(),
-                    query = query.as_str(),
-                    "HuggingFace search returned non-200"
-                );
-                continue;
-            }
-
-            let body: serde_json::Value = match resp.json().await {
-                Ok(v) => v,
-                Err(e) => {
+                if !resp.status().is_success() {
                     warn!(
+                        status = %resp.status(),
                         query = query.as_str(),
-                        error = %e,
-                        "Failed to parse HuggingFace response, skipping query"
+                        "HuggingFace search returned non-200"
                     );
                     continue;
                 }
-            };
 
-            let mut items = Self::parse_items(&body);
-            debug!(
-                count = items.len(),
-                query = query.as_str(),
-                "Parsed HuggingFace items"
-            );
-            all.append(&mut items);
-        }
+                let body: serde_json::Value = match resp.json().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(
+                            query = query.as_str(),
+                            error = %e,
+                            "Failed to parse HuggingFace response, skipping query"
+                        );
+                        continue;
+                    }
+                };
 
-        dedup(&mut all);
-        Ok(all)
+                let mut items = Self::parse_items(&body);
+                debug!(
+                    count = items.len(),
+                    query = query.as_str(),
+                    "Parsed HuggingFace items"
+                );
+                all.append(&mut items);
+            }
+
+            dedup(&mut all);
+            Ok(all)
+        })
     }
 }
 

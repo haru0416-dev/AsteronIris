@@ -1,7 +1,8 @@
-use crate::config::schema::{McpConfig, McpTransport};
-use crate::core::tools::Tool;
+use crate::config::McpConfig;
+use crate::config::schema::McpTransport;
 use crate::plugins::mcp::client_connection::McpConnection;
 use crate::plugins::mcp::client_proxy_tool::McpToolProxy;
+use crate::tools::Tool;
 use anyhow::Result;
 use std::sync::Arc;
 

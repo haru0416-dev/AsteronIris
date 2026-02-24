@@ -1,62 +1,76 @@
 //! Example: Implementing a custom Memory backend for AsteronIris
 //!
-//! This demonstrates how to create a Redis-backed memory backend.
-//! The Memory trait is async and pluggable — implement it for any storage.
+//! Demonstrates the dyn-safe async trait pattern. The Memory trait uses
+//! `Pin<Box<dyn Future<Output = R> + Send + '_>>` so backends can be stored
+//! as `Arc<dyn Memory>` and shared across async tasks.
 //!
-//! Run: cargo run --example custom_memory
+//! Run: `cargo run --example custom_memory`
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Mutex;
 
-// ── Re-define the trait types (in your app, import from asteroniris::memory) ──
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+// ── Minimal types (mirrors src/core/memory/traits.rs) ───────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MemoryCategory {
-    Core,
-    Daily,
-    Conversation,
-    Custom(String),
+#[serde(rename_all = "snake_case")]
+pub enum MemorySource {
+    ExplicitUser,
+    Inferred,
+    System,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
     pub id: String,
     pub key: String,
-    pub content: String,
-    pub category: MemoryCategory,
-    pub timestamp: String,
-    pub score: Option<f64>,
+    pub value: String,
+    pub source: MemorySource,
+    pub confidence: f64,
+    pub occurred_at: String,
 }
+
+// ── Minimal Memory trait ────────────────────────────────────────────
 
 pub trait Memory: Send + Sync {
     fn name(&self) -> &str;
-    async fn store(&self, key: &str, content: &str, category: MemoryCategory)
-    -> anyhow::Result<()>;
-    async fn recall(&self, query: &str, limit: usize) -> anyhow::Result<Vec<MemoryEntry>>;
-    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>>;
-    async fn forget(&self, key: &str) -> anyhow::Result<bool>;
-    async fn count(&self) -> anyhow::Result<usize>;
+
+    fn store<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a str,
+        source: MemorySource,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+    fn recall<'a>(
+        &'a self,
+        query: &'a str,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MemoryEntry>>> + Send + 'a>>;
+
+    fn forget<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>>;
+
+    fn count(&self) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>>;
 }
 
-// ── Your custom implementation ─────────────────────────────────────
+// ── In-memory HashMap backend ───────────────────────────────────────
 
-/// In-memory HashMap backend (great for testing or ephemeral sessions)
 pub struct InMemoryBackend {
     store: Mutex<HashMap<String, MemoryEntry>>,
 }
 
-impl Default for InMemoryBackend {
-    fn default() -> Self {
+impl InMemoryBackend {
+    pub fn new() -> Self {
         Self {
             store: Mutex::new(HashMap::new()),
         }
-    }
-}
-
-impl InMemoryBackend {
-    pub fn new() -> Self {
-        Self::default()
     }
 }
 
@@ -65,99 +79,100 @@ impl Memory for InMemoryBackend {
         "in-memory"
     }
 
-    async fn store(
-        &self,
-        key: &str,
-        content: &str,
-        category: MemoryCategory,
-    ) -> anyhow::Result<()> {
-        let entry = MemoryEntry {
-            id: uuid::Uuid::new_v4().to_string(),
-            key: key.to_string(),
-            content: content.to_string(),
-            category,
-            timestamp: chrono::Local::now().to_rfc3339(),
-            score: None,
-        };
-        self.store
-            .lock()
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .insert(key.to_string(), entry);
-        Ok(())
+    fn store<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a str,
+        source: MemorySource,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let entry = MemoryEntry {
+                id: uuid::Uuid::new_v4().to_string(),
+                key: key.to_string(),
+                value: value.to_string(),
+                source,
+                confidence: 1.0,
+                occurred_at: chrono::Local::now().to_rfc3339(),
+            };
+            self.store
+                .lock()
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+                .insert(key.to_string(), entry);
+            Ok(())
+        })
     }
 
-    async fn recall(&self, query: &str, limit: usize) -> anyhow::Result<Vec<MemoryEntry>> {
-        let store = self.store.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        let query_lower = query.to_lowercase();
-
-        let mut results: Vec<MemoryEntry> = store
-            .values()
-            .filter(|e| e.content.to_lowercase().contains(&query_lower))
-            .cloned()
-            .collect();
-
-        results.truncate(limit);
-        Ok(results)
+    fn recall<'a>(
+        &'a self,
+        query: &'a str,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MemoryEntry>>> + Send + 'a>> {
+        Box::pin(async move {
+            let store = self.store.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let query_lower = query.to_lowercase();
+            let mut results: Vec<MemoryEntry> = store
+                .values()
+                .filter(|e| e.value.to_lowercase().contains(&query_lower))
+                .cloned()
+                .collect();
+            results.truncate(limit);
+            Ok(results)
+        })
     }
 
-    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
-        let store = self.store.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(store.get(key).cloned())
+    fn forget<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut store = self.store.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(store.remove(key).is_some())
+        })
     }
 
-    async fn forget(&self, key: &str) -> anyhow::Result<bool> {
-        let mut store = self.store.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(store.remove(key).is_some())
-    }
-
-    async fn count(&self) -> anyhow::Result<usize> {
-        let store = self.store.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(store.len())
+    fn count(&self) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
+        Box::pin(async move {
+            let store = self.store.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(store.len())
+        })
     }
 }
 
-// ── Demo usage ─────────────────────────────────────────────────────
+// ── Demo ─────────────────────────────────────────────────────────────
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let brain = InMemoryBackend::new();
+async fn main() -> Result<()> {
+    // Memory backends are stored as `Arc<dyn Memory>` — the trait is dyn-safe.
+    let brain: Box<dyn Memory> = Box::new(InMemoryBackend::new());
 
-    println!("🧠 AsteronIris Memory Demo — InMemoryBackend\n");
+    println!("AsteronIris Memory Demo — {}\n", brain.name());
 
-    // Store some memories
     brain
-        .store("user_lang", "User prefers Rust", MemoryCategory::Core)
+        .store("user_lang", "User prefers Rust", MemorySource::ExplicitUser)
         .await?;
     brain
-        .store("user_tz", "Timezone is EST", MemoryCategory::Core)
+        .store("user_tz", "Timezone is EST", MemorySource::ExplicitUser)
         .await?;
     brain
         .store(
             "today_note",
             "Completed memory system implementation",
-            MemoryCategory::Daily,
+            MemorySource::System,
         )
         .await?;
 
     println!("Stored {} memories", brain.count().await?);
 
-    // Recall by keyword
     let results = brain.recall("Rust", 5).await?;
-    println!("\nRecall 'Rust' → {} results:", results.len());
+    println!("\nRecall 'Rust' -> {} results:", results.len());
     for entry in &results {
-        println!("  [{:?}] {}: {}", entry.category, entry.key, entry.content);
+        println!("  [{:?}] {}: {}", entry.source, entry.key, entry.value);
     }
 
-    // Get by key
-    if let Some(entry) = brain.get("user_tz").await? {
-        println!("\nGet 'user_tz' → {}", entry.content);
-    }
-
-    // Forget
     let removed = brain.forget("user_tz").await?;
-    println!("Forget 'user_tz' → removed: {removed}");
+    println!("\nForget 'user_tz' -> removed: {removed}");
     println!("Remaining: {} memories", brain.count().await?);
 
-    println!("\n✅ Memory backend works! Implement the Memory trait for any storage.");
+    println!("\nMemory backend works! Implement the Memory trait for any storage.");
     Ok(())
 }

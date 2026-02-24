@@ -1,11 +1,12 @@
 use super::{ROUTE_MARKER_AGENT_BLOCKED, ROUTE_MARKER_AGENT_PLANNER};
 use crate::config::Config;
-use crate::core::planner::{PlanExecutor, PlanParser, ToolStepRunner};
-use crate::core::tools::{ToolRegistry, default_middleware_chain, default_tools};
+use crate::planner::{PlanExecutor, PlanParser, ToolStepRunner};
 use crate::platform::cron::CronJob;
 use crate::security::SecurityPolicy;
+use crate::tools::{ExecutionContext, ToolRegistry, default_tools};
 use chrono::Utc;
-use rusqlite::{Connection, params};
+use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{Row, SqlitePool};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -26,7 +27,8 @@ pub(super) async fn run_agent_job_command(
         let mut plan = match PlanParser::parse(raw_plan.trim()) {
             Ok(plan) => plan,
             Err(error) => {
-                let _ = persist_plan_execution(config, job, "parse_failed", 1, 0, 1, 0, raw_plan);
+                let _ =
+                    persist_plan_execution(config, job, "parse_failed", 1, 0, 1, 0, raw_plan).await;
                 return (
                     false,
                     format!("{ROUTE_MARKER_AGENT_PLANNER}\nplan parse failed: {error}"),
@@ -35,16 +37,18 @@ pub(super) async fn run_agent_job_command(
         };
 
         let security_arc = Arc::new(security.clone());
-        let mut registry = ToolRegistry::new(default_middleware_chain());
-        for tool in default_tools(&security_arc) {
+        let mut registry = ToolRegistry::new(vec![]);
+        for tool in default_tools() {
             registry.register(tool);
         }
 
         let runner = ToolStepRunner::new(
             Arc::new(registry),
-            crate::core::tools::middleware::ExecutionContext::from_security(security_arc),
+            ExecutionContext::from_security(security_arc),
         );
-        let execution_id = begin_plan_execution(config, job, &plan.id, raw_plan).ok();
+        let execution_id = begin_plan_execution(config, job, &plan.id, raw_plan)
+            .await
+            .ok();
         let max_attempts = job.max_attempts.max(1);
         let mut attempts = 1_u32;
         let mut final_report = match PlanExecutor::execute(&mut plan, &runner).await {
@@ -59,7 +63,8 @@ pub(super) async fn run_agent_job_command(
                         0,
                         1,
                         0,
-                    );
+                    )
+                    .await;
                 } else {
                     let _ = persist_plan_execution(
                         config,
@@ -70,7 +75,8 @@ pub(super) async fn run_agent_job_command(
                         1,
                         0,
                         raw_plan,
-                    );
+                    )
+                    .await;
                 }
                 return (
                     false,
@@ -113,7 +119,8 @@ pub(super) async fn run_agent_job_command(
                 final_report.completed_steps.len(),
                 final_report.failed_steps.len(),
                 final_report.skipped_steps.len(),
-            );
+            )
+            .await;
         } else {
             let _ = persist_plan_execution(
                 config,
@@ -124,7 +131,8 @@ pub(super) async fn run_agent_job_command(
                 final_report.failed_steps.len(),
                 final_report.skipped_steps.len(),
                 raw_plan,
-            );
+            )
+            .await;
         }
         return (success, output);
     }
@@ -143,66 +151,27 @@ pub(super) async fn run_agent_job_command(
     )
 }
 
-fn begin_plan_execution(
-    config: &Config,
-    job: &CronJob,
-    plan_id: &str,
-    plan_json: &str,
-) -> anyhow::Result<String> {
+// ── Pool helpers ────────────────────────────────────────────────────────────
+
+async fn open_plan_pool(config: &Config) -> anyhow::Result<SqlitePool> {
     let db_path = config.workspace_dir.join("cron").join("jobs.db");
     if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
 
-    let conn = Connection::open(db_path)?;
-    ensure_plan_execution_schema(&conn)?;
-    let execution_id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT INTO plan_executions (
-            id, job_id, plan_id, status, attempts,
-            completed_steps, failed_steps, skipped_steps,
-            plan_json, created_at
-        ) VALUES (?1, ?2, ?3, 'running', 0, 0, 0, 0, ?4, ?5)",
-        params![execution_id, job.id, plan_id, plan_json, now],
-    )?;
-    Ok(execution_id)
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await?;
+
+    ensure_plan_execution_schema(&pool).await?;
+    ensure_cron_jobs_schema(&pool).await?;
+    Ok(pool)
 }
 
-fn finalize_plan_execution(
-    config: &Config,
-    execution_id: &str,
-    status: &str,
-    attempts: u32,
-    completed_steps: usize,
-    failed_steps: usize,
-    skipped_steps: usize,
-) -> anyhow::Result<()> {
-    let db_path = config.workspace_dir.join("cron").join("jobs.db");
-    let conn = Connection::open(db_path)?;
-    ensure_plan_execution_schema(&conn)?;
-    conn.execute(
-        "UPDATE plan_executions
-         SET status = ?2,
-             attempts = ?3,
-             completed_steps = ?4,
-             failed_steps = ?5,
-             skipped_steps = ?6
-         WHERE id = ?1",
-        params![
-            execution_id,
-            status,
-            i64::from(attempts),
-            i64::try_from(completed_steps).unwrap_or(0),
-            i64::try_from(failed_steps).unwrap_or(0),
-            i64::try_from(skipped_steps).unwrap_or(0)
-        ],
-    )?;
-    Ok(())
-}
-
-pub(super) fn ensure_plan_execution_schema(conn: &Connection) -> anyhow::Result<()> {
-    conn.execute_batch(
+pub(super) async fn ensure_plan_execution_schema(pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS plan_executions (
             id TEXT PRIMARY KEY,
             job_id TEXT NOT NULL,
@@ -214,15 +183,26 @@ pub(super) fn ensure_plan_execution_schema(conn: &Connection) -> anyhow::Result<
             skipped_steps INTEGER NOT NULL,
             plan_json TEXT NOT NULL,
             created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_plan_executions_job ON plan_executions(job_id);
-        CREATE INDEX IF NOT EXISTS idx_plan_executions_created_at ON plan_executions(created_at);",
-    )?;
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_plan_executions_job ON plan_executions(job_id)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_plan_executions_created_at ON plan_executions(created_at)",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
-pub(super) fn ensure_cron_jobs_schema(conn: &Connection) -> anyhow::Result<()> {
-    conn.execute_batch(
+pub(super) async fn ensure_cron_jobs_schema(pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS cron_jobs (
             id          TEXT PRIMARY KEY,
             expression  TEXT NOT NULL,
@@ -236,62 +216,131 @@ pub(super) fn ensure_cron_jobs_schema(conn: &Connection) -> anyhow::Result<()> {
             origin      TEXT NOT NULL DEFAULT 'user',
             expires_at  TEXT,
             max_attempts INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE INDEX IF NOT EXISTS idx_cron_jobs_next_run ON cron_jobs(next_run);",
-    )?;
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_cron_jobs_next_run ON cron_jobs(next_run)")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
-pub(super) fn recover_interrupted_plan_jobs(config: &Config) -> anyhow::Result<usize> {
+// ── Plan execution tracking ─────────────────────────────────────────────────
+
+async fn begin_plan_execution(
+    config: &Config,
+    job: &CronJob,
+    plan_id: &str,
+    plan_json: &str,
+) -> anyhow::Result<String> {
+    let pool = open_plan_pool(config).await?;
+    let execution_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO plan_executions (
+            id, job_id, plan_id, status, attempts,
+            completed_steps, failed_steps, skipped_steps,
+            plan_json, created_at
+        ) VALUES (?, ?, ?, 'running', 0, 0, 0, 0, ?, ?)",
+    )
+    .bind(&execution_id)
+    .bind(&job.id)
+    .bind(plan_id)
+    .bind(plan_json)
+    .bind(&now)
+    .execute(&pool)
+    .await?;
+    Ok(execution_id)
+}
+
+async fn finalize_plan_execution(
+    config: &Config,
+    execution_id: &str,
+    status: &str,
+    attempts: u32,
+    completed_steps: usize,
+    failed_steps: usize,
+    skipped_steps: usize,
+) -> anyhow::Result<()> {
+    let pool = open_plan_pool(config).await?;
+    sqlx::query(
+        "UPDATE plan_executions
+         SET status = ?,
+             attempts = ?,
+             completed_steps = ?,
+             failed_steps = ?,
+             skipped_steps = ?
+         WHERE id = ?",
+    )
+    .bind(status)
+    .bind(i64::from(attempts))
+    .bind(i64::try_from(completed_steps).unwrap_or(0))
+    .bind(i64::try_from(failed_steps).unwrap_or(0))
+    .bind(i64::try_from(skipped_steps).unwrap_or(0))
+    .bind(execution_id)
+    .execute(&pool)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn recover_interrupted_plan_jobs(config: &Config) -> anyhow::Result<usize> {
     let db_path = config.workspace_dir.join("cron").join("jobs.db");
     if !db_path.exists() {
         return Ok(0);
     }
 
-    let conn = Connection::open(db_path)?;
-    ensure_plan_execution_schema(&conn)?;
-    ensure_cron_jobs_schema(&conn)?;
-
-    let mut stmt = conn.prepare(
+    let pool = open_plan_pool(config).await?;
+    let rows = sqlx::query(
         "SELECT id, job_id, plan_json FROM plan_executions WHERE status = 'running' ORDER BY created_at ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    })?;
+    )
+    .fetch_all(&pool)
+    .await?;
 
     let now = Utc::now().to_rfc3339();
     let mut recovered = 0_usize;
     for row in rows {
-        let (execution_id, job_id, plan_json) = row?;
-        let changed = conn.execute(
+        let execution_id: String = row.get("id");
+        let job_id: String = row.get("job_id");
+        let plan_json: String = row.get("plan_json");
+
+        let result = sqlx::query(
             "UPDATE cron_jobs
-             SET next_run = ?1,
+             SET next_run = ?,
                  last_status = 'recover_pending',
                  last_output = 'recovered_from_plan_execution',
                  max_attempts = CASE WHEN max_attempts < 1 THEN 3 ELSE max_attempts END
-             WHERE id = ?2 AND origin = 'agent'",
-            params![now, job_id],
-        )?;
+             WHERE id = ? AND origin = 'agent'",
+        )
+        .bind(&now)
+        .bind(&job_id)
+        .execute(&pool)
+        .await?;
 
-        if changed == 0 {
-            conn.execute(
+        if result.rows_affected() == 0 {
+            sqlx::query(
                 "INSERT INTO cron_jobs (
                     id, expression, command, created_at, next_run,
                     last_run, last_status, last_output,
                     job_kind, origin, expires_at, max_attempts
-                ) VALUES (?1, '*/5 * * * *', ?2, ?3, ?4, NULL, 'recover_pending', 'recovered_from_plan_execution', 'agent', 'agent', NULL, 3)",
-                params![Uuid::new_v4().to_string(), format!("plan:{plan_json}"), now, now],
-            )?;
+                ) VALUES (?, '*/5 * * * *', ?, ?, ?, NULL, 'recover_pending', 'recovered_from_plan_execution', 'agent', 'agent', NULL, 3)",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(format!("plan:{plan_json}"))
+            .bind(&now)
+            .bind(&now)
+            .execute(&pool)
+            .await?;
         }
 
-        conn.execute(
-            "UPDATE plan_executions SET status = 'requeued', attempts = CASE WHEN attempts < 1 THEN 1 ELSE attempts END WHERE id = ?1",
-            params![execution_id],
-        )?;
+        sqlx::query(
+            "UPDATE plan_executions SET status = 'requeued', attempts = CASE WHEN attempts < 1 THEN 1 ELSE attempts END WHERE id = ?",
+        )
+        .bind(&execution_id)
+        .execute(&pool)
+        .await?;
         recovered = recovered.saturating_add(1);
     }
 
@@ -299,7 +348,7 @@ pub(super) fn recover_interrupted_plan_jobs(config: &Config) -> anyhow::Result<u
 }
 
 #[allow(clippy::too_many_arguments)]
-fn persist_plan_execution(
+async fn persist_plan_execution(
     config: &Config,
     job: &CronJob,
     status: &str,
@@ -309,14 +358,7 @@ fn persist_plan_execution(
     skipped_steps: usize,
     plan_json: &str,
 ) -> anyhow::Result<()> {
-    let db_path = config.workspace_dir.join("cron").join("jobs.db");
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let conn = Connection::open(db_path)?;
-    ensure_plan_execution_schema(&conn)?;
-
+    let pool = open_plan_pool(config).await?;
     let now = Utc::now().to_rfc3339();
     let execution_id = Uuid::new_v4().to_string();
     let plan_id = if let Ok(parsed) = PlanParser::parse(plan_json.trim()) {
@@ -325,25 +367,25 @@ fn persist_plan_execution(
         "unknown".to_string()
     };
 
-    conn.execute(
+    sqlx::query(
         "INSERT INTO plan_executions (
             id, job_id, plan_id, status, attempts,
             completed_steps, failed_steps, skipped_steps,
             plan_json, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![
-            execution_id,
-            job.id,
-            plan_id,
-            status,
-            i64::from(attempts),
-            i64::try_from(completed_steps).unwrap_or(0),
-            i64::try_from(failed_steps).unwrap_or(0),
-            i64::try_from(skipped_steps).unwrap_or(0),
-            plan_json,
-            now
-        ],
-    )?;
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&execution_id)
+    .bind(&job.id)
+    .bind(&plan_id)
+    .bind(status)
+    .bind(i64::from(attempts))
+    .bind(i64::try_from(completed_steps).unwrap_or(0))
+    .bind(i64::try_from(failed_steps).unwrap_or(0))
+    .bind(i64::try_from(skipped_steps).unwrap_or(0))
+    .bind(plan_json)
+    .bind(&now)
+    .execute(&pool)
+    .await?;
 
     Ok(())
 }
