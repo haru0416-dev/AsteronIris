@@ -102,7 +102,7 @@ impl PlanExecutor {
             if skipped_ids.contains(&step_id) {
                 if let Some(index) = step_index.get(&step_id) {
                     plan.steps[*index].status = StepStatus::Skipped;
-                    skipped_steps.push(step_id.clone());
+                    skipped_steps.push(step_id);
                 }
                 continue;
             }
@@ -126,16 +126,18 @@ impl PlanExecutor {
             plan.steps[index].status = StepStatus::Failed;
             plan.steps[index].output = Some(result.output);
             plan.steps[index].error = result.error;
-            failed_steps.push(step_id.clone());
             mark_downstream_skipped(&step_id, &downstream, &mut skipped_ids);
+            failed_steps.push(step_id);
         }
+
+        let success = failed_steps.is_empty();
 
         Ok(ExecutionReport {
             plan_id: plan.id.clone(),
             completed_steps,
-            failed_steps: failed_steps.clone(),
+            failed_steps,
             skipped_steps,
-            success: failed_steps.is_empty(),
+            success,
         })
     }
 }
