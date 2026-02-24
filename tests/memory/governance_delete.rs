@@ -1,18 +1,20 @@
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
     SqliteMemory,
 };
-use asteroniris::core::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
+use asteroniris::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 
 use rusqlite::Connection;
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-fn fixture() -> (TempDir, Arc<dyn Memory>, Arc<SecurityPolicy>) {
+async fn fixture() -> (TempDir, Arc<dyn Memory>, Arc<SecurityPolicy>) {
     let temp = TempDir::new().expect("temp dir should be created");
-    let memory = SqliteMemory::new(temp.path()).expect("sqlite memory should initialize");
+    let memory = SqliteMemory::new(temp.path())
+        .await
+        .expect("sqlite memory should initialize");
     let security = SecurityPolicy {
         autonomy: AutonomyLevel::Full,
         workspace_dir: temp.path().to_path_buf(),
@@ -47,7 +49,7 @@ async fn seed_slot(
 
 #[tokio::test]
 async fn dsar_delete_completeness_detects_residue() {
-    let (temp, memory, security) = fixture();
+    let (temp, memory, security) = fixture().await;
     let entity_id = "tenant-alpha:user-residue";
     let slot_key = "profile.email";
     seed_slot(

@@ -473,6 +473,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn validate_optional_self_tasks_rejection_paths() {
         let non_array = json!({"self_tasks": "oops"});
         let err = validate_optional_self_tasks(

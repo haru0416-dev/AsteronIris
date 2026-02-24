@@ -17,13 +17,13 @@ const DAEMON_STALE_SECONDS: i64 = 30;
 const SCHEDULER_STALE_SECONDS: i64 = 120;
 const CHANNEL_STALE_SECONDS: i64 = 300;
 
-pub fn run(config: &Config) -> Result<()> {
+pub async fn run(config: &Config) -> Result<()> {
     println!("◆ {}", t!("doctor.title"));
     println!();
 
     print_setup_health(config);
     print_daemon_health(config)?;
-    print_governance_and_rollout(config);
+    print_governance_and_rollout(config).await;
 
     Ok(())
 }
@@ -187,7 +187,7 @@ fn check_daemon_components(snapshot: &serde_json::Value) -> (u32, u32) {
     (channel_count, stale_channels)
 }
 
-fn print_governance_and_rollout(config: &Config) {
+async fn print_governance_and_rollout(config: &Config) {
     println!("  {}", t!("doctor.autonomy_governance"));
     for line in autonomy_governance_lines(config) {
         println!("    {line}");
@@ -208,7 +208,7 @@ fn print_governance_and_rollout(config: &Config) {
     }
 
     println!("  memory signal stats");
-    for line in memory_signal_stats_lines(config) {
+    for line in memory_signal_stats_lines(config).await {
         println!("    {line}");
     }
 }

@@ -14,11 +14,18 @@ pub use types::{CronJob, CronJobKind, CronJobMetadata, CronJobOrigin};
 use crate::config::Config;
 use anyhow::Result;
 
-#[allow(clippy::needless_pass_by_value)]
-pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<()> {
+/// Cron management commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CronCommand {
+    List,
+    Add { expression: String, command: String },
+    Remove { id: String },
+}
+
+pub async fn handle_command(command: CronCommand, config: &Config) -> Result<()> {
     match command {
-        crate::CronCommands::List => {
-            let jobs = list_jobs(config)?;
+        CronCommand::List => {
+            let jobs = list_jobs(config).await?;
             if jobs.is_empty() {
                 println!("No scheduled tasks yet.");
                 println!("\nUsage:");
@@ -26,7 +33,7 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
                 return Ok(());
             }
 
-            println!("🕒 Scheduled jobs ({}):", jobs.len());
+            println!("Scheduled jobs ({}):", jobs.len());
             for job in jobs {
                 let last_run = job
                     .last_run
@@ -44,18 +51,18 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
             }
             Ok(())
         }
-        crate::CronCommands::Add {
+        CronCommand::Add {
             expression,
             command,
         } => {
-            let job = add_job(config, &expression, &command)?;
-            println!("✅ Added cron job {}", job.id);
+            let job = add_job(config, &expression, &command).await?;
+            println!("Added cron job {}", job.id);
             println!("  Expr: {}", job.expression);
             println!("  Next: {}", job.next_run.to_rfc3339());
             println!("  Cmd : {}", job.command);
             Ok(())
         }
-        crate::CronCommands::Remove { id } => remove_job(config, &id),
+        CronCommand::Remove { id } => remove_job(config, &id).await,
     }
 }
 

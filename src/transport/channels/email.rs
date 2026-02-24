@@ -9,7 +9,6 @@
 #![allow(clippy::unnecessary_map_or)]
 
 use anyhow::{Context, Result, anyhow};
-use async_trait::async_trait;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 use mail_parser::{MessageParser, MimeHeaders};
@@ -319,7 +318,6 @@ impl EmailChannel {
     }
 }
 
-#[async_trait]
 impl Channel for EmailChannel {
     fn name(&self) -> &str {
         "email"
@@ -329,110 +327,126 @@ impl Channel for EmailChannel {
         usize::MAX
     }
 
-    async fn send(&self, message: &str, recipient: &str) -> Result<()> {
-        let (subject, body) = if message.starts_with("Subject: ") {
-            if let Some(pos) = message.find('\n') {
-                (&message[9..pos], message[pos + 1..].trim())
+    fn send<'a>(
+        &'a self,
+        message: &'a str,
+        recipient: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let (subject, body) = if message.starts_with("Subject: ") {
+                if let Some(pos) = message.find('\n') {
+                    (&message[9..pos], message[pos + 1..].trim())
+                } else {
+                    ("AsteronIris Message", message)
+                }
             } else {
                 ("AsteronIris Message", message)
-            }
-        } else {
-            ("AsteronIris Message", message)
-        };
+            };
 
-        let email = Message::builder()
-            .from(
-                self.config
-                    .from_address
-                    .parse()
-                    .context("parse email from address")?,
-            )
-            .to(recipient.parse().context("parse email recipient address")?)
-            .subject(subject)
-            .body(body.to_string())
-            .context("build email message body")?;
+            let email = Message::builder()
+                .from(
+                    self.config
+                        .from_address
+                        .parse()
+                        .context("parse email from address")?,
+                )
+                .to(recipient.parse().context("parse email recipient address")?)
+                .subject(subject)
+                .body(body.to_string())
+                .context("build email message body")?;
 
-        let transport = self.create_smtp_transport()?;
-        transport.send(&email).context("send email via SMTP")?;
-        info!("Email sent to {}", recipient);
-        Ok(())
+            let transport = self.create_smtp_transport()?;
+            transport.send(&email).context("send email via SMTP")?;
+            info!("Email sent to {}", recipient);
+            Ok(())
+        })
     }
 
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
-        info!(
-            "Email polling every {}s on {}",
-            self.config.poll_interval_secs, self.config.imap_folder
-        );
-        let mut tick = interval(Duration::from_secs(self.config.poll_interval_secs));
-        let config = Arc::new(self.config.clone());
+    fn listen<'a>(
+        &'a self,
+        tx: mpsc::Sender<ChannelMessage>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            info!(
+                "Email polling every {}s on {}",
+                self.config.poll_interval_secs, self.config.imap_folder
+            );
+            let mut tick = interval(Duration::from_secs(self.config.poll_interval_secs));
+            let config = Arc::new(self.config.clone());
 
-        loop {
-            tick.tick().await;
-            let cfg = Arc::clone(&config);
-            let imap_timeout =
-                Duration::from_secs(self.config.poll_interval_secs.saturating_mul(2).max(60));
-            let fetch_future = tokio::task::spawn_blocking(move || Self::fetch_unseen_imap(&cfg));
-            match tokio::time::timeout(imap_timeout, fetch_future).await {
-                Err(_elapsed) => {
-                    error!(
-                        "Email IMAP fetch timed out after {}s",
-                        imap_timeout.as_secs()
-                    );
-                    sleep(Duration::from_secs(10)).await;
-                }
-                Ok(Ok(Ok(messages))) => {
-                    for (id, sender, content, ts) in messages {
-                        if !self.is_sender_allowed(&sender) {
-                            warn!("Blocked email from {}", sender);
-                            continue;
-                        }
-
-                        {
-                            // Recover from mutex poisoning — prefer stale data over panic
-                            let mut seen =
-                                self.seen_messages.lock().unwrap_or_else(|e| e.into_inner());
-                            if !seen.insert(id.clone()) {
+            loop {
+                tick.tick().await;
+                let cfg = Arc::clone(&config);
+                let imap_timeout =
+                    Duration::from_secs(self.config.poll_interval_secs.saturating_mul(2).max(60));
+                let fetch_future =
+                    tokio::task::spawn_blocking(move || Self::fetch_unseen_imap(&cfg));
+                match tokio::time::timeout(imap_timeout, fetch_future).await {
+                    Err(_elapsed) => {
+                        error!(
+                            "Email IMAP fetch timed out after {}s",
+                            imap_timeout.as_secs()
+                        );
+                        sleep(Duration::from_secs(10)).await;
+                    }
+                    Ok(Ok(Ok(messages))) => {
+                        for (id, sender, content, ts) in messages {
+                            if !self.is_sender_allowed(&sender) {
+                                warn!("Blocked email from {}", sender);
                                 continue;
                             }
-                        } // MutexGuard dropped before await
 
-                        let msg = ChannelMessage {
-                            id,
-                            sender,
-                            content,
-                            channel: "email".to_string(),
-                            conversation_id: None,
-                            thread_id: None,
-                            reply_to: None,
-                            message_id: None,
-                            timestamp: ts,
-                            attachments: Vec::new(),
-                        };
-                        if tx.send(msg).await.is_err() {
-                            return Ok(());
+                            {
+                                // Recover from mutex poisoning — prefer stale data over panic
+                                let mut seen =
+                                    self.seen_messages.lock().unwrap_or_else(|e| e.into_inner());
+                                if !seen.insert(id.clone()) {
+                                    continue;
+                                }
+                            } // MutexGuard dropped before await
+
+                            let msg = ChannelMessage {
+                                id,
+                                sender,
+                                content,
+                                channel: "email".to_string(),
+                                conversation_id: None,
+                                thread_id: None,
+                                reply_to: None,
+                                message_id: None,
+                                timestamp: ts,
+                                attachments: Vec::new(),
+                            };
+                            if tx.send(msg).await.is_err() {
+                                return Ok(());
+                            }
                         }
                     }
-                }
-                Ok(Ok(Err(e))) => {
-                    error!("Email poll failed: {}", e);
-                    sleep(Duration::from_secs(10)).await;
-                }
-                Ok(Err(e)) => {
-                    error!("Email poll task panicked: {}", e);
-                    sleep(Duration::from_secs(10)).await;
+                    Ok(Ok(Err(e))) => {
+                        error!("Email poll failed: {}", e);
+                        sleep(Duration::from_secs(10)).await;
+                    }
+                    Ok(Err(e)) => {
+                        error!("Email poll task panicked: {}", e);
+                        sleep(Duration::from_secs(10)).await;
+                    }
                 }
             }
-        }
+        })
     }
 
-    async fn health_check(&self) -> bool {
-        let cfg = self.config.clone();
-        tokio::task::spawn_blocking(move || {
-            let tcp = TcpStream::connect((&*cfg.imap_host, cfg.imap_port));
-            tcp.is_ok()
+    fn health_check<'a>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            let cfg = self.config.clone();
+            tokio::task::spawn_blocking(move || {
+                let tcp = TcpStream::connect((&*cfg.imap_host, cfg.imap_port));
+                tcp.is_ok()
+            })
+            .await
+            .unwrap_or_default()
         })
-        .await
-        .unwrap_or_default()
     }
 }
 

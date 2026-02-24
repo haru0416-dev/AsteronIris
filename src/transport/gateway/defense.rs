@@ -11,16 +11,20 @@ pub(super) struct ExternalIngressPolicyOutcome {
     pub(super) blocked: bool,
 }
 
+/// Apply external ingress policy to incoming content.
 pub(super) fn apply_external_ingress_policy(
     source: &str,
     text: &str,
 ) -> ExternalIngressPolicyOutcome {
     let prepared = prepare_external_content(source, text);
+    let blocked = prepared.action == ExternalAction::Block;
+    let persisted_summary = prepared.persisted_summary.as_memory_value();
+    let model_input = prepared.model_input;
 
     ExternalIngressPolicyOutcome {
-        model_input: prepared.model_input,
-        persisted_summary: prepared.persisted_summary.as_memory_value(),
-        blocked: matches!(prepared.action, ExternalAction::Block),
+        model_input,
+        persisted_summary,
+        blocked,
     }
 }
 
@@ -88,6 +92,19 @@ pub(super) fn policy_violation_response(
 
     let mode = effective_defense_mode(state);
     let reason = violation.reason();
+
+    // Missing all authentication mechanisms must always be blocked.
+    // Audit/warn modes may relax non-auth policy checks, but this condition
+    // would otherwise expose the webhook as unauthenticated.
+    if matches!(violation, PolicyViolation::NoAuthConfigured) {
+        tracing::warn!(
+            mode = ?mode,
+            violation = reason,
+            "Webhook policy violation blocked (hard-enforced auth configuration)"
+        );
+        return Some(violation.enforce_response());
+    }
+
     match mode {
         GatewayDefenseMode::Audit => {
             tracing::warn!(

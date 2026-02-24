@@ -1,13 +1,15 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use asteroniris::core::planner::{PlanExecutor, PlanParser, ToolStepRunner};
-use asteroniris::core::tools::ToolRegistry;
-use asteroniris::core::tools::middleware::ExecutionContext;
-use asteroniris::core::tools::traits::{Tool, ToolResult};
+use asteroniris::planner::{PlanExecutor, PlanParser, ToolStepRunner};
 use asteroniris::security::SecurityPolicy;
-use async_trait::async_trait;
+use asteroniris::tools::ToolRegistry;
+use asteroniris::tools::ToolResult;
+use asteroniris::tools::middleware::ExecutionContext;
+use asteroniris::tools::traits::Tool;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
 
 struct FlakyEchoTool {
     calls: Mutex<u32>,
@@ -21,7 +23,6 @@ impl FlakyEchoTool {
     }
 }
 
-#[async_trait]
 impl Tool for FlakyEchoTool {
     fn name(&self) -> &str {
         "flaky_echo"
@@ -35,32 +36,34 @@ impl Tool for FlakyEchoTool {
         json!({"type":"object","properties":{"msg":{"type":"string"}}})
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> Result<ToolResult> {
-        let mut calls = self.calls.lock().expect("calls lock");
-        *calls += 1;
-        if *calls == 1 {
-            return Ok(ToolResult {
-                success: false,
-                output: "transient failure".to_string(),
-                error: Some("transient".to_string()),
-                attachments: Vec::new(),
-            });
-        }
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut calls = self.calls.lock().expect("calls lock");
+            *calls += 1;
+            if *calls == 1 {
+                return Ok(ToolResult {
+                    success: false,
+                    output: "transient failure".to_string(),
+                    error: Some("transient".to_string()),
+                    attachments: Vec::new(),
+                });
+            }
 
-        let msg = args
-            .get("msg")
-            .and_then(|v| v.as_str())
-            .unwrap_or("ok")
-            .to_string();
-        Ok(ToolResult {
-            success: true,
-            output: msg,
-            error: None,
-            attachments: Vec::new(),
+            let msg = args
+                .get("msg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ok")
+                .to_string();
+            Ok(ToolResult {
+                success: true,
+                output: msg,
+                error: None,
+                attachments: Vec::new(),
+            })
         })
     }
 }

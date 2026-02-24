@@ -10,11 +10,11 @@ pub async fn doctor_channels(config: Arc<Config>) -> Result<()> {
     let channels = factory::build_channels(config.channels_config.clone());
 
     if channels.is_empty() {
-        println!("{}", t!("channels.no_channels_doctor"));
+        println!("No channels configured. Run `asteroniris onboard` to set up channels.");
         return Ok(());
     }
 
-    println!("◆ {}", t!("channels.doctor_title"));
+    println!("Channel doctor:");
     println!();
 
     let mut healthy = 0_u32;
@@ -29,32 +29,24 @@ pub async fn doctor_channels(config: Arc<Config>) -> Result<()> {
         match state {
             ChannelHealthState::Healthy => {
                 healthy += 1;
-                println!("  ✓ {:<9} {}", entry.name, t!("channels.healthy"));
+                println!("  + {:<9} healthy", entry.name);
             }
             ChannelHealthState::Unhealthy => {
                 unhealthy += 1;
-                println!("  ✗ {:<9} {}", entry.name, t!("channels.unhealthy"));
+                println!("  - {:<9} unhealthy", entry.name);
             }
             ChannelHealthState::Timeout => {
                 timeout += 1;
-                println!("  ! {:<9} {}", entry.name, t!("channels.timed_out"));
+                println!("  ! {:<9} timed out", entry.name);
             }
         }
     }
 
     if config.channels_config.webhook.is_some() {
-        println!("  › {}", t!("channels.webhook_hint"));
+        println!("  > Webhook endpoint is configured (check gateway health separately)");
     }
 
     println!();
-    println!(
-        "{}",
-        t!(
-            "channels.doctor_summary",
-            healthy = healthy,
-            unhealthy = unhealthy,
-            timeout = timeout
-        )
-    );
+    println!("Summary: {healthy} healthy, {unhealthy} unhealthy, {timeout} timed out");
     Ok(())
 }

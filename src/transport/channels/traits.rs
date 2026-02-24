@@ -1,4 +1,5 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 
 #[derive(Debug, Clone)]
 pub struct MediaAttachment {
@@ -32,56 +33,75 @@ pub struct ChannelMessage {
 }
 
 /// Core channel trait — implement for any messaging platform
-#[async_trait]
 pub trait Channel: Send + Sync {
     /// Human-readable channel name
     fn name(&self) -> &str;
 
     /// Send a message through this channel
-    async fn send(&self, message: &str, recipient: &str) -> anyhow::Result<()>;
+    fn send<'a>(
+        &'a self,
+        message: &'a str,
+        recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
     /// Start listening for incoming messages (long-running)
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()>;
+    fn listen<'a>(
+        &'a self,
+        tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
     /// Check if channel is healthy
-    async fn health_check(&self) -> bool {
-        true
+    fn health_check<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move { true })
     }
 
     fn max_message_length(&self) -> usize {
         usize::MAX
     }
 
-    async fn send_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-        Ok(())
+    fn send_typing<'a>(
+        &'a self,
+        _recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move { Ok(()) })
     }
 
-    async fn send_media(
-        &self,
-        _attachment: &MediaAttachment,
-        _recipient: &str,
-    ) -> anyhow::Result<()> {
-        anyhow::bail!("media sending not supported by this channel")
+    fn send_media<'a>(
+        &'a self,
+        _attachment: &'a MediaAttachment,
+        _recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move { anyhow::bail!("media sending not supported by this channel") })
     }
 
-    async fn edit_message(
-        &self,
-        _channel_id: &str,
-        _message_id: &str,
-        _content: &str,
-    ) -> anyhow::Result<()> {
-        anyhow::bail!("message editing not supported by this channel")
+    fn edit_message<'a>(
+        &'a self,
+        _channel_id: &'a str,
+        _message_id: &'a str,
+        _content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move { anyhow::bail!("message editing not supported by this channel") })
     }
 
-    async fn delete_message(&self, _channel_id: &str, _message_id: &str) -> anyhow::Result<()> {
-        anyhow::bail!("message deletion not supported by this channel")
+    fn delete_message<'a>(
+        &'a self,
+        _channel_id: &'a str,
+        _message_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move { anyhow::bail!("message deletion not supported by this channel") })
     }
 
-    async fn send_chunked(&self, message: &str, recipient: &str) -> anyhow::Result<()> {
-        let chunks = super::chunker::chunk_message(message, self.max_message_length());
-        for chunk in chunks {
-            self.send(&chunk, recipient).await?;
-        }
-        Ok(())
+    fn send_chunked<'a>(
+        &'a self,
+        message: &'a str,
+        recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let chunks = super::chunker::chunk_message(message, self.max_message_length());
+            for chunk in chunks {
+                self.send(&chunk, recipient).await?;
+            }
+            Ok(())
+        })
     }
 }

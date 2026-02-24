@@ -179,7 +179,7 @@ pub fn setup_provider() -> Result<(String, String, String, Option<String>)> {
         || provider_name == "google"
         || provider_name == "google-gemini"
     {
-        if crate::core::providers::gemini::GeminiProvider::has_cli_credentials() {
+        if crate::llm::gemini::GeminiProvider::has_cli_credentials() {
             print_bullet(&format!(
                 "{} {}",
                 ui::success("✓"),
@@ -244,18 +244,20 @@ pub fn setup_provider() -> Result<(String, String, String, Option<String>)> {
 
         if selected_auth == 1 {
             print_bullet(&t!("onboard.provider.oauth_import_start"));
-            match crate::security::auth::import_oauth_access_token_for_provider(provider_name) {
-                Ok(Some((token, source))) => {
+            match crate::security::oauth::import_oauth_access_token_for_provider_with_login(
+                provider_name,
+                false,
+                None,
+            ) {
+                Ok(imported) => {
+                    let token = imported.access_token;
+                    let source = imported.source_name.to_string();
                     oauth_source = Some(source);
                     print_bullet(&t!(
                         "onboard.provider.oauth_import_success",
                         source = ui::value(oauth_source.as_deref().unwrap_or("oauth"))
                     ));
                     token
-                }
-                Ok(None) => {
-                    print_bullet(&t!("onboard.provider.oauth_import_unavailable"));
-                    prompt_api_key_for_provider(provider_name)?
                 }
                 Err(err) => {
                     print_bullet(&t!(
@@ -426,5 +428,12 @@ pub fn setup_provider() -> Result<(String, String, String, Option<String>)> {
         )
     );
 
-    Ok((provider_name.to_string(), api_key, model, oauth_source))
+    let resolved_provider = if provider_name == "openai" && oauth_source.as_deref() == Some("codex")
+    {
+        "openai-codex"
+    } else {
+        provider_name
+    };
+
+    Ok((resolved_provider.to_string(), api_key, model, oauth_source))
 }

@@ -1,7 +1,7 @@
 use super::constants::MAX_LIST_ITEM_CHARS;
 use super::profile_validators::contains_poison_pattern;
 use super::types::WritebackGuardVerdict;
-use crate::core::providers::sanitize_api_error;
+use crate::llm::sanitize_api_error;
 use serde_json::{Map, Value};
 
 pub(super) type ValidationResult<T> = std::result::Result<T, String>;

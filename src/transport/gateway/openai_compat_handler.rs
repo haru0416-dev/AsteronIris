@@ -1,6 +1,9 @@
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
-use crate::core::tools::middleware::ExecutionContext;
+use crate::agent::{
+    IntegrationRuntimeTurnOptions, IntegrationTurnParams, LoopStopReason,
+    run_main_session_turn_for_runtime_with_policy,
+};
 use crate::security::policy::TenantPolicyContext;
+use crate::tools::ExecutionContext;
 use crate::transport::gateway::AppState;
 use crate::transport::gateway::openai_compat_auth::validate_api_key;
 use crate::transport::gateway::openai_compat_streaming::build_sse_response;
@@ -12,18 +15,46 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};
 use std::sync::Arc;
 
+#[allow(clippy::too_many_lines)]
 pub async fn handle_chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse {
-    let auth_disabled = state.openai_compat_api_keys.is_none();
+    let pairing_active = state.pairing.is_paired() || state.pairing.require_pairing();
+
+    // Primary auth: pairing bearer token (if pairing is active)
+    let pairing_ok = if pairing_active {
+        bearer_token(&headers).is_some_and(|token| state.pairing.is_authenticated(token))
+    } else {
+        false
+    };
+
+    // Secondary auth: OpenAI-compat API key check
     let api_keys = state.openai_compat_api_keys.as_deref().unwrap_or(&[]);
-    if !validate_api_key(&headers, api_keys, auth_disabled) {
+    let api_key_ok = { validate_api_key(&headers, api_keys) };
+
+    if !pairing_active && api_keys.is_empty() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": {
+                    "message": "No authentication configured. Enable pairing or configure gateway.openai_compat_api_keys.",
+                    "type": "invalid_request_error"
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    if !pairing_ok && !api_key_ok {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
-                "error": { "message": "Invalid API key", "type": "invalid_request_error" }
+                "error": {
+                    "message": "Unauthorized — pair first via POST /pair or send a valid API key",
+                    "type": "invalid_request_error"
+                }
             })),
         )
             .into_response();
@@ -33,33 +64,44 @@ pub async fn handle_chat_completions(
     let temperature = request.temperature.unwrap_or(state.temperature);
     let model = request.model;
     let source_identifier = bearer_token(&headers).unwrap_or("openai-compat");
-    let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
+    let entity_id = format!("gateway:{source_identifier}");
+    let policy_context = TenantPolicyContext::disabled();
     let ctx = ExecutionContext {
         security: Arc::clone(&state.security),
         autonomy_level: state.security.autonomy,
-        entity_id: format!("gateway:{source_identifier}"),
+        entity_id: entity_id.clone(),
         turn_number: 0,
         workspace_dir: state.security.workspace_dir.clone(),
         allowed_tools: None,
-        permission_store: Some(Arc::clone(&state.permission_store)),
         rate_limiter: Arc::clone(&state.rate_limiter),
-        tenant_context: TenantPolicyContext::disabled(),
-        approval_broker: None,
+        tenant_context: policy_context.clone(),
     };
 
-    match tool_loop
-        .run(ToolLoopRunParams {
-            provider: state.provider.as_ref(),
+    match run_main_session_turn_for_runtime_with_policy(
+        IntegrationTurnParams {
+            config: state.config.as_ref(),
+            security: state.security.as_ref(),
+            mem: Arc::clone(&state.mem),
+            answer_provider: state.provider.as_ref(),
+            reflect_provider: state.provider.as_ref(),
             system_prompt: system_prompt.as_deref().unwrap_or_default(),
-            user_message: &user_message,
-            image_content: &[],
-            model: &model,
+            model_name: &model,
             temperature,
-            ctx: &ctx,
+            entity_id: &entity_id,
+            policy_context,
+            user_message: &user_message,
+        },
+        IntegrationRuntimeTurnOptions {
+            registry: Arc::clone(&state.registry),
+            max_tool_iterations: state.max_tool_loop_iterations,
+            repeated_tool_call_streak_limit: state.repeated_tool_call_streak_limit,
+            execution_context: ctx,
             stream_sink: None,
             conversation_history: &[],
-        })
-        .await
+            hooks: &[],
+        },
+    )
+    .await
     {
         Ok(result) => {
             if let LoopStopReason::Error(error) = &result.stop_reason {

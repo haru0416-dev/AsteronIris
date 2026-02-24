@@ -67,17 +67,17 @@ pub(super) fn enforce_policy_invariants(
     command: &str,
     route_marker: &str,
 ) -> Result<(), String> {
-    if !security.is_command_allowed(command) {
-        return Err(policy_denial(
-            route_marker,
-            format!("blocked by security policy: command not allowed: {command}"),
-        ));
-    }
-
     if let Some(path) = forbidden_path_argument(security, command) {
         return Err(policy_denial(
             route_marker,
             format!("blocked by security policy: forbidden path argument: {path}"),
+        ));
+    }
+
+    if !security.is_command_allowed(command) {
+        return Err(policy_denial(
+            route_marker,
+            format!("blocked by security policy: command not allowed: {command}"),
         ));
     }
 

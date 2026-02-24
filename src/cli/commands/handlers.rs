@@ -13,7 +13,7 @@ pub fn handle_command(command: &Command) -> CommandResult {
 }
 
 fn handle_status() -> CommandResult {
-    CommandResult::visible("✓ AsteronIris is running.")
+    CommandResult::visible("AsteronIris is running.")
 }
 
 fn handle_new() -> CommandResult {
@@ -41,12 +41,12 @@ fn handle_usage() -> CommandResult {
 
 fn handle_help() -> CommandResult {
     CommandResult::visible(
-        "/status  — Show current status\n\
-         /new     — Start a new session\n\
-         /compact — Summarize session history\n\
-         /think   — Toggle thinking mode (e.g. /think high)\n\
-         /verbose — Toggle verbose output\n\
-         /usage   — Show token usage statistics\n\
-         /help    — Show this help message",
+        "/status  -- Show current status\n\
+         /new     -- Start a new session\n\
+         /compact -- Summarize session history\n\
+         /think   -- Toggle thinking mode (e.g. /think high)\n\
+         /verbose -- Toggle verbose output\n\
+         /usage   -- Show token usage statistics\n\
+         /help    -- Show this help message",
     )
 }

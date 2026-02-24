@@ -2,18 +2,19 @@ use super::handlers::{handle_health, handle_pair, handle_webhook};
 #[cfg(feature = "whatsapp")]
 use super::handlers::{handle_whatsapp_message, handle_whatsapp_verify};
 use super::openai_compat_handler::handle_chat_completions;
+use super::pairing::PairingGuard;
 use super::replay_guard::ReplayGuard;
 use super::websocket::ws_handler;
 use super::{AppState, MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS};
 
 use crate::config::Config;
-use crate::core::memory::{self, Memory};
-use crate::core::providers::{self, Provider};
-use crate::core::tools;
-use crate::core::tools::ToolRegistry;
-use crate::security::auth::AuthBroker;
-use crate::security::pairing::{PairingGuard, is_public_bind};
-use crate::security::{EntityRateLimiter, PermissionStore, SecurityPolicy};
+use crate::llm;
+use crate::memory;
+use crate::memory::Memory;
+use crate::security::policy::{EntityRateLimiter, SecurityPolicy};
+use crate::tools;
+use crate::tools::ToolRegistry;
+use crate::tools::middleware::default_middleware_chain;
 #[cfg(feature = "whatsapp")]
 use crate::transport::channels::WhatsAppChannel;
 use anyhow::{Context, Result};
@@ -29,13 +30,21 @@ use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
+/// Returns true when the bind address is not a loopback address.
+fn is_public_bind(host: &str) -> bool {
+    !matches!(
+        host,
+        "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0:0:0:0:0:0:0:1"
+    )
+}
+
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
 pub async fn run_gateway(host: &str, port: u16, config: Arc<Config>) -> Result<()> {
     // ── Security: refuse public bind without tunnel or explicit opt-in ──
     if is_public_bind(host) && config.tunnel.provider == "none" && !config.gateway.allow_public_bind
     {
         anyhow::bail!(
-            "🛑 Refusing to bind to {host} — gateway would be exposed to the internet.\n\
+            "Refusing to bind to {host} — gateway would be exposed to the internet.\n\
              Fix: use --host 127.0.0.1 (default), configure a tunnel, or set\n\
              [gateway] allow_public_bind = true in config.toml (NOT recommended)."
         );
@@ -52,31 +61,25 @@ pub async fn run_gateway(host: &str, port: u16, config: Arc<Config>) -> Result<(
 }
 
 struct GatewayResources {
-    provider: Arc<dyn Provider>,
+    provider: Arc<dyn llm::Provider>,
     model: String,
     temperature: f64,
     mem: Arc<dyn Memory>,
     security: Arc<SecurityPolicy>,
     rate_limiter: Arc<EntityRateLimiter>,
-    permission_store: Arc<PermissionStore>,
     registry: Arc<ToolRegistry>,
 }
 
-fn composio_key(config: &Config) -> Option<&str> {
-    if config.composio.enabled {
-        config.composio.api_key.as_deref()
-    } else {
-        None
-    }
-}
-
-fn build_gateway_resources(config: &Config, auth_broker: &AuthBroker) -> Result<GatewayResources> {
-    let provider: Arc<dyn Provider> = Arc::from(
-        providers::create_resilient_provider_with_oauth_recovery(
+async fn build_gateway_resources(config: &Config) -> Result<GatewayResources> {
+    let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
+    let api_key = llm::factory::resolve_api_key(provider_name, config.api_key.as_deref());
+    let config_api_key = config.api_key.clone();
+    let provider: Arc<dyn llm::Provider> = Arc::from(
+        llm::create_resilient_provider_with_oauth_recovery(
             config,
-            config.default_provider.as_deref().unwrap_or("openrouter"),
+            provider_name,
             &config.reliability,
-            |name| auth_broker.resolve_provider_api_key(name),
+            move |name| llm::factory::resolve_api_key(name, config_api_key.as_deref()),
         )
         .context("create resilient LLM provider")?,
     );
@@ -86,13 +89,14 @@ fn build_gateway_resources(config: &Config, auth_broker: &AuthBroker) -> Result<
         .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
     let temperature = config.default_temperature;
 
-    let memory_api_key = auth_broker.resolve_memory_api_key(&config.memory);
+    let memory_api_key = api_key; // TODO: dedicated memory API key resolution
     let mem: Arc<dyn Memory> = Arc::from(
-        memory::create_memory(
+        memory::factory::create_memory(
             &config.memory,
             &config.workspace_dir,
             memory_api_key.as_deref(),
         )
+        .await
         .context("create memory backend for gateway")?,
     );
 
@@ -104,39 +108,10 @@ fn build_gateway_resources(config: &Config, auth_broker: &AuthBroker) -> Result<
         config.autonomy.max_actions_per_hour,
         config.autonomy.max_actions_per_entity_per_hour,
     ));
-    let permission_store = Arc::new(PermissionStore::load(&config.workspace_dir));
 
-    #[cfg(feature = "taste")]
-    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = if config.taste.enabled
-    {
-        let provider_name = config.default_provider.as_deref().unwrap_or("anthropic");
-        let api_key = auth_broker.resolve_provider_api_key(provider_name);
-        providers::create_provider_with_oauth_recovery(config, provider_name, api_key.as_deref())
-            .ok()
-            .map(|p| Arc::from(p) as Arc<dyn crate::core::providers::Provider>)
-    } else {
-        None
-    };
-    #[cfg(not(feature = "taste"))]
-    let taste_provider: Option<Arc<dyn crate::core::providers::Provider>> = None;
-
-    let tools = tools::all_tools(
-        &security,
-        Arc::clone(&mem),
-        composio_key(config),
-        &config.browser,
-        &config.tools,
-        Some(&config.mcp),
-        &config.taste,
-        taste_provider,
-        config
-            .default_model
-            .as_deref()
-            .unwrap_or("anthropic/claude-sonnet-4-20250514"),
-    );
-    let middleware = tools::default_middleware_chain();
-    let mut registry = ToolRegistry::new(middleware);
-    for tool in tools {
+    let tool_list = tools::all_tools(Arc::clone(&mem));
+    let mut registry = ToolRegistry::new(default_middleware_chain());
+    for tool in tool_list {
         registry.register(tool);
     }
 
@@ -147,7 +122,6 @@ fn build_gateway_resources(config: &Config, auth_broker: &AuthBroker) -> Result<
         mem,
         security,
         rate_limiter,
-        permission_store,
         registry: Arc::new(registry),
     })
 }
@@ -174,28 +148,40 @@ fn build_whatsapp_channel(config: &Config) -> Option<Arc<WhatsAppChannel>> {
 }
 
 fn build_gateway_state(
-    config: &Config,
+    config: &Arc<Config>,
     resources: GatewayResources,
     pairing: Arc<PairingGuard>,
     webhook_secret: Option<Arc<str>>,
 ) -> AppState {
+    let tool_descs = tools::tool_descriptions();
+    let prompt_tool_descs: Vec<(&str, &str)> = tool_descs
+        .iter()
+        .map(|(name, description)| (name.as_str(), description.as_str()))
+        .collect();
+    let system_prompt = crate::transport::channels::build_system_prompt(
+        &config.workspace_dir,
+        &resources.model,
+        &prompt_tool_descs,
+    );
     AppState {
+        config: Arc::clone(config),
         provider: resources.provider,
         registry: resources.registry,
         rate_limiter: resources.rate_limiter,
         max_tool_loop_iterations: config.autonomy.max_tool_loop_iterations,
-        permission_store: resources.permission_store,
+        repeated_tool_call_streak_limit: config.autonomy.repeated_tool_call_streak_limit,
         model: resources.model,
         temperature: resources.temperature,
-        openai_compat_api_keys: None,
+        system_prompt,
+        openai_compat_api_keys: Some(config.gateway.openai_compat_api_keys.clone()),
         mem: resources.mem,
         auto_save: config.memory.auto_save,
         webhook_secret,
         pairing,
         #[cfg(feature = "whatsapp")]
-        whatsapp: build_whatsapp_channel(config),
+        whatsapp: build_whatsapp_channel(config.as_ref()),
         #[cfg(feature = "whatsapp")]
-        whatsapp_app_secret: resolve_whatsapp_app_secret(config),
+        whatsapp_app_secret: resolve_whatsapp_app_secret(config.as_ref()),
         defense_mode: config.gateway.defense_mode,
         defense_kill_switch: config.gateway.defense_kill_switch,
         security: resources.security,
@@ -215,9 +201,7 @@ pub async fn run_gateway_with_listener(
         .port();
     let display_addr = format!("{host}:{actual_port}");
 
-    let auth_broker = AuthBroker::load_or_init(&config).context("load auth broker for gateway")?;
-
-    let resources = build_gateway_resources(&config, &auth_broker)?;
+    let resources = build_gateway_resources(&config).await?;
     let webhook_secret = resolve_webhook_secret(&config);
 
     #[cfg(feature = "whatsapp")]
@@ -231,19 +215,12 @@ pub async fn run_gateway_with_listener(
         Some(config.gateway.token_ttl_secs),
     ));
 
-    let tunnel_url = start_tunnel(&config, host, actual_port)
-        .await
-        .context("start gateway tunnel")?;
-
     print_gateway_banner(
         &display_addr,
-        tunnel_url.as_deref(),
         whatsapp_enabled,
         &pairing,
         webhook_secret.is_some(),
     );
-
-    crate::runtime::diagnostics::health::mark_component_ok("gateway");
 
     let state = build_gateway_state(&config, resources, pairing, webhook_secret);
 
@@ -276,63 +253,33 @@ fn resolve_whatsapp_app_secret(config: &Config) -> Option<Arc<str>> {
         .map(Arc::from)
 }
 
-async fn start_tunnel(config: &Config, host: &str, port: u16) -> Result<Option<String>> {
-    let tunnel = crate::runtime::tunnel::create_tunnel(&config.tunnel)
-        .context("create tunnel for gateway")?;
-
-    let Some(ref tun) = tunnel else {
-        return Ok(None);
-    };
-
-    println!("› {}", t!("gateway.tunnel_starting", name = tun.name()));
-    match tun.start(host, port).await {
-        Ok(url) => {
-            println!("✓ {}", t!("gateway.tunnel_active", url = url));
-            Ok(Some(url))
-        }
-        Err(e) => {
-            println!("! {}", t!("gateway.tunnel_failed", error = e));
-            println!("   {}", t!("gateway.tunnel_fallback"));
-            Ok(None)
-        }
-    }
-}
-
 fn print_gateway_banner(
     display_addr: &str,
-    tunnel_url: Option<&str>,
     whatsapp_enabled: bool,
     pairing: &PairingGuard,
     webhook_secret_enabled: bool,
 ) {
-    println!("◆ {}", t!("gateway.listening", addr = display_addr));
-    if let Some(url) = tunnel_url {
-        println!("  › {}", t!("gateway.public_url", url = url));
-    }
-    println!("  {}", t!("gateway.route_pair"));
-    println!("  {}", t!("gateway.route_webhook"));
-    println!("  GET /ws → WebSocket");
+    println!("Gateway listening on {display_addr}");
+    println!("  POST /pair");
+    println!("  POST /webhook");
+    println!("  GET  /ws -> WebSocket");
     if whatsapp_enabled {
-        println!("  {}", t!("gateway.route_whatsapp_get"));
-        println!("  {}", t!("gateway.route_whatsapp_post"));
+        println!("  GET  /whatsapp");
+        println!("  POST /whatsapp");
     }
-    println!("  {}", t!("gateway.route_health"));
+    println!("  GET  /health");
     if let Some(code) = pairing.pairing_code() {
         println!();
-        println!("  ✓ {}", t!("gateway.pairing_required"));
-        println!("     ┌──────────────┐");
-        println!("     │  {code}  │");
-        println!("     └──────────────┘");
-        println!("     {}", t!("gateway.pairing_send", code = code));
+        println!("  Pairing required:");
+        println!("     {code}");
     } else if pairing.require_pairing() {
-        println!("  ✓ {}", t!("gateway.pairing_active"));
+        println!("  Pairing active");
     } else {
-        println!("  ! {}", t!("gateway.pairing_disabled"));
+        println!("  Pairing disabled");
     }
     if webhook_secret_enabled {
-        println!("  ✓ {}", t!("gateway.webhook_secret_enabled"));
+        println!("  Webhook secret enabled");
     }
-    println!("  {}\n", t!("gateway.stop_hint"));
 }
 
 fn build_app(state: AppState, cors_origins: &[String]) -> Router {

@@ -1,25 +1,31 @@
 use super::Tunnel;
 use anyhow::Result;
+use std::future::Future;
+use std::pin::Pin;
 
 /// No-op tunnel — direct local access, no external exposure.
 pub struct NoneTunnel;
 
-#[async_trait::async_trait]
 impl Tunnel for NoneTunnel {
     fn name(&self) -> &str {
         "none"
     }
 
-    async fn start(&self, local_host: &str, local_port: u16) -> Result<String> {
-        Ok(format!("http://{local_host}:{local_port}"))
+    fn start<'a>(
+        &'a self,
+        local_host: &'a str,
+        local_port: u16,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        let url = format!("http://{local_host}:{local_port}");
+        Box::pin(async move { Ok(url) })
     }
 
-    async fn stop(&self) -> Result<()> {
-        Ok(())
+    fn stop(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move { Ok(()) })
     }
 
-    async fn health_check(&self) -> bool {
-        true
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move { true })
     }
 
     fn public_url(&self) -> Option<String> {

@@ -3,9 +3,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use asteroniris::config::PersonaConfig;
-use asteroniris::core::memory::{Memory, SqliteMemory};
-use asteroniris::core::persona::state_header::StateHeader;
-use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
+use asteroniris::memory::{Memory, SqliteMemory};
+use asteroniris::persona::state_header::StateHeader;
+use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use tempfile::TempDir;
 
 fn state_for_turn(turn: u8) -> StateHeader {
@@ -21,8 +21,8 @@ fn state_for_turn(turn: u8) -> StateHeader {
     }
 }
 
-fn persistence_for_workspace(workspace_dir: &Path) -> BackendCanonicalStateHeaderPersistence {
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(workspace_dir).unwrap());
+async fn persistence_for_workspace(workspace_dir: &Path) -> BackendCanonicalStateHeaderPersistence {
+    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(workspace_dir).await.unwrap());
     let persona = PersonaConfig {
         state_mirror_filename: "STATE.md".to_string(),
         ..PersonaConfig::default()
@@ -38,7 +38,7 @@ fn persistence_for_workspace(workspace_dir: &Path) -> BackendCanonicalStateHeade
 #[tokio::test]
 async fn persona_bootstrap_seeds_minimal_state() {
     let workspace = TempDir::new().unwrap();
-    let persistence = persistence_for_workspace(workspace.path());
+    let persistence = persistence_for_workspace(workspace.path()).await;
 
     let seeded = persistence
         .reconcile_mirror_from_backend_on_startup()
@@ -63,7 +63,7 @@ async fn continuity_across_restart_preserves_latest_backend_state_and_repairs_mi
     let workspace = TempDir::new().unwrap();
 
     {
-        let persistence = persistence_for_workspace(workspace.path());
+        let persistence = persistence_for_workspace(workspace.path()).await;
         let turn1 = state_for_turn(1);
         persistence
             .persist_backend_canonical_and_sync_mirror(&turn1)
@@ -84,7 +84,7 @@ async fn continuity_across_restart_preserves_latest_backend_state_and_repairs_mi
     )
     .unwrap();
 
-    let restarted = persistence_for_workspace(workspace.path());
+    let restarted = persistence_for_workspace(workspace.path()).await;
     let recovered = restarted
         .reconcile_mirror_from_backend_on_startup()
         .await

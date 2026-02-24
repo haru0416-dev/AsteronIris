@@ -9,11 +9,12 @@ pub use github::GitHubScout;
 pub use huggingface::HuggingFaceScout;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 
-// ── ScoutSource ──────────────────────────────────────────────────────────────
+// -- ScoutSource --
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScoutSource {
@@ -38,7 +39,7 @@ impl std::str::FromStr for ScoutSource {
     }
 }
 
-// ── ScoutResult ──────────────────────────────────────────────────────────────
+// -- ScoutResult --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoutResult {
@@ -55,17 +56,16 @@ pub struct ScoutResult {
     pub has_license: bool,
 }
 
-// ── Scout trait ──────────────────────────────────────────────────────────────
+// -- Scout trait --
 
-#[async_trait]
 pub trait Scout: Send + Sync {
     /// Discover candidate skills from the source.
-    async fn discover(&self) -> Result<Vec<ScoutResult>>;
+    fn discover(&self) -> Pin<Box<dyn Future<Output = Result<Vec<ScoutResult>>> + Send + '_>>;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers --
 
-/// Minimal percent-encoding for query strings (space → +).
+/// Minimal percent-encoding for query strings (space -> +).
 pub(crate) fn urlencoding(s: &str) -> String {
     s.replace(' ', "+").replace('&', "%26").replace('#', "%23")
 }
@@ -86,7 +86,7 @@ pub fn dedup(results: &mut Vec<ScoutResult>) {
     results.retain(|r| seen.insert(r.url.clone()));
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// -- Tests --
 
 #[cfg(test)]
 mod tests {

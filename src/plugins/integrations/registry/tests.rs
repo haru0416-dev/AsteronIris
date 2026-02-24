@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::Config;
-use crate::config::schema::{IMessageConfig, MatrixConfig, TelegramConfig};
+use crate::config::{IMessageConfig, MatrixConfig, TelegramConfig};
 use crate::plugins::integrations::{IntegrationCategory, IntegrationStatus};
 
 #[test]

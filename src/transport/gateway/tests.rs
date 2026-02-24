@@ -1,19 +1,22 @@
+use super::pairing::{PairingGuard, hash_token};
 use super::*;
+use crate::Config;
 use crate::config::GatewayDefenseMode;
-use crate::core::memory::Memory;
-use crate::core::providers::Provider;
-use crate::core::tools::ToolRegistry;
+use crate::llm::Provider;
+use crate::memory::Memory;
 use crate::security::SecurityPolicy;
-use crate::security::pairing::{PairingGuard, hash_token};
+use crate::tools::ToolRegistry;
 #[cfg(feature = "whatsapp")]
 use crate::transport::channels::WhatsAppChannel;
-use async_trait::async_trait;
+#[cfg(feature = "whatsapp")]
+use axum::{body::Bytes, extract::Query};
 use axum::{
-    body::Bytes,
-    extract::{Query, State},
+    extract::State,
     http::HeaderMap,
     response::{IntoResponse, Json},
 };
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
@@ -30,17 +33,22 @@ struct CountingProvider {
     calls: Arc<AtomicUsize>,
 }
 
-#[async_trait]
 impl Provider for CountingProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn name(&self) -> &str {
+        "counting-test"
+    }
+
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> anyhow::Result<String> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok("ok".to_string())
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok("ok".to_string())
+        })
     }
 }
 
@@ -83,9 +91,9 @@ fn app_state_is_clone() {
     assert_clone::<AppState>();
 }
 
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 // WhatsApp Signature Verification Tests (CWE-345 Prevention)
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 
 #[cfg(feature = "whatsapp")]
 fn compute_whatsapp_signature_hex(secret: &str, body: &[u8]) -> String {
@@ -105,7 +113,6 @@ fn compute_whatsapp_signature_header(secret: &str, body: &[u8]) -> String {
 #[cfg(feature = "whatsapp")]
 #[test]
 fn whatsapp_signature_valid() {
-    // Test with known values
     let app_secret = "test_secret_key";
     let body = b"test body content";
 
@@ -143,7 +150,6 @@ fn whatsapp_signature_invalid_wrong_body() {
 
     let signature_header = compute_whatsapp_signature_header(app_secret, original_body);
 
-    // Verify with tampered body should fail
     assert!(!verify_whatsapp_signature(
         app_secret,
         tampered_body,
@@ -157,7 +163,6 @@ fn whatsapp_signature_missing_prefix() {
     let app_secret = "test_secret";
     let body = b"test body";
 
-    // Signature without "sha256=" prefix
     let signature_header = "abc123def456";
 
     assert!(!verify_whatsapp_signature(
@@ -182,7 +187,6 @@ fn whatsapp_signature_invalid_hex() {
     let app_secret = "test_secret";
     let body = b"test body";
 
-    // Invalid hex characters
     let signature_header = "sha256=not_valid_hex_zzz";
 
     assert!(!verify_whatsapp_signature(
@@ -211,7 +215,7 @@ fn whatsapp_signature_empty_body() {
 #[test]
 fn whatsapp_signature_unicode_body() {
     let app_secret = "test_secret";
-    let body = "Hello 🦀 世界".as_bytes();
+    let body = "Hello \u{1f980} \u{4e16}\u{754c}".as_bytes();
 
     let signature_header = compute_whatsapp_signature_header(app_secret, body);
 
@@ -245,11 +249,9 @@ fn whatsapp_signature_case_sensitive_prefix() {
 
     let hex_sig = compute_whatsapp_signature_hex(app_secret, body);
 
-    // Wrong case prefix should fail
     let wrong_prefix = format!("SHA256={hex_sig}");
     assert!(!verify_whatsapp_signature(app_secret, body, &wrong_prefix));
 
-    // Correct prefix should pass
     let correct_prefix = format!("sha256={hex_sig}");
     assert!(verify_whatsapp_signature(app_secret, body, &correct_prefix));
 }
@@ -261,7 +263,7 @@ fn whatsapp_signature_truncated_hex() {
     let body = b"test body";
 
     let hex_sig = compute_whatsapp_signature_hex(app_secret, body);
-    let truncated = &hex_sig[..32]; // Only half the signature
+    let truncated = &hex_sig[..32];
     let signature_header = format!("sha256={truncated}");
 
     assert!(!verify_whatsapp_signature(
@@ -306,16 +308,18 @@ async fn webhook_policy_blocks_when_action_limit_is_exhausted() {
     let provider: Arc<dyn Provider> = Arc::new(CountingProvider {
         calls: calls.clone(),
     });
-    let mem: Arc<dyn Memory> = Arc::new(crate::core::memory::MarkdownMemory::new(tmp.path()));
+    let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
 
     let state = AppState {
+        config: Arc::new(Config::default()),
         provider,
         registry: test_registry(),
         rate_limiter: test_rate_limiter(),
         max_tool_loop_iterations: 10,
-        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
+        repeated_tool_call_streak_limit: 3,
         model: "test-model".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
         mem,
         auto_save: false,
@@ -358,16 +362,18 @@ async fn webhook_audit_mode_still_blocks_missing_bearer_when_paired() {
     let provider: Arc<dyn Provider> = Arc::new(CountingProvider {
         calls: calls.clone(),
     });
-    let mem: Arc<dyn Memory> = Arc::new(crate::core::memory::MarkdownMemory::new(tmp.path()));
+    let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
 
     let state = AppState {
+        config: Arc::new(Config::default()),
         provider,
         registry: test_registry(),
         rate_limiter: test_rate_limiter(),
         max_tool_loop_iterations: 10,
-        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
+        repeated_tool_call_streak_limit: 3,
         model: "test-model".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
         mem,
         auto_save: false,
@@ -397,9 +403,77 @@ async fn webhook_audit_mode_still_blocks_missing_bearer_when_paired() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
-// ══════════════════════════════════════════════════════════
+#[tokio::test]
+async fn webhook_replay_guard_rejects_duplicate_payload() {
+    let tmp = TempDir::new().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn Provider> = Arc::new(CountingProvider {
+        calls: calls.clone(),
+    });
+    let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
+
+    let state = AppState {
+        config: Arc::new(Config::default()),
+        provider,
+        registry: test_registry(),
+        rate_limiter: test_rate_limiter(),
+        max_tool_loop_iterations: 10,
+        repeated_tool_call_streak_limit: 3,
+        model: "test-model".to_string(),
+        temperature: 0.0,
+        system_prompt: "test-system".to_string(),
+        openai_compat_api_keys: None,
+        mem,
+        auto_save: false,
+        webhook_secret: Some(Arc::from("test-secret")),
+        pairing: Arc::new(PairingGuard::new(false, &[], None)),
+        #[cfg(feature = "whatsapp")]
+        whatsapp: None,
+        #[cfg(feature = "whatsapp")]
+        whatsapp_app_secret: None,
+        defense_mode: GatewayDefenseMode::Enforce,
+        defense_kill_switch: false,
+        security: Arc::new(SecurityPolicy::default()),
+        replay_guard: Arc::new(ReplayGuard::new()),
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Webhook-Secret", "test-secret".parse().unwrap());
+
+    let first = handle_webhook(
+        State(state.clone()),
+        headers.clone(),
+        Ok(Json(WebhookBody {
+            message: "same payload".to_string(),
+        })),
+    )
+    .await
+    .into_response();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = handle_webhook(
+        State(state),
+        headers,
+        Ok(Json(WebhookBody {
+            message: "same payload".to_string(),
+        })),
+    )
+    .await
+    .into_response();
+    assert_eq!(second.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .expect("webhook replay response body should be readable");
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).expect("webhook replay response should be valid json");
+    assert_eq!(json.get("status"), Some(&serde_json::json!("duplicate")));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+// ---------------------------------------------------------------
 // Defense helper tests
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 
 #[test]
 fn policy_violation_reason_bearer() {
@@ -440,20 +514,56 @@ fn policy_accounting_response_returns_429() {
 }
 
 #[test]
+fn policy_violation_no_auth_configured_is_blocked_in_audit_mode() {
+    let mut state = make_test_state(PairingGuard::new(false, &[], None));
+    state.defense_mode = GatewayDefenseMode::Audit;
+
+    let response =
+        defense::policy_violation_response(&state, defense::PolicyViolation::NoAuthConfigured)
+            .expect("no-auth violation should return a blocking response");
+    assert_eq!(response.0, StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn policy_violation_no_auth_configured_is_blocked_in_warn_mode() {
+    let mut state = make_test_state(PairingGuard::new(false, &[], None));
+    state.defense_mode = GatewayDefenseMode::Warn;
+
+    let response =
+        defense::policy_violation_response(&state, defense::PolicyViolation::NoAuthConfigured)
+            .expect("no-auth violation should return a blocking response");
+    assert_eq!(response.0, StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn policy_violation_no_auth_configured_is_blocked_with_kill_switch() {
+    let mut state = make_test_state(PairingGuard::new(false, &[], None));
+    state.defense_mode = GatewayDefenseMode::Enforce;
+    state.defense_kill_switch = true;
+
+    let response =
+        defense::policy_violation_response(&state, defense::PolicyViolation::NoAuthConfigured)
+            .expect("no-auth violation should return a blocking response");
+    assert_eq!(response.0, StatusCode::FORBIDDEN);
+}
+
+#[test]
 fn effective_defense_mode_kill_switch_forces_audit() {
     let tmp = TempDir::new().unwrap();
-    let mem: Arc<dyn Memory> = Arc::new(crate::core::memory::MarkdownMemory::new(tmp.path()));
+    let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
     let calls = Arc::new(AtomicUsize::new(0));
     let state = AppState {
+        config: Arc::new(Config::default()),
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
         registry: test_registry(),
         rate_limiter: test_rate_limiter(),
         max_tool_loop_iterations: 10,
-        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
+        repeated_tool_call_streak_limit: 3,
         model: "test".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
         mem,
         auto_save: false,
@@ -474,9 +584,9 @@ fn effective_defense_mode_kill_switch_forces_audit() {
     ));
 }
 
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 // Autosave builder tests
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 
 #[test]
 fn autosave_entity_id_is_person_scoped() {
@@ -497,8 +607,6 @@ fn gateway_runtime_policy_context_is_disabled() {
 
 #[test]
 fn webhook_autosave_event_fields() {
-    use crate::core::memory::traits::MemoryLayer;
-
     let event = autosave::gateway_webhook_autosave_event(
         "person:gateway.sender-01",
         "test summary".to_string(),
@@ -506,7 +614,7 @@ fn webhook_autosave_event_fields() {
     assert_eq!(event.entity_id, "person:gateway.sender-01");
     assert_eq!(event.slot_key, "external.gateway.webhook");
     assert_eq!(event.value, "test summary");
-    assert_eq!(event.layer, MemoryLayer::Working);
+    assert_eq!(event.layer, crate::memory::MemoryLayer::Working);
     assert!((event.confidence - 0.95).abs() < f64::EPSILON);
     assert!((event.importance - 0.5).abs() < f64::EPSILON);
 }
@@ -524,25 +632,27 @@ fn whatsapp_autosave_event_includes_sender() {
     assert!((event.importance - 0.6).abs() < f64::EPSILON);
 }
 
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 // Health handler tests
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 
 fn make_test_state(pairing: PairingGuard) -> AppState {
     let tmp = TempDir::new().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     AppState {
+        config: Arc::new(Config::default()),
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
         registry: test_registry(),
         rate_limiter: test_rate_limiter(),
         max_tool_loop_iterations: 10,
-        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
+        repeated_tool_call_streak_limit: 3,
         model: "test-model".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
-        mem: Arc::new(crate::core::memory::MarkdownMemory::new(tmp.path())),
+        mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
         auto_save: false,
         webhook_secret: None,
         pairing: Arc::new(pairing),
@@ -641,26 +751,28 @@ async fn handle_health_reflects_paired_when_tokens_exist() {
     assert_eq!(json["paired"], true);
 }
 
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 // WhatsApp verify handler tests
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 
 #[cfg(feature = "whatsapp")]
 fn make_whatsapp_state() -> AppState {
     let tmp = TempDir::new().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     AppState {
+        config: Arc::new(Config::default()),
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
         registry: test_registry(),
         rate_limiter: test_rate_limiter(),
         max_tool_loop_iterations: 10,
-        permission_store: Arc::new(crate::security::PermissionStore::load(tmp.path())),
+        repeated_tool_call_streak_limit: 3,
         model: "test-model".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
-        mem: Arc::new(crate::core::memory::MarkdownMemory::new(tmp.path())),
+        mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
         auto_save: false,
         webhook_secret: None,
         pairing: Arc::new(PairingGuard::new(false, &[], None)),
@@ -676,6 +788,13 @@ fn make_whatsapp_state() -> AppState {
         security: Arc::new(SecurityPolicy::default()),
         replay_guard: Arc::new(ReplayGuard::new()),
     }
+}
+
+#[cfg(feature = "whatsapp")]
+fn make_whatsapp_state_without_app_secret() -> AppState {
+    let mut state = make_whatsapp_state();
+    state.whatsapp_app_secret = None;
+    state
 }
 
 #[cfg(feature = "whatsapp")]
@@ -767,9 +886,9 @@ async fn whatsapp_verify_returns_404_when_not_configured() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 // WhatsApp message handler tests
-// ══════════════════════════════════════════════════════════
+// ---------------------------------------------------------------
 
 #[cfg(feature = "whatsapp")]
 #[tokio::test]
@@ -800,6 +919,17 @@ async fn whatsapp_message_rejects_invalid_signature() {
 
 #[cfg(feature = "whatsapp")]
 #[tokio::test]
+async fn whatsapp_message_rejects_when_app_secret_is_missing() {
+    let state = make_whatsapp_state_without_app_secret();
+    let response =
+        handle_whatsapp_message(State(state), HeaderMap::new(), Bytes::from_static(b"{}"))
+            .await
+            .into_response();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[cfg(feature = "whatsapp")]
+#[tokio::test]
 async fn whatsapp_message_rejects_invalid_json() {
     let state = make_whatsapp_state();
     let payload = b"not json";
@@ -816,7 +946,7 @@ async fn whatsapp_message_rejects_invalid_json() {
 #[tokio::test]
 async fn whatsapp_message_ack_empty_messages() {
     let state = make_whatsapp_state();
-    // Status update payload — no actual messages
+    // Status update payload -- no actual messages
     let payload = br#"{"entry":[{"changes":[{"value":{"statuses":[{"id":"wamid.xxx","status":"delivered"}]}}]}]}"#;
     let sig = compute_whatsapp_signature_header("test-app-secret", payload.as_slice());
     let mut headers = HeaderMap::new();

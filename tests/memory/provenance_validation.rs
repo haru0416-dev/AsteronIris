@@ -1,18 +1,20 @@
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
     SqliteMemory,
 };
 use tempfile::TempDir;
 
-fn sqlite_memory() -> (TempDir, SqliteMemory) {
+async fn sqlite_memory() -> (TempDir, SqliteMemory) {
     let temp = TempDir::new().expect("temp dir should be created");
-    let memory = SqliteMemory::new(temp.path()).expect("sqlite memory should initialize");
+    let memory = SqliteMemory::new(temp.path())
+        .await
+        .expect("sqlite memory should initialize");
     (temp, memory)
 }
 
 #[tokio::test]
 async fn memory_provenance_validation_accepts_valid() {
-    let (_temp, memory) = sqlite_memory();
+    let (_temp, memory) = sqlite_memory().await;
     let input = MemoryEventInput::new(
         "entity-1",
         "profile.locale",
@@ -48,7 +50,7 @@ async fn memory_provenance_validation_accepts_valid() {
 
 #[tokio::test]
 async fn memory_provenance_validation_rejects_invalid() {
-    let (_temp, memory) = sqlite_memory();
+    let (_temp, memory) = sqlite_memory().await;
 
     let source_mismatch = MemoryEventInput::new(
         "entity-1",

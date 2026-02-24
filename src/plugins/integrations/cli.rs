@@ -3,14 +3,8 @@ use crate::plugins::integrations::{IntegrationStatus, registry};
 use crate::ui::style as ui;
 use anyhow::Result;
 
-/// Handle the `integrations` CLI command
-pub fn handle_command(command: crate::IntegrationCommands, config: &Config) -> Result<()> {
-    match command {
-        crate::IntegrationCommands::Info { name } => show_integration_info(config, &name),
-    }
-}
-
-fn show_integration_info(config: &Config, name: &str) -> Result<()> {
+/// Show information about a specific integration.
+pub fn show_integration_info(config: &Config, name: &str) -> Result<()> {
     let entries = registry::all_integrations();
     let name_lower = name.to_lowercase();
 
@@ -22,9 +16,9 @@ fn show_integration_info(config: &Config, name: &str) -> Result<()> {
 
     let status = (entry.status_fn)(config);
     let (icon, label) = match status {
-        IntegrationStatus::Active => ("✅", "Active"),
-        IntegrationStatus::Available => ("⚪", "Available"),
-        IntegrationStatus::ComingSoon => ("🔜", "Coming Soon"),
+        IntegrationStatus::Active => (">>", "Active"),
+        IntegrationStatus::Available => ("--", "Available"),
+        IntegrationStatus::ComingSoon => ("..", "Coming Soon"),
     };
 
     println!();
@@ -50,14 +44,14 @@ fn show_integration_info(config: &Config, name: &str) -> Result<()> {
         "Discord" => {
             println!("  Setup:");
             println!("    1. Go to https://discord.com/developers/applications");
-            println!("    2. Create app → Bot → Copy token");
+            println!("    2. Create app -> Bot -> Copy token");
             println!("    3. Enable MESSAGE CONTENT intent");
             println!("    4. Run: asteroniris onboard");
         }
         "Slack" => {
             println!("  Setup:");
             println!("    1. Go to https://api.slack.com/apps");
-            println!("    2. Create app → Bot Token Scopes → Install");
+            println!("    2. Create app -> Bot Token Scopes -> Install");
             println!("    3. Run: asteroniris onboard");
         }
         "OpenRouter" => {
@@ -75,7 +69,7 @@ fn show_integration_info(config: &Config, name: &str) -> Result<()> {
         "iMessage" => {
             println!("  Setup (macOS only):");
             println!("    Uses AppleScript bridge to send/receive iMessages.");
-            println!("    Requires Full Disk Access in System Settings → Privacy.");
+            println!("    Requires Full Disk Access in System Settings -> Privacy.");
         }
         "GitHub" => {
             println!("  Setup:");

@@ -1,14 +1,15 @@
 #![allow(dead_code, clippy::needless_lifetimes, clippy::cast_precision_loss)]
 
 use std::fmt;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use tempfile::TempDir;
 
-use asteroniris::core::memory::embeddings::EmbeddingProvider;
-use asteroniris::core::memory::{
+use asteroniris::memory::embeddings::EmbeddingProvider;
+use asteroniris::memory::{
     CapabilitySupport, ForgetMode, LanceDbMemory, MarkdownMemory, Memory, MemoryCapabilityMatrix,
     MemoryCategory, MemoryEventInput, MemoryEventType, MemoryRecallItem, MemorySource,
     PrivacyLevel, RecallQuery, SqliteMemory, backend_capability_matrix,
@@ -60,7 +61,6 @@ impl DeterministicEmbeddingProvider {
     }
 }
 
-#[async_trait]
 impl EmbeddingProvider for DeterministicEmbeddingProvider {
     fn name(&self) -> &str {
         "memory-test-harness"
@@ -70,21 +70,28 @@ impl EmbeddingProvider for DeterministicEmbeddingProvider {
         self.dims
     }
 
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-        let mut vectors = Vec::with_capacity(texts.len());
-        for text in texts {
-            let mut vector = Vec::with_capacity(self.dims);
-            for idx in 0..self.dims {
-                vector.push(self.embed_value(text, idx));
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [&'a str],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut vectors = Vec::with_capacity(texts.len());
+            for text in texts {
+                let mut vector = Vec::with_capacity(self.dims);
+                for idx in 0..self.dims {
+                    vector.push(self.embed_value(text, idx));
+                }
+                vectors.push(vector);
             }
-            vectors.push(vector);
-        }
-        Ok(vectors)
+            Ok(vectors)
+        })
     }
 }
 
-pub fn sqlite_memory_from_path(path: &Path) -> SqliteMemory {
-    SqliteMemory::new(path).expect("sqlite memory backend should initialize")
+pub async fn sqlite_memory_from_path(path: &Path) -> SqliteMemory {
+    SqliteMemory::new(path)
+        .await
+        .expect("sqlite memory backend should initialize")
 }
 
 pub fn markdown_memory_from_path(path: &Path) -> MarkdownMemory {
@@ -105,9 +112,9 @@ pub fn lancedb_memory_from_path(path: &Path) -> LanceDbMemory {
     .expect("lancedb memory backend should initialize with deterministic embedder")
 }
 
-pub fn sqlite_fixture() -> (TempDir, SqliteMemory) {
+pub async fn sqlite_fixture() -> (TempDir, SqliteMemory) {
     let temp_dir = TempDir::new().expect("temp directory should be created");
-    let memory = sqlite_memory_from_path(temp_dir.path());
+    let memory = sqlite_memory_from_path(temp_dir.path()).await;
     (temp_dir, memory)
 }
 

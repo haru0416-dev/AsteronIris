@@ -1,7 +1,7 @@
 use arrow_array::{Float64Array, StringArray};
 use asteroniris::config::MemoryConfig;
-use asteroniris::core::memory::traits::MemoryLayer;
-use asteroniris::core::memory::{
+use asteroniris::memory::traits::MemoryLayer;
+use asteroniris::memory::{
     CapabilitySupport, ForgetMode, Memory, MemoryEventInput, MemoryEventType, MemoryProvenance,
     MemorySource, PrivacyLevel, RecallQuery, backend_capability_matrix,
     capability_matrix_for_backend, capability_matrix_for_memory, create_memory,
@@ -52,14 +52,16 @@ fn memory_capability_rejects_unsupported() {
         .expect("lancedb supports hard delete in contract");
 }
 
-#[test]
-fn memory_capability_matrix_runtime_access() {
+#[tokio::test]
+async fn memory_capability_matrix_runtime_access() {
     let tmp = TempDir::new().expect("temp dir");
     let markdown_cfg = MemoryConfig {
         backend: "markdown".into(),
         ..MemoryConfig::default()
     };
-    let markdown_memory = create_memory(&markdown_cfg, tmp.path(), None).expect("markdown memory");
+    let markdown_memory = create_memory(&markdown_cfg, tmp.path(), None)
+        .await
+        .expect("markdown memory");
     let markdown_caps = capability_matrix_for_memory(markdown_memory.as_ref());
     assert_eq!(markdown_caps.backend, "markdown");
 
@@ -74,7 +76,9 @@ fn memory_capability_matrix_runtime_access() {
         backend: "sqlite".into(),
         ..MemoryConfig::default()
     };
-    let sqlite_memory = create_memory(&sqlite_cfg, tmp.path(), None).expect("sqlite memory");
+    let sqlite_memory = create_memory(&sqlite_cfg, tmp.path(), None)
+        .await
+        .expect("sqlite memory");
     let sqlite_caps = capability_matrix_for_memory(sqlite_memory.as_ref());
     assert_eq!(sqlite_caps.backend, "sqlite");
     ensure_forget_mode_supported(sqlite_memory.as_ref(), ForgetMode::Hard)
@@ -98,7 +102,7 @@ async fn lancedb_capability_contract() {
         "contract-entity",
         "slot",
         "seed value",
-        asteroniris::core::memory::MemoryCategory::Core,
+        asteroniris::memory::MemoryCategory::Core,
     )
     .await;
     ensure_forget_mode_supported(&memory, ForgetMode::Soft)
@@ -253,7 +257,7 @@ async fn lancedb_reports_unsupported_semantics() {
         "entity-lancedb",
         "forget.target",
         "sensitive value",
-        asteroniris::core::memory::MemoryCategory::Core,
+        asteroniris::memory::MemoryCategory::Core,
     )
     .await;
 

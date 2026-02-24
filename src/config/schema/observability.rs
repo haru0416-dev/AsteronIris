@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObservabilityConfig {
-    /// "none" | "log" | "prometheus" | "otel"
     pub backend: String,
 }
 
@@ -29,10 +28,8 @@ mod tests {
         let original = ObservabilityConfig {
             backend: "prometheus".into(),
         };
-
         let toml = toml::to_string(&original).unwrap();
         let decoded: ObservabilityConfig = toml::from_str(&toml).unwrap();
-
         assert_eq!(decoded.backend, original.backend);
     }
 }

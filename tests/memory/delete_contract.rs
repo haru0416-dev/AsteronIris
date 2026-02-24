@@ -1,4 +1,4 @@
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     ForgetArtifact, ForgetArtifactRequirement, ForgetMode, ForgetStatus, Memory,
 };
 use rusqlite::Connection;
@@ -6,9 +6,9 @@ use rusqlite::Connection;
 use super::memory_harness;
 
 fn check_for_artifact(
-    outcome: &asteroniris::core::memory::ForgetOutcome,
+    outcome: &asteroniris::memory::ForgetOutcome,
     artifact: ForgetArtifact,
-) -> &asteroniris::core::memory::ForgetArtifactCheck {
+) -> &asteroniris::memory::ForgetArtifactCheck {
     outcome
         .artifact_checks
         .iter()
@@ -18,14 +18,14 @@ fn check_for_artifact(
 
 #[tokio::test]
 async fn memory_delete_contract_artifact_matrix() {
-    let (_tmp, memory) = memory_harness::sqlite_fixture();
+    let (_tmp, memory) = memory_harness::sqlite_fixture().await;
 
     memory_harness::append_test_event(
         &memory,
         "entity-delete",
         "slot.matrix",
         "highly sensitive value",
-        asteroniris::core::memory::MemoryCategory::Core,
+        asteroniris::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -58,7 +58,7 @@ async fn memory_delete_contract_artifact_matrix() {
         "entity-delete",
         "slot.matrix",
         "highly sensitive value",
-        asteroniris::core::memory::MemoryCategory::Core,
+        asteroniris::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -85,7 +85,7 @@ async fn memory_delete_contract_artifact_matrix() {
         "entity-delete",
         "slot.matrix",
         "highly sensitive value",
-        asteroniris::core::memory::MemoryCategory::Core,
+        asteroniris::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -114,7 +114,7 @@ async fn memory_delete_contract_degraded_backend() {
         "entity-degraded",
         "slot.degraded",
         "value",
-        asteroniris::core::memory::MemoryCategory::Core,
+        asteroniris::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -138,7 +138,7 @@ async fn memory_delete_contract_degraded_backend() {
         "entity-degraded",
         "slot.degraded",
         "value",
-        asteroniris::core::memory::MemoryCategory::Core,
+        asteroniris::memory::MemoryCategory::Core,
     )
     .await;
 
@@ -159,13 +159,13 @@ async fn memory_delete_contract_degraded_backend() {
 
 #[tokio::test]
 async fn memory_delete_contract_sqlite_hard_delete_dsar_authoritative() {
-    let (tmp, memory) = memory_harness::sqlite_fixture();
+    let (tmp, memory) = memory_harness::sqlite_fixture().await;
     memory_harness::append_test_event(
         &memory,
         "entity-dsar",
         "pii.email",
         "person@example.test",
-        asteroniris::core::memory::MemoryCategory::Core,
+        asteroniris::memory::MemoryCategory::Core,
     )
     .await;
 

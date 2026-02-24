@@ -12,11 +12,6 @@ mod policy;
 mod routes;
 
 #[cfg(test)]
-use crate::core::memory::{
-    MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SourceKind, create_memory,
-};
-
-#[cfg(test)]
 use agent_plan::{ensure_cron_jobs_schema, ensure_plan_execution_schema};
 use agent_plan::{recover_interrupted_plan_jobs, run_agent_job_command};
 use policy::enforce_policy_invariants;
@@ -49,50 +44,35 @@ pub async fn run(config: Arc<Config>) -> Result<()> {
     let mut interval = time::interval(Duration::from_secs(poll_secs));
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-    initialize_scheduler_state(&config);
-
-    crate::runtime::diagnostics::health::mark_component_ok("scheduler");
+    initialize_scheduler_state(&config).await;
 
     loop {
         interval.tick().await;
-        crate::runtime::diagnostics::health::mark_component_ok("scheduler");
 
-        let jobs = match due_jobs(&config, Utc::now()) {
+        let jobs = match due_jobs(&config, Utc::now()).await {
             Ok(jobs) => jobs,
             Err(e) => {
-                crate::runtime::diagnostics::health::mark_component_error(
-                    "scheduler",
-                    e.to_string(),
-                );
                 tracing::warn!("Scheduler query failed: {e}");
                 continue;
             }
         };
 
         for job in jobs {
-            crate::runtime::diagnostics::health::mark_component_ok("scheduler");
             let (success, output) = execute_job_with_retry(&config, &security, &job).await;
 
             if !success {
-                crate::runtime::diagnostics::health::mark_component_error(
-                    "scheduler",
-                    format!("job {} failed", job.id),
-                );
+                tracing::warn!("Scheduler job {} failed: {}", job.id, output);
             }
 
-            if let Err(e) = reschedule_after_run(&config, &job, success, &output) {
-                crate::runtime::diagnostics::health::mark_component_error(
-                    "scheduler",
-                    e.to_string(),
-                );
+            if let Err(e) = reschedule_after_run(&config, &job, success, &output).await {
                 tracing::warn!("Failed to persist scheduler run result: {e}");
             }
         }
     }
 }
 
-fn initialize_scheduler_state(config: &Config) {
-    if let Err(error) = recover_interrupted_plan_jobs(config) {
+async fn initialize_scheduler_state(config: &Config) {
+    if let Err(error) = recover_interrupted_plan_jobs(config).await {
         tracing::warn!(error = %error, "failed to recover interrupted plan executions");
     }
 }

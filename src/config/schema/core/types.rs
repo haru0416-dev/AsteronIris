@@ -1,4 +1,4 @@
-use super::super::{
+use crate::config::schema::{
     AutonomyConfig, ChannelsConfig, GatewayConfig, McpConfig, MemoryConfig, ObservabilityConfig,
     TasteConfig, ToolsConfig, TunnelConfig,
 };
@@ -10,71 +10,50 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Workspace directory - computed from home, not serialized
     #[serde(skip)]
     pub workspace_dir: PathBuf,
-    /// Path to config.toml - computed from home, not serialized
     #[serde(skip)]
     pub config_path: PathBuf,
     pub api_key: Option<String>,
     pub default_provider: Option<String>,
     pub default_model: Option<String>,
     pub default_temperature: f64,
-
     #[serde(default)]
     pub observability: ObservabilityConfig,
-
     #[serde(default)]
     pub autonomy: AutonomyConfig,
-
     #[serde(default)]
     pub runtime: RuntimeConfig,
-
     #[serde(default)]
     pub reliability: ReliabilityConfig,
-
     #[serde(default)]
     pub heartbeat: HeartbeatConfig,
-
     #[serde(default)]
     pub channels_config: ChannelsConfig,
-
     #[serde(default)]
     pub memory: MemoryConfig,
-
     #[serde(default)]
     pub media: MediaConfig,
-
     #[serde(default)]
     pub tunnel: TunnelConfig,
-
     #[serde(default)]
     pub gateway: GatewayConfig,
-
     #[serde(default)]
     pub composio: ComposioConfig,
-
     #[serde(default)]
     pub secrets: SecretsConfig,
-
     #[serde(default)]
     pub browser: BrowserConfig,
-
     #[serde(default)]
     pub persona: PersonaConfig,
-
     #[serde(default)]
     pub identity: IdentityConfig,
-
     #[serde(default)]
     pub tools: ToolsConfig,
-
     #[serde(default)]
     pub mcp: McpConfig,
-
     #[serde(default)]
     pub taste: TasteConfig,
-
     #[serde(default = "default_locale")]
     pub locale: String,
 }
@@ -183,27 +162,21 @@ pub struct PersonaConfig {
 fn default_persona_state_mirror_file() -> String {
     "STATE.md".into()
 }
-
 fn default_persona_max_open_loops() -> usize {
     7
 }
-
 fn default_persona_max_next_actions() -> usize {
     3
 }
-
 fn default_persona_max_commitments() -> usize {
     5
 }
-
 fn default_persona_max_current_objective_chars() -> usize {
     280
 }
-
 fn default_persona_max_recent_context_summary_chars() -> usize {
     1_200
 }
-
 fn default_persona_max_list_item_chars() -> usize {
     240
 }
@@ -261,23 +234,18 @@ pub struct ReliabilityConfig {
 fn default_provider_retries() -> u32 {
     2
 }
-
 fn default_provider_backoff_ms() -> u64 {
     500
 }
-
 fn default_channel_backoff_secs() -> u64 {
     2
 }
-
 fn default_channel_backoff_max_secs() -> u64 {
     60
 }
-
 fn default_scheduler_poll_secs() -> u64 {
     15
 }
-
 fn default_scheduler_retries() -> u32 {
     2
 }
@@ -358,11 +326,7 @@ impl Config {
         Ok(())
     }
 
-    /// Returns `true` when the config appears to be a fresh default that has
-    /// never been through onboarding (no API key, no provider explicitly chosen,
-    /// and no env var overrides).
     pub fn needs_onboarding(&self) -> bool {
-        // If env var provides an API key, user has configured externally
         if std::env::var("ASTERONIRIS_API_KEY").is_ok() || std::env::var("API_KEY").is_ok() {
             return false;
         }
@@ -380,13 +344,11 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _asteroniris_api_key = EnvVarGuard::unset("ASTERONIRIS_API_KEY");
         let _api_key = EnvVarGuard::unset("API_KEY");
-
         let config = Config {
             api_key: None,
             default_provider: None,
             ..Config::default()
         };
-
         assert!(config.needs_onboarding());
     }
 
@@ -395,13 +357,11 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _asteroniris_api_key = EnvVarGuard::unset("ASTERONIRIS_API_KEY");
         let _api_key = EnvVarGuard::unset("API_KEY");
-
         let config = Config {
             api_key: Some("sk-configured".to_string()),
             default_provider: None,
             ..Config::default()
         };
-
         assert!(!config.needs_onboarding());
     }
 
@@ -410,20 +370,17 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _asteroniris_api_key = EnvVarGuard::set("ASTERONIRIS_API_KEY", "sk-env");
         let _api_key = EnvVarGuard::unset("API_KEY");
-
         let config = Config {
             api_key: None,
             default_provider: None,
             ..Config::default()
         };
-
         assert!(!config.needs_onboarding());
     }
 
     #[test]
     fn default_config_has_reasonable_values() {
         let config = Config::default();
-
         assert_eq!(config.api_key, None);
         assert!(config.default_provider.is_some());
         assert!(config.default_model.is_some());
@@ -443,10 +400,8 @@ mod tests {
             locale: "ja".into(),
             ..Config::default()
         };
-
         let serialized = toml::to_string(&config).unwrap();
         let deserialized: Config = toml::from_str(&serialized).unwrap();
-
         assert_eq!(deserialized.api_key, config.api_key);
         assert_eq!(deserialized.default_provider, config.default_provider);
         assert_eq!(deserialized.default_model, config.default_model);
@@ -470,10 +425,8 @@ mod tests {
     #[test]
     fn config_round_trip_with_default_media_config() {
         let config = Config::default();
-
         let serialized = toml::to_string(&config).unwrap();
         let deserialized: Config = toml::from_str(&serialized).unwrap();
-
         assert_eq!(deserialized.media.enabled, MediaConfig::default().enabled);
         assert_eq!(
             deserialized.media.storage_dir,
@@ -495,10 +448,8 @@ mod tests {
             },
             ..Config::default()
         };
-
         let serialized = toml::to_string(&config).unwrap();
         let deserialized: Config = toml::from_str(&serialized).unwrap();
-
         assert!(deserialized.media.enabled);
         assert_eq!(
             deserialized.media.storage_dir,

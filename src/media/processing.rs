@@ -2,8 +2,8 @@ use super::types::{MediaFile, MediaType};
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::core::providers::Provider;
 use crate::core::providers::response::{ContentBlock, ImageSource, ProviderMessage};
+use crate::core::providers::traits::Provider;
 
 const IMAGE_DESCRIPTION_PROMPT: &str = "Describe this image concisely in 1-2 sentences.";
 

@@ -13,7 +13,7 @@ use super::memory_harness::{
     markdown_memory_from_path, memory_count, recall_scoped_values, resolve_slot_value,
     sqlite_fixture, sqlite_memory_from_path,
 };
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     CapabilitySupport, ForgetMode, MarkdownMemory, Memory, MemoryCategory, MemoryRecallItem,
     MemorySource, PrivacyLevel, SqliteMemory, capability_matrix_for_memory,
     ensure_forget_mode_supported,
@@ -21,8 +21,8 @@ use asteroniris::core::memory::{
 
 // ── Helpers ────────────────────────────────────────────────────
 
-fn sqlite_backend(dir: &std::path::Path) -> SqliteMemory {
-    sqlite_memory_from_path(dir)
+async fn sqlite_backend(dir: &std::path::Path) -> SqliteMemory {
+    sqlite_memory_from_path(dir).await
 }
 
 fn markdown_backend(dir: &std::path::Path) -> MarkdownMemory {
@@ -55,7 +55,7 @@ async fn forget(mem: &dyn Memory, key: &str) -> bool {
 async fn compare_store_speed() {
     let tmp_sq = TempDir::new().unwrap();
     let tmp_md = TempDir::new().unwrap();
-    let sq = sqlite_backend(tmp_sq.path());
+    let sq = sqlite_backend(tmp_sq.path()).await;
     let md = markdown_backend(tmp_md.path());
 
     let n = 100;
@@ -104,7 +104,7 @@ async fn compare_store_speed() {
 async fn compare_recall_quality() {
     let tmp_sq = TempDir::new().unwrap();
     let tmp_md = TempDir::new().unwrap();
-    let sq = sqlite_backend(tmp_sq.path());
+    let sq = sqlite_backend(tmp_sq.path()).await;
     let md = markdown_backend(tmp_md.path());
 
     // Seed both with identical data
@@ -198,7 +198,7 @@ async fn compare_recall_quality() {
 async fn compare_recall_speed() {
     let tmp_sq = TempDir::new().unwrap();
     let tmp_md = TempDir::new().unwrap();
-    let sq = sqlite_backend(tmp_sq.path());
+    let sq = sqlite_backend(tmp_sq.path()).await;
     let md = markdown_backend(tmp_md.path());
 
     // Seed 200 entries
@@ -243,7 +243,7 @@ async fn compare_persistence() {
 
     // Store in both, then drop and re-open
     {
-        let sq = sqlite_backend(tmp_sq.path());
+        let sq = sqlite_backend(tmp_sq.path()).await;
         store(
             &sq,
             "persist_test",
@@ -264,7 +264,7 @@ async fn compare_persistence() {
     }
 
     // Re-open
-    let sq2 = sqlite_backend(tmp_sq.path());
+    let sq2 = sqlite_backend(tmp_sq.path()).await;
     let md2 = markdown_backend(tmp_md.path());
 
     let sq_entry = get_value(&sq2, "persist_test").await;
@@ -303,7 +303,7 @@ async fn compare_persistence() {
 async fn compare_upsert() {
     let tmp_sq = TempDir::new().unwrap();
     let tmp_md = TempDir::new().unwrap();
-    let sq = sqlite_backend(tmp_sq.path());
+    let sq = sqlite_backend(tmp_sq.path()).await;
     let md = markdown_backend(tmp_md.path());
 
     // Store twice with same key, different content
@@ -341,7 +341,7 @@ async fn compare_upsert() {
 async fn compare_forget() {
     let tmp_sq = TempDir::new().unwrap();
     let tmp_md = TempDir::new().unwrap();
-    let sq = sqlite_backend(tmp_sq.path());
+    let sq = sqlite_backend(tmp_sq.path()).await;
     let md = markdown_backend(tmp_md.path());
 
     store(&sq, "secret", "API key: sk-1234", MemoryCategory::Core).await;
@@ -379,7 +379,7 @@ async fn compare_forget() {
 async fn compare_category_filter() {
     let tmp_sq = TempDir::new().unwrap();
     let tmp_md = TempDir::new().unwrap();
-    let sq = sqlite_backend(tmp_sq.path());
+    let sq = sqlite_backend(tmp_sq.path()).await;
     let md = markdown_backend(tmp_md.path());
 
     // Mix of categories
@@ -443,7 +443,7 @@ async fn compare_category_filter() {
 
 #[tokio::test]
 async fn memory_test_harness_smoke() {
-    let (_tmp_sq, sqlite) = sqlite_fixture();
+    let (_tmp_sq, sqlite) = sqlite_fixture().await;
     let (_tmp_md, markdown) = memory_harness::markdown_fixture();
     let (_tmp_ld, lancedb) = lancedb_fixture();
 
@@ -522,7 +522,7 @@ async fn memory_test_harness_smoke() {
 
 #[tokio::test]
 async fn memory_test_harness_flags_degraded() {
-    let (_tmp_sq, sqlite) = sqlite_fixture();
+    let (_tmp_sq, sqlite) = sqlite_fixture().await;
     let (_tmp_md, markdown) = memory_harness::markdown_fixture();
     let (_tmp_ld, lancedb) = lancedb_fixture();
 

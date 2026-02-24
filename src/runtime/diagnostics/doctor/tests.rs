@@ -1,10 +1,9 @@
-use super::{autonomy_governance_lines, memory_rollout_lines, memory_signal_stats_lines};
+use super::report::{autonomy_governance_lines, memory_rollout_lines, memory_signal_stats_lines};
 use crate::config::Config;
-use crate::core::memory::traits::MemoryLayer;
-use crate::core::memory::{
-    Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
+use crate::memory::{
+    Memory, MemoryEventInput, MemoryEventType, MemoryLayer, MemorySource, PrivacyLevel,
+    SqliteMemory,
 };
-use rusqlite::Connection;
 use tempfile::TempDir;
 
 #[test]
@@ -114,7 +113,7 @@ async fn doctor_reports_memory_signal_stats() {
     let mut config = Config::default();
     config.workspace_dir = tmp.path().to_path_buf();
 
-    let memory = SqliteMemory::new(tmp.path()).unwrap();
+    let memory = SqliteMemory::new(tmp.path()).await.unwrap();
     memory
         .append_event(
             MemoryEventInput::new(
@@ -130,7 +129,7 @@ async fn doctor_reports_memory_signal_stats() {
         .await
         .unwrap();
 
-    let lines = memory_signal_stats_lines(&config);
+    let lines = memory_signal_stats_lines(&config).await;
     assert!(lines.iter().any(|line| line.contains("total_units=")));
     assert!(
         lines
@@ -156,7 +155,7 @@ async fn doctor_reports_memory_signal_ttl_and_promotion_breakdown() {
     let mut config = Config::default();
     config.workspace_dir = tmp.path().to_path_buf();
 
-    let memory = SqliteMemory::new(tmp.path()).unwrap();
+    let memory = SqliteMemory::new(tmp.path()).await.unwrap();
     memory
         .append_event(
             MemoryEventInput::new(
@@ -172,15 +171,23 @@ async fn doctor_reports_memory_signal_ttl_and_promotion_breakdown() {
         .await
         .unwrap();
 
+    // Use sqlx to update the test data directly
     let db_path = config.workspace_dir.join("memory").join("brain.db");
-    let conn = Connection::open(db_path).unwrap();
-    conn.execute(
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+    sqlx::query(
         "UPDATE retrieval_units SET promotion_status = 'promoted', source_kind = 'discord', retention_expires_at = datetime('now', '-1 day') WHERE slot_key = 'doctor.signal.expired'",
-        [],
     )
+    .execute(&pool)
+    .await
     .unwrap();
+    pool.close().await;
 
-    let lines = memory_signal_stats_lines(&config);
+    let lines = memory_signal_stats_lines(&config).await;
     assert!(lines.iter().any(|line| {
         line.contains("promotion_breakdown")
             && line.contains("promoted=1")
@@ -204,7 +211,7 @@ async fn doctor_source_kind_breakdown_is_sorted_stably() {
     let mut config = Config::default();
     config.workspace_dir = tmp.path().to_path_buf();
 
-    let memory = SqliteMemory::new(tmp.path()).unwrap();
+    let memory = SqliteMemory::new(tmp.path()).await.unwrap();
     memory
         .append_event(
             MemoryEventInput::new(
@@ -235,19 +242,27 @@ async fn doctor_source_kind_breakdown_is_sorted_stably() {
         .unwrap();
 
     let db_path = config.workspace_dir.join("memory").join("brain.db");
-    let conn = Connection::open(db_path).unwrap();
-    conn.execute(
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+    sqlx::query(
         "UPDATE retrieval_units SET source_kind = 'manual' WHERE slot_key = 'doctor.signal.manual'",
-        [],
     )
+    .execute(&pool)
+    .await
     .unwrap();
-    conn.execute(
+    sqlx::query(
         "UPDATE retrieval_units SET source_kind = 'api' WHERE slot_key = 'doctor.signal.api'",
-        [],
     )
+    .execute(&pool)
+    .await
     .unwrap();
+    pool.close().await;
 
-    let lines = memory_signal_stats_lines(&config);
+    let lines = memory_signal_stats_lines(&config).await;
     let breakdown = lines
         .iter()
         .find(|line| line.contains("source_kind_breakdown="))

@@ -1,14 +1,15 @@
 use super::memory_harness;
 
-use asteroniris::core::agent::loop_::build_context_for_integration;
-use asteroniris::core::memory::{
+use asteroniris::agent::loop_::build_context_for_integration;
+use asteroniris::memory::{
     BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEvent, MemoryEventInput,
     MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
 };
 use asteroniris::security::policy::TenantPolicyContext;
-use async_trait::async_trait;
 use chrono::Utc;
 use rusqlite::{Connection, params};
+use std::future::Future;
+use std::pin::Pin;
 
 fn insert_stale_belief_slot(conn: &Connection, entity_id: &str, slot_key: &str, value: &str) {
     let now = Utc::now().to_rfc3339();
@@ -83,7 +84,7 @@ fn insert_stale_retrieval_doc(
 
 #[tokio::test]
 async fn memory_revocation_gate_blocks_replay() {
-    let (tmp, memory) = memory_harness::sqlite_fixture();
+    let (tmp, memory) = memory_harness::sqlite_fixture().await;
     let entity_id = "default";
     let slot_key = "profile.revoked_token";
     let revoked_value = "sk-revoked-123";
@@ -147,54 +148,64 @@ async fn memory_revocation_gate_blocks_replay() {
 
 struct ReplayBypassMemory;
 
-#[async_trait]
 impl Memory for ReplayBypassMemory {
     fn name(&self) -> &str {
         "mock-replay-bypass"
     }
 
-    async fn health_check(&self) -> bool {
-        true
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move { true })
     }
 
-    async fn append_event(&self, _input: MemoryEventInput) -> anyhow::Result<MemoryEvent> {
-        anyhow::bail!("append_event not used")
-    }
-
-    async fn recall_scoped(&self, _query: RecallQuery) -> anyhow::Result<Vec<MemoryRecallItem>> {
-        Ok(vec![MemoryRecallItem {
-            entity_id: "default".to_string(),
-            slot_key: "profile.cached_secret".to_string(),
-            value: "should-not-replay".to_string(),
-            source: MemorySource::System,
-            confidence: 0.9,
-            importance: 0.9,
-            privacy_level: PrivacyLevel::Private,
-            score: 0.95,
-            occurred_at: Utc::now().to_rfc3339(),
-        }])
-    }
-
-    async fn resolve_slot(
+    fn append_event(
         &self,
-        _entity_id: &str,
-        _slot_key: &str,
-    ) -> anyhow::Result<Option<BeliefSlot>> {
-        Ok(None)
+        _input: MemoryEventInput,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MemoryEvent>> + Send + '_>> {
+        Box::pin(async move { anyhow::bail!("append_event not used") })
     }
 
-    async fn forget_slot(
+    fn recall_scoped(
         &self,
-        _entity_id: &str,
-        _slot_key: &str,
+        _query: RecallQuery,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<MemoryRecallItem>>> + Send + '_>> {
+        Box::pin(async move {
+            Ok(vec![MemoryRecallItem {
+                entity_id: "default".to_string(),
+                slot_key: "profile.cached_secret".to_string(),
+                value: "should-not-replay".to_string(),
+                source: MemorySource::System,
+                confidence: 0.9,
+                importance: 0.9,
+                privacy_level: PrivacyLevel::Private,
+                score: 0.95,
+                occurred_at: Utc::now().to_rfc3339(),
+            }])
+        })
+    }
+
+    fn resolve_slot<'a>(
+        &'a self,
+        _entity_id: &'a str,
+        _slot_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<BeliefSlot>>> + Send + 'a>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn forget_slot<'a>(
+        &'a self,
+        _entity_id: &'a str,
+        _slot_key: &'a str,
         _mode: ForgetMode,
-        _reason: &str,
-    ) -> anyhow::Result<ForgetOutcome> {
-        anyhow::bail!("forget_slot not used")
+        _reason: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ForgetOutcome>> + Send + 'a>> {
+        Box::pin(async move { anyhow::bail!("forget_slot not used") })
     }
 
-    async fn count_events(&self, _entity_id: Option<&str>) -> anyhow::Result<usize> {
-        Ok(0)
+    fn count_events<'a>(
+        &'a self,
+        _entity_id: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + 'a>> {
+        Box::pin(async move { Ok(0) })
     }
 }
 
@@ -218,7 +229,7 @@ async fn memory_revocation_gate_applies_in_context_builder() {
 
 #[tokio::test]
 async fn memory_revocation_gate_blocks_cached_replay() {
-    let (tmp, memory) = memory_harness::sqlite_fixture();
+    let (tmp, memory) = memory_harness::sqlite_fixture().await;
     let entity_id = "default";
     let slot_key = "profile.cached_replay";
     let stale_value = "stale-replay-value";

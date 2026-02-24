@@ -1,24 +1,26 @@
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
-};
-use asteroniris::core::tools::{
-    ExecutionContext, MemoryForgetTool, MemoryRecallTool, MemoryStoreTool, Tool,
 };
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
+use asteroniris::tools::{
+    ExecutionContext, MemoryForgetTool, MemoryRecallTool, MemoryStoreTool, Tool,
+};
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-fn sqlite_memory() -> (TempDir, Arc<dyn Memory>) {
+async fn sqlite_memory() -> (TempDir, Arc<dyn Memory>) {
     let temp = TempDir::new().expect("temp dir should be created");
-    let memory = SqliteMemory::new(temp.path()).expect("sqlite memory should initialize");
+    let memory = SqliteMemory::new(temp.path())
+        .await
+        .expect("sqlite memory should initialize");
     (temp, Arc::new(memory))
 }
 
 #[tokio::test]
 async fn memory_tool_schema_backward_compat() {
-    let (_temp, memory) = sqlite_memory();
+    let (_temp, memory) = sqlite_memory().await;
     let ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
 
     let store = MemoryStoreTool::new(memory.clone());
@@ -112,7 +114,7 @@ async fn memory_tool_schema_backward_compat() {
 
 #[tokio::test]
 async fn memory_tool_policy_context_validation() {
-    let (_temp, memory) = sqlite_memory();
+    let (_temp, memory) = sqlite_memory().await;
     let mut ctx = ExecutionContext::from_security(Arc::new(SecurityPolicy::default()));
 
     let recall = MemoryRecallTool::new(memory.clone());

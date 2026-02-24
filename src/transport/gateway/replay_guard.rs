@@ -1,7 +1,7 @@
 //! Replay protection for webhook endpoints.
 //!
 //! Tracks SHA-256 hashes of recent request bodies within a TTL window.
-//! In-memory only — intentionally resets on restart.
+//! In-memory only -- intentionally resets on restart.
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;

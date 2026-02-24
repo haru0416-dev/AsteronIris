@@ -1,3 +1,4 @@
+pub mod hot_reload;
 pub mod schema;
 
 pub use schema::{

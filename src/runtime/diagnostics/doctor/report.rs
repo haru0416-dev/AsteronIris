@@ -1,8 +1,8 @@
 use crate::config::Config;
-use crate::core::memory::CapabilitySupport;
+use crate::memory::CapabilitySupport;
 use crate::security::ExternalActionExecution;
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use sqlx::Row;
 
 pub(crate) fn autonomy_governance_lines(config: &Config) -> Vec<String> {
     let mut lines = Vec::with_capacity(6);
@@ -66,7 +66,7 @@ fn backend_supports_autonomy_lifecycle_metrics(backend: &str) -> bool {
 pub(crate) fn memory_rollout_lines(config: &Config, snapshot: &serde_json::Value) -> Vec<String> {
     let mut lines = Vec::with_capacity(6);
     let backend = config.memory.backend.as_str();
-    let capability = crate::core::memory::capability_matrix_for_backend(backend);
+    let capability = crate::memory::capability::capability_matrix_for_backend(backend);
 
     let consolidation = if backend != "none" && config.memory.auto_save {
         "on"
@@ -156,82 +156,76 @@ pub(crate) fn parse_rfc3339(raw: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-pub(crate) fn memory_signal_stats_lines(config: &Config) -> Vec<String> {
+/// Collect memory signal statistics from the `SQLite` brain database.
+pub(crate) async fn memory_signal_stats_lines(config: &Config) -> Vec<String> {
     let db_path = config.workspace_dir.join("memory").join("brain.db");
     if !db_path.exists() {
         return vec!["signal stats: memory db not found".to_string()];
     }
 
-    let conn = match Connection::open(db_path) {
-        Ok(conn) => conn,
+    let url = format!("sqlite://{}?mode=ro", db_path.display());
+    let pool = match sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+    {
+        Ok(pool) => pool,
         Err(error) => {
             return vec![format!("signal stats: failed to open memory db ({error})")];
         }
     };
 
-    let total_units: i64 = conn
-        .query_row("SELECT COUNT(*) FROM retrieval_units", [], |row| row.get(0))
-        .unwrap_or(0);
-    let raw_units: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM retrieval_units WHERE signal_tier = 'raw'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let demoted_units: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'demoted'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let candidate_units: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'candidate'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let promoted_units: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'promoted'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let ttl_expired_units: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM retrieval_units WHERE retention_expires_at IS NOT NULL AND julianday(retention_expires_at) <= julianday('now')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let contradicted_units: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM retrieval_units WHERE contradiction_penalty > ?1",
-            params![0.0_f64],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let source_kind_breakdown = conn
-        .prepare("SELECT source_kind, COUNT(*) FROM retrieval_units GROUP BY source_kind")
-        .ok()
-        .and_then(|mut stmt| {
-            stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    let count_query = |q: &'static str| {
+        let pool = &pool;
+        async move {
+            sqlx::query_scalar::<_, i64>(q)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0)
+        }
+    };
+
+    let total_units = count_query("SELECT COUNT(*) FROM retrieval_units").await;
+    let raw_units =
+        count_query("SELECT COUNT(*) FROM retrieval_units WHERE signal_tier = 'raw'").await;
+    let demoted_units =
+        count_query("SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'demoted'")
+            .await;
+    let candidate_units =
+        count_query("SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'candidate'")
+            .await;
+    let promoted_units =
+        count_query("SELECT COUNT(*) FROM retrieval_units WHERE promotion_status = 'promoted'")
+            .await;
+    let ttl_expired_units = count_query(
+        "SELECT COUNT(*) FROM retrieval_units WHERE retention_expires_at IS NOT NULL AND julianday(retention_expires_at) <= julianday('now')"
+    ).await;
+    let contradicted_units: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM retrieval_units WHERE contradiction_penalty > ?")
+            .bind(0.0_f64)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+
+    let source_kind_breakdown = sqlx::query(
+        "SELECT source_kind, COUNT(*) as cnt FROM retrieval_units GROUP BY source_kind",
+    )
+    .fetch_all(&pool)
+    .await
+    .ok()
+    .map(|rows| {
+        let mut parts: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                let kind: String = row.get("source_kind");
+                let count: i64 = row.get("cnt");
+                format!("{kind}={count}")
             })
-            .ok()
-            .map(|rows| {
-                let mut parts = rows
-                    .flatten()
-                    .map(|(kind, count)| format!("{kind}={count}"))
-                    .collect::<Vec<_>>();
-                parts.sort();
-                parts.join(",")
-            })
-        })
-        .unwrap_or_default();
+            .collect();
+        parts.sort();
+        parts.join(",")
+    })
+    .unwrap_or_default();
 
     let ratio = if total_units <= 0 {
         0.0

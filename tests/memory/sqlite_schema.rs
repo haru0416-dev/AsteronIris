@@ -3,7 +3,7 @@ use rusqlite::Connection;
 
 #[tokio::test]
 async fn sqlite_schema_contains_core_tables() {
-    let (tmp, _mem) = temp_sqlite();
+    let (tmp, _mem) = temp_sqlite().await;
     let db_path = tmp.path().join("memory").join("brain.db");
     let conn = Connection::open(db_path).expect("open db");
 
@@ -28,7 +28,7 @@ async fn sqlite_schema_contains_core_tables() {
 
 #[tokio::test]
 async fn sqlite_schema_contains_fts_table() {
-    let (tmp, _mem) = temp_sqlite();
+    let (tmp, _mem) = temp_sqlite().await;
     let db_path = tmp.path().join("memory").join("brain.db");
     let conn = Connection::open(db_path).expect("open db");
 

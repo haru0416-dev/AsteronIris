@@ -2,7 +2,7 @@ use super::IMessageChannel;
 use super::auth::{escape_applescript, is_valid_imessage_target};
 use super::handler::{fetch_new_messages, get_max_rowid};
 use crate::transport::channels::traits::Channel;
-use rusqlite::Connection;
+use sqlx::sqlite::SqlitePoolOptions;
 
 #[test]
 fn creates_with_contacts() {
@@ -278,38 +278,51 @@ fn target_with_leading_trailing_whitespace_trimmed() {
 }
 
 // ══════════════════════════════════════════════════════════
-// SQLite/rusqlite Database Tests (CWE-89 Prevention)
+// SQLite/sqlx Database Tests (CWE-89 Prevention)
 // ══════════════════════════════════════════════════════════
 
-/// Helper to create a temporary test database with Messages schema
-fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
+/// Helper to create a temporary test database with Messages schema.
+/// Returns the pool (for inserting test data) along with the temp dir and path.
+async fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf, sqlx::SqlitePool) {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("chat.db");
 
-    let conn = Connection::open(&db_path).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}?mode=rwc", db_path.display()))
+        .await
+        .unwrap();
 
     // Create minimal schema matching macOS Messages.app
-    conn.execute_batch(
+    sqlx::query(
         "CREATE TABLE handle (
                 ROWID INTEGER PRIMARY KEY,
                 id TEXT NOT NULL
-            );
-            CREATE TABLE message (
+            )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE message (
                 ROWID INTEGER PRIMARY KEY,
                 handle_id INTEGER,
                 text TEXT,
                 is_from_me INTEGER DEFAULT 0,
                 FOREIGN KEY (handle_id) REFERENCES handle(ROWID)
-            );",
+            )",
     )
+    .execute(&pool)
+    .await
     .unwrap();
 
-    (dir, db_path)
+    (dir, db_path, pool)
 }
 
 #[tokio::test]
 async fn get_max_rowid_empty_database() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, _pool) = create_test_db().await;
     let result = get_max_rowid(&db_path).await;
     assert!(result.is_ok());
     // Empty table returns 0 (NULL coalesced)
@@ -318,33 +331,33 @@ async fn get_max_rowid_empty_database() {
 
 #[tokio::test]
 async fn get_max_rowid_with_messages() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
     // Insert test data
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (100, 1, 'Hello', 0)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (200, 1, 'World', 0)",
-            [],
-        )
-        .unwrap();
-        // This one is from_me=1, should be ignored
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (300, 1, 'Sent', 1)",
-            [],
-        )
-        .unwrap();
-    }
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (100, 1, 'Hello', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (200, 1, 'World', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // This one is from_me=1, should be ignored
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (300, 1, 'Sent', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
 
     let result = get_max_rowid(&db_path).await.unwrap();
     // Should return 200, not 300 (ignores is_from_me=1)
@@ -360,7 +373,7 @@ async fn get_max_rowid_nonexistent_database() {
 
 #[tokio::test]
 async fn fetch_new_messages_empty_database() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, _pool) = create_test_db().await;
     let result = fetch_new_messages(&db_path, 0).await;
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
@@ -368,30 +381,26 @@ async fn fetch_new_messages_empty_database() {
 
 #[tokio::test]
 async fn fetch_new_messages_returns_correct_data() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
     // Insert test data
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (2, 'user@example.com')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (2, 'user@example.com')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'First message', 0)",
-            []
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 2, 'Second message', 0)",
-            []
-        ).unwrap();
-    }
+    sqlx::query("INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'First message', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 2, 'Second message', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
 
     let result = fetch_new_messages(&db_path, 0).await.unwrap();
     assert_eq!(result.len(), 2);
@@ -411,25 +420,26 @@ async fn fetch_new_messages_returns_correct_data() {
 
 #[tokio::test]
 async fn fetch_new_messages_filters_by_rowid() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
     // Insert test data
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Old message', 0)",
-            []
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 1, 'New message', 0)",
-            []
-        ).unwrap();
-    }
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Old message', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 1, 'New message', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
 
     // Fetch only messages after ROWID 15
     let result = fetch_new_messages(&db_path, 15).await.unwrap();
@@ -440,25 +450,26 @@ async fn fetch_new_messages_filters_by_rowid() {
 
 #[tokio::test]
 async fn fetch_new_messages_excludes_sent_messages() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
     // Insert test data
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Received', 0)",
-            []
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 1, 'Sent by me', 1)",
-            []
-        ).unwrap();
-    }
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Received', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 1, 'Sent by me', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
 
     let result = fetch_new_messages(&db_path, 0).await.unwrap();
     assert_eq!(result.len(), 1);
@@ -467,26 +478,24 @@ async fn fetch_new_messages_excludes_sent_messages() {
 
 #[tokio::test]
 async fn fetch_new_messages_excludes_null_text() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
     // Insert test data
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Has text', 0)",
-            []
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 1, NULL, 0)",
-            [],
-        )
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Has text', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 1, NULL, 0)")
+        .execute(&pool)
+        .await
         .unwrap();
-    }
+    pool.close().await;
 
     let result = fetch_new_messages(&db_path, 0).await.unwrap();
     assert_eq!(result.len(), 1);
@@ -495,23 +504,22 @@ async fn fetch_new_messages_excludes_null_text() {
 
 #[tokio::test]
 async fn fetch_new_messages_respects_limit() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
     // Insert 25 messages (limit is 20)
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        for i in 1..=25 {
-            conn.execute(
-                &format!("INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES ({i}, 1, 'Message {i}', 0)"),
-                []
-            ).unwrap();
-        }
+    for i in 1..=25_i64 {
+        sqlx::query(&format!(
+            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES ({i}, 1, 'Message {i}', 0)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
     }
+    pool.close().await;
 
     let result = fetch_new_messages(&db_path, 0).await.unwrap();
     assert_eq!(result.len(), 20); // Limited to 20
@@ -521,32 +529,32 @@ async fn fetch_new_messages_respects_limit() {
 
 #[tokio::test]
 async fn fetch_new_messages_ordered_by_rowid_asc() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
     // Insert messages out of order
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (30, 1, 'Third', 0)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'First', 0)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 1, 'Second', 0)",
-            [],
-        )
-        .unwrap();
-    }
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (30, 1, 'Third', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'First', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (20, 1, 'Second', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
 
     let result = fetch_new_messages(&db_path, 0).await.unwrap();
     assert_eq!(result.len(), 3);
@@ -564,21 +572,18 @@ async fn fetch_new_messages_nonexistent_database() {
 
 #[tokio::test]
 async fn fetch_new_messages_handles_special_characters() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
     // Insert message with special characters (potential SQL injection patterns)
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Hello \"world'' OR 1=1; DROP TABLE message;--', 0)",
-            []
-        ).unwrap();
-    }
+    sqlx::query("INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Hello \"world'' OR 1=1; DROP TABLE message;--', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
 
     let result = fetch_new_messages(&db_path, 0).await.unwrap();
     assert_eq!(result.len(), 1);
@@ -588,20 +593,17 @@ async fn fetch_new_messages_handles_special_characters() {
 
 #[tokio::test]
 async fn fetch_new_messages_handles_unicode() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Hello \u{1f980} \u{4e16}\u{754c} \u{0645}\u{0631}\u{062d}\u{0628}\u{0627}', 0)",
-            []
-        ).unwrap();
-    }
+    sqlx::query("INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Hello \u{1f980} \u{4e16}\u{754c} \u{0645}\u{0631}\u{062d}\u{0628}\u{0627}', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
 
     let result = fetch_new_messages(&db_path, 0).await.unwrap();
     assert_eq!(result.len(), 1);
@@ -613,21 +615,17 @@ async fn fetch_new_messages_handles_unicode() {
 
 #[tokio::test]
 async fn fetch_new_messages_handles_empty_text() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, '', 0)",
-            [],
-        )
+    sqlx::query("INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, '', 0)")
+        .execute(&pool)
+        .await
         .unwrap();
-    }
+    pool.close().await;
 
     let result = fetch_new_messages(&db_path, 0).await.unwrap();
     // Empty string is NOT NULL, so it's included
@@ -637,21 +635,19 @@ async fn fetch_new_messages_handles_empty_text() {
 
 #[tokio::test]
 async fn fetch_new_messages_negative_rowid_edge_case() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Test', 0)",
-            [],
-        )
-        .unwrap();
-    }
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Test', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
 
     // Negative rowid should still work (fetch all messages with ROWID > -1)
     let result = fetch_new_messages(&db_path, -1).await.unwrap();
@@ -660,21 +656,19 @@ async fn fetch_new_messages_negative_rowid_edge_case() {
 
 #[tokio::test]
 async fn fetch_new_messages_large_rowid_edge_case() {
-    let (_dir, db_path) = create_test_db();
+    let (_dir, db_path, pool) = create_test_db().await;
 
-    {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')",
-            [],
-        )
+    sqlx::query("INSERT INTO handle (ROWID, id) VALUES (1, '+1234567890')")
+        .execute(&pool)
+        .await
         .unwrap();
-        conn.execute(
-            "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Test', 0)",
-            [],
-        )
-        .unwrap();
-    }
+    sqlx::query(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (10, 1, 'Test', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
 
     // Very large rowid should return empty (no messages after this)
     let result = fetch_new_messages(&db_path, i64::MAX - 1).await.unwrap();

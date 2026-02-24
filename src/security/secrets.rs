@@ -1,216 +1,215 @@
-// Encrypted secret store — defense-in-depth for API keys and tokens.
-//
-// Secrets are encrypted using ChaCha20-Poly1305 AEAD with a random key stored
-// in `~/.asteroniris/.secret_key` with restrictive file permissions (0600). The
-// config file stores only hex-encoded ciphertext, never plaintext keys.
-//
-// Each encryption generates a fresh random 12-byte nonce, prepended to the
-// ciphertext. The Poly1305 authentication tag prevents tampering.
-//
-// This prevents:
-//   - Plaintext exposure in config files
-//   - Casual `grep` or `git log` leaks
-//   - Accidental commit of raw API keys
-//   - Known-plaintext attacks (unlike the previous XOR cipher)
-//   - Ciphertext tampering (authenticated encryption)
-//
-// For sovereign users who prefer plaintext, `secrets.encrypt = false` disables this.
-//
 use anyhow::{Context, Result};
-use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
-use chacha20poly1305::{AeadCore, ChaCha20Poly1305, Key, Nonce};
+use chacha20poly1305::{
+    ChaCha20Poly1305, KeyInit, Nonce,
+    aead::{Aead, OsRng, rand_core::RngCore},
+};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use zeroize::Zeroizing;
+use zeroize::Zeroize;
 
-/// ChaCha20-Poly1305 nonce length in bytes.
+const KEY_FILE: &str = ".secret_key";
+const ENC_PREFIX: &str = "ENC:";
 const NONCE_LEN: usize = 12;
 
-/// Manages encrypted storage of secrets (API keys, tokens, etc.)
-#[derive(Debug, Clone)]
 pub struct SecretStore {
-    /// Path to the key file (`~/.asteroniris/.secret_key`)
-    key_path: PathBuf,
-    /// Whether encryption is enabled
-    enabled: bool,
+    root: PathBuf,
+    encrypt: bool,
 }
 
 impl SecretStore {
-    /// Create a new secret store rooted at the given directory.
-    pub fn new(asteroniris_dir: &Path, enabled: bool) -> Self {
+    pub fn new(root: &Path, encrypt: bool) -> Self {
         Self {
-            key_path: asteroniris_dir.join(".secret_key"),
-            enabled,
+            root: root.to_path_buf(),
+            encrypt,
         }
     }
 
-    /// Encrypt a plaintext secret. Returns hex-encoded ciphertext prefixed with `enc2:`.
-    /// Format: `enc2:<hex(nonce ‖ ciphertext ‖ tag)>` (12 + N + 16 bytes).
-    /// If encryption is disabled, returns the plaintext as-is.
+    /// Returns `true` if the value has already been encrypted.
+    #[must_use]
+    pub fn is_encrypted(value: &str) -> bool {
+        value.starts_with(ENC_PREFIX)
+    }
+
     pub fn encrypt(&self, plaintext: &str) -> Result<String> {
-        if !self.enabled || plaintext.is_empty() {
+        if !self.encrypt || plaintext.is_empty() || Self::is_encrypted(plaintext) {
             return Ok(plaintext.to_string());
         }
 
-        let key_bytes = self.load_or_create_key()?;
-        let key = Key::from_slice(&key_bytes);
-        let cipher = ChaCha20Poly1305::new(key);
+        let mut key_bytes = self.load_or_create_key()?;
+        let cipher = ChaCha20Poly1305::new_from_slice(&key_bytes).context("invalid key length")?;
+        key_bytes.zeroize();
 
-        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
         let ciphertext = cipher
-            .encrypt(&nonce, plaintext.as_bytes())
-            .map_err(|error| anyhow::anyhow!("encryption failed: {error}"))?;
+            .encrypt(nonce, plaintext.as_bytes())
+            .map_err(|e| anyhow::anyhow!("encryption failed: {e}"))?;
 
-        // Prepend nonce to ciphertext for storage
-        let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
-        blob.extend_from_slice(&nonce);
-        blob.extend_from_slice(&ciphertext);
-
-        Ok(format!("enc2:{}", hex_encode(&blob)))
+        let mut combined = nonce_bytes.to_vec();
+        combined.extend_from_slice(&ciphertext);
+        Ok(format!("{ENC_PREFIX}{}", hex::encode(combined)))
     }
 
-    /// Decrypt a secret.
-    /// - `enc2:` prefix → ChaCha20-Poly1305 (current format)
-    /// - No prefix → returned as-is (plaintext config)
     pub fn decrypt(&self, value: &str) -> Result<String> {
-        if let Some(hex_str) = value.strip_prefix("enc2:") {
-            self.decrypt_chacha20(hex_str)
-        } else {
-            Ok(value.to_string())
+        if !Self::is_encrypted(value) {
+            return Ok(value.to_string());
         }
-    }
 
-    /// Decrypt using ChaCha20-Poly1305 (current secure format).
-    fn decrypt_chacha20(&self, hex_str: &str) -> Result<String> {
-        let blob =
-            hex_decode(hex_str).context("Failed to decode encrypted secret (corrupt hex)")?;
-        anyhow::ensure!(
-            blob.len() > NONCE_LEN,
-            "Encrypted value too short (missing nonce)"
-        );
+        let hex_str = &value[ENC_PREFIX.len()..];
+        let combined = hex::decode(hex_str).context("invalid hex in encrypted value")?;
 
-        let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
+        if combined.len() < NONCE_LEN {
+            anyhow::bail!("encrypted value too short");
+        }
+
+        let (nonce_bytes, ciphertext) = combined.split_at(NONCE_LEN);
         let nonce = Nonce::from_slice(nonce_bytes);
-        let key_bytes = self.load_or_create_key()?;
-        let key = Key::from_slice(&key_bytes);
-        let cipher = ChaCha20Poly1305::new(key);
 
-        let plaintext_bytes = cipher
+        let mut key_bytes = self.load_or_create_key()?;
+        let cipher = ChaCha20Poly1305::new_from_slice(&key_bytes).context("invalid key length")?;
+        key_bytes.zeroize();
+
+        let plaintext = cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| anyhow::anyhow!("decryption failed — wrong key or tampered data"))?;
+            .map_err(|e| anyhow::anyhow!("decryption failed: {e}"))?;
 
-        String::from_utf8(plaintext_bytes)
-            .context("Decrypted secret is not valid UTF-8 — corrupt data")
+        String::from_utf8(plaintext).context("decrypted value is not valid UTF-8")
     }
 
-    pub fn is_encrypted(value: &str) -> bool {
-        value.starts_with("enc2:")
+    fn key_path(&self) -> PathBuf {
+        self.root.join(KEY_FILE)
     }
 
-    /// Load the encryption key from disk, or create one if it doesn't exist.
-    fn load_or_create_key(&self) -> Result<Zeroizing<Vec<u8>>> {
-        if self.key_path.exists() {
-            let hex_key =
-                fs::read_to_string(&self.key_path).context("Failed to read secret key file")?;
-            Ok(Zeroizing::new(
-                hex_decode(hex_key.trim()).context("Secret key file is corrupt")?,
-            ))
+    fn read_key_file(path: &Path) -> Result<Vec<u8>> {
+        let hex_key = fs::read_to_string(path).context("failed to read key file")?;
+        let key = hex::decode(hex_key.trim()).context("invalid hex in key file")?;
+        if key.len() != 32 {
+            anyhow::bail!("key file has invalid length (expected 32 bytes)");
+        }
+        Ok(key)
+    }
+
+    fn write_new_key_file(path: &Path, key: &[u8]) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+                .context("failed to create key file")?;
+            file.write_all(hex::encode(key).as_bytes())
+                .context("failed to write key file")?;
+            file.sync_all().context("failed to sync key file")?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            fs::write(path, hex::encode(key)).context("failed to write key file")?;
+        }
+
+        Self::enforce_key_permissions(path)
+    }
+
+    fn enforce_key_permissions(path: &Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .context("failed to set key file permissions")?;
+        }
+        Ok(())
+    }
+
+    fn load_or_create_key(&self) -> Result<Vec<u8>> {
+        let path = self.key_path();
+        if path.exists() {
+            Self::enforce_key_permissions(&path)?;
+            let key = Self::read_key_file(&path)?;
+            Ok(key)
         } else {
-            let key = generate_random_key();
-            if let Some(parent) = self.key_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&self.key_path, hex_encode(&key))
-                .context("Failed to write secret key file")?;
-
-            // Set restrictive permissions
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&self.key_path, fs::Permissions::from_mode(0o600))
-                    .context("Failed to set key file permissions")?;
-            }
-            #[cfg(windows)]
-            {
-                // On Windows, use icacls to restrict permissions to current user only
-                let username = std::env::var("USERNAME").unwrap_or_default();
-                let Some(grant_arg) = build_windows_icacls_grant_arg(&username) else {
-                    tracing::warn!(
-                        "USERNAME environment variable is empty; \
-                         cannot restrict key file permissions via icacls"
-                    );
-                    return Ok(key);
-                };
-
-                match std::process::Command::new("icacls")
-                    .arg(&self.key_path)
-                    .args(["/inheritance:r", "/grant:r"])
-                    .arg(grant_arg)
-                    .output()
-                {
-                    Ok(o) if !o.status.success() => {
-                        tracing::warn!(
-                            "Failed to set key file permissions via icacls (exit code {:?})",
-                            o.status.code()
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("Could not set key file permissions: {e}");
-                    }
-                    _ => {
-                        tracing::debug!("Key file permissions restricted via icacls");
+            let mut key = vec![0u8; 32];
+            OsRng.fill_bytes(&mut key);
+            match Self::write_new_key_file(&path, &key) {
+                Ok(()) => Ok(key),
+                Err(error) => {
+                    let is_already_exists = error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists);
+                    if is_already_exists {
+                        Self::enforce_key_permissions(&path)?;
+                        Self::read_key_file(&path)
+                    } else {
+                        Err(error)
                     }
                 }
             }
-
-            Ok(key)
         }
     }
 }
 
-/// Generate a random 256-bit key using the OS CSPRNG.
-///
-/// Uses `OsRng` (via `getrandom`) directly, providing full 256-bit entropy
-/// without the fixed version/variant bits that UUID v4 introduces.
-fn generate_random_key() -> Zeroizing<Vec<u8>> {
-    Zeroizing::new(ChaCha20Poly1305::generate_key(&mut OsRng).to_vec())
-}
-
-/// Hex-encode bytes to a lowercase hex string.
-fn hex_encode(data: &[u8]) -> String {
-    let mut s = String::with_capacity(data.len() * 2);
-    for b in data {
-        use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-    }
-    s
-}
-
-/// Build the `/grant` argument for `icacls` using a normalized username.
-/// Returns `None` when the username is empty or whitespace-only.
-#[cfg(windows)]
-fn build_windows_icacls_grant_arg(username: &str) -> Option<String> {
-    let normalized = username.trim();
-    if normalized.is_empty() {
-        return None;
-    }
-    Some(format!("{normalized}:F"))
-}
-
-/// Hex-decode a hex string to bytes.
-#[allow(clippy::manual_is_multiple_of)]
-fn hex_decode(hex: &str) -> Result<Vec<u8>> {
-    if (hex.len() & 1) != 0 {
-        anyhow::bail!("Hex string has odd length");
-    }
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&hex[i..i + 2], 16)
-                .with_context(|| format!("invalid hex at position {i}"))
-        })
-        .collect()
-}
-
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn encrypt_decrypt_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let store = SecretStore::new(dir.path(), true);
+
+        let plaintext = "sk-test-secret-key-12345";
+        let encrypted = store.encrypt(plaintext).unwrap();
+        assert!(SecretStore::is_encrypted(&encrypted));
+        assert_ne!(encrypted, plaintext);
+
+        let decrypted = store.decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn key_file_permissions_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let store = SecretStore::new(dir.path(), true);
+        let _ = store.encrypt("sk-test-secret-key-12345").unwrap();
+
+        let metadata = std::fs::metadata(dir.path().join(KEY_FILE)).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn passthrough_when_encryption_disabled() {
+        let dir = TempDir::new().unwrap();
+        let store = SecretStore::new(dir.path(), false);
+
+        let plaintext = "sk-not-encrypted";
+        let result = store.encrypt(plaintext).unwrap();
+        assert_eq!(result, plaintext);
+    }
+
+    #[test]
+    fn decrypt_plaintext_returns_as_is() {
+        let dir = TempDir::new().unwrap();
+        let store = SecretStore::new(dir.path(), true);
+
+        let plaintext = "not-encrypted-value";
+        let result = store.decrypt(plaintext).unwrap();
+        assert_eq!(result, plaintext);
+    }
+
+    #[test]
+    fn is_encrypted_detects_prefix() {
+        assert!(SecretStore::is_encrypted("ENC:abcdef1234"));
+        assert!(!SecretStore::is_encrypted("plaintext"));
+        assert!(!SecretStore::is_encrypted(""));
+    }
+}

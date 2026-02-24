@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use asteroniris::config::PersonaConfig;
-use asteroniris::core::memory::{Memory, RecallQuery, SqliteMemory};
-use asteroniris::core::persona::state_header::StateHeader;
-use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
+use asteroniris::memory::{Memory, RecallQuery, SqliteMemory};
+use asteroniris::persona::state_header::StateHeader;
+use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use asteroniris::security::writeback_guard::{
     ImmutableStateHeader, WritebackGuardVerdict, validate_writeback_payload,
 };
@@ -34,7 +34,7 @@ fn guard_immutable(state: &StateHeader) -> ImmutableStateHeader {
 #[tokio::test]
 async fn prompt_injection_payload_is_rejected_and_writeback_is_not_persisted() {
     let workspace = TempDir::new().unwrap();
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(workspace.path()).unwrap());
+    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(workspace.path()).await.unwrap());
     let persistence = BackendCanonicalStateHeaderPersistence::new(
         memory.clone(),
         workspace.path().to_path_buf(),

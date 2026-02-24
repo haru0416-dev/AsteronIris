@@ -5,9 +5,6 @@ pub mod observability;
 pub mod tunnel;
 pub mod usage;
 
-pub use environment::docker;
-pub use environment::native;
-pub use environment::traits;
 pub use environment::{
     DOCKER_ROLLOUT_GATE_MESSAGE, DockerRuntime, NativeRuntime, RuntimeAdapter, create_runtime,
 };

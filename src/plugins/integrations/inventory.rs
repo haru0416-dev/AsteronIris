@@ -16,9 +16,6 @@ const SKILLFORGE_SOURCE_NAME: &str = "skillforge";
 const INTEGRATION_PRIORITY: u8 = 1;
 const SKILLFORGE_PRIORITY: u8 = 2;
 
-const INTEGRATION_HEADER: &str = "coming_soon_count";
-const SKILLFORGE_HEADER: &str = "skillforge_unimplemented";
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScopeLockInventory {
     pub coming_soon_count: usize,
@@ -57,14 +54,12 @@ pub struct IntegrationCapabilityDrift {
 
 impl ScopeLockInventory {
     pub fn to_json_pretty(&self) -> String {
-        // Derive(Serialize) structs with only primitive/string fields cannot fail.
         serde_json::to_string_pretty(self).unwrap_or_default()
     }
 }
 
 impl IntegrationCapabilityMatrix {
     pub fn to_json_pretty(&self) -> String {
-        // Derive(Serialize) structs with only primitive/string fields cannot fail.
         serde_json::to_string_pretty(self).unwrap_or_default()
     }
 }
@@ -216,8 +211,8 @@ pub fn validate_inventory_against_sources(
 
     if expected.coming_soon_count != actual.coming_soon_count {
         drifts.push(format!(
-            "{} mismatch: expected={}, actual={}",
-            INTEGRATION_HEADER, expected.coming_soon_count, actual.coming_soon_count
+            "coming_soon_count mismatch: expected={}, actual={}",
+            expected.coming_soon_count, actual.coming_soon_count
         ));
     }
 
@@ -229,7 +224,7 @@ pub fn validate_inventory_against_sources(
 
     if expected_skillforge_unimplemented != actual_skillforge_unimplemented {
         drifts.push(format!(
-            "{SKILLFORGE_HEADER} mismatch: expected={expected_skillforge_unimplemented:?}, actual={actual_skillforge_unimplemented:?}"
+            "skillforge_unimplemented mismatch: expected={expected_skillforge_unimplemented:?}, actual={actual_skillforge_unimplemented:?}"
         ));
     }
 

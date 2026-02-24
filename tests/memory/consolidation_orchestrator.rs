@@ -2,21 +2,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use asteroniris::config::Config;
-use asteroniris::core::agent::loop_::{
+use asteroniris::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
 };
-use asteroniris::core::memory::traits::MemoryLayer;
-use asteroniris::core::memory::{
+use asteroniris::config::Config;
+use asteroniris::memory::traits::MemoryLayer;
+use asteroniris::memory::{
     CONSOLIDATION_SLOT_KEY, ConsolidationDisposition, ConsolidationInput, Memory, MemoryEventInput,
     MemoryEventType, MemorySource, PrivacyLevel, RecallQuery, SqliteMemory, run_consolidation_once,
 };
-use asteroniris::core::providers::Provider;
+use asteroniris::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
-use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use tempfile::TempDir;
 use tokio::time::Instant;
 
@@ -24,16 +25,19 @@ struct FixedResponseProvider {
     response: String,
 }
 
-#[async_trait]
 impl Provider for FixedResponseProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn name(&self) -> &str {
+        "mock"
+    }
+
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> Result<String> {
-        Ok(self.response.clone())
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move { Ok(self.response.clone()) })
     }
 }
 
@@ -42,62 +46,82 @@ struct DelayedConsolidationMemory {
     delay: Duration,
 }
 
-#[async_trait]
 impl Memory for DelayedConsolidationMemory {
     fn name(&self) -> &str {
         self.inner.name()
     }
 
-    async fn health_check(&self) -> bool {
-        self.inner.health_check().await
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move { self.inner.health_check().await })
     }
 
-    async fn append_event(
+    fn append_event(
         &self,
         input: MemoryEventInput,
-    ) -> anyhow::Result<asteroniris::core::memory::MemoryEvent> {
-        if input.slot_key == CONSOLIDATION_SLOT_KEY {
-            tokio::time::sleep(self.delay).await;
-        }
-        self.inner.append_event(input).await
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<asteroniris::memory::MemoryEvent>> + Send + '_>>
+    {
+        Box::pin(async move {
+            if input.slot_key == CONSOLIDATION_SLOT_KEY {
+                tokio::time::sleep(self.delay).await;
+            }
+            self.inner.append_event(input).await
+        })
     }
 
-    async fn recall_scoped(
+    fn recall_scoped(
         &self,
         query: RecallQuery,
-    ) -> anyhow::Result<Vec<asteroniris::core::memory::MemoryRecallItem>> {
-        self.inner.recall_scoped(query).await
+    ) -> Pin<
+        Box<
+            dyn Future<Output = anyhow::Result<Vec<asteroniris::memory::MemoryRecallItem>>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move { self.inner.recall_scoped(query).await })
     }
 
-    async fn resolve_slot(
-        &self,
-        entity_id: &str,
-        slot_key: &str,
-    ) -> anyhow::Result<Option<asteroniris::core::memory::BeliefSlot>> {
-        self.inner.resolve_slot(entity_id, slot_key).await
+    fn resolve_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = anyhow::Result<Option<asteroniris::memory::BeliefSlot>>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { self.inner.resolve_slot(entity_id, slot_key).await })
     }
 
-    async fn forget_slot(
-        &self,
-        entity_id: &str,
-        slot_key: &str,
-        mode: asteroniris::core::memory::ForgetMode,
-        reason: &str,
-    ) -> anyhow::Result<asteroniris::core::memory::ForgetOutcome> {
-        self.inner
-            .forget_slot(entity_id, slot_key, mode, reason)
-            .await
+    fn forget_slot<'a>(
+        &'a self,
+        entity_id: &'a str,
+        slot_key: &'a str,
+        mode: asteroniris::memory::ForgetMode,
+        reason: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<asteroniris::memory::ForgetOutcome>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.inner
+                .forget_slot(entity_id, slot_key, mode, reason)
+                .await
+        })
     }
 
-    async fn count_events(&self, entity_id: Option<&str>) -> anyhow::Result<usize> {
-        self.inner.count_events(entity_id).await
+    fn count_events<'a>(
+        &'a self,
+        entity_id: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + 'a>> {
+        Box::pin(async move { self.inner.count_events(entity_id).await })
     }
 }
 
 #[tokio::test]
 async fn memory_consolidation_is_idempotent() {
     let temp = TempDir::new().unwrap();
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).await.unwrap());
     let entity_id = "tenant-alpha:user-1";
 
     memory
@@ -152,7 +176,7 @@ async fn memory_consolidation_runs_async_nonblocking() {
     config.memory.auto_save = true;
     config.persona.enabled_main_session = false;
 
-    let base: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let base: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).await.unwrap());
     let delay = Duration::from_millis(50);
     let mem: Arc<dyn Memory> = Arc::new(DelayedConsolidationMemory {
         inner: base.clone(),
@@ -214,7 +238,7 @@ async fn memory_consolidation_failure_isolated() {
     config.memory.auto_save = true;
     config.persona.enabled_main_session = false;
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).await.unwrap());
     let provider = FixedResponseProvider {
         response: "response survives consolidation failure".to_string(),
     };
@@ -253,7 +277,8 @@ async fn memory_consolidation_failure_isolated() {
 #[tokio::test]
 async fn memory_consolidation_long_run() {
     let temp = TempDir::new().expect("tempdir");
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).expect("sqlite memory"));
+    let memory: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(temp.path()).await.expect("sqlite memory"));
     let entity_id = "tenant-alpha:long-run";
     let cycle_count = 10usize;
 
@@ -346,7 +371,7 @@ async fn memory_consolidation_long_run() {
 #[tokio::test]
 async fn memory_consolidation_long_run_decay_progression() {
     let temp = TempDir::new().expect("tempdir");
-    let memory = SqliteMemory::new(temp.path()).expect("sqlite memory");
+    let memory = SqliteMemory::new(temp.path()).await.expect("sqlite memory");
     let entity_id = "tenant-alpha:decay";
     let now = Utc::now();
 

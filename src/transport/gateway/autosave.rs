@@ -1,8 +1,8 @@
-use crate::core::memory::traits::MemoryLayer;
-use crate::core::memory::{
-    MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel, SourceKind,
+use crate::memory::{
+    MemoryEventInput, MemoryEventType, MemoryLayer, MemoryProvenance, MemorySource, PrivacyLevel,
+    SourceKind,
 };
-use crate::core::persona::person_identity::channel_person_entity_id;
+use crate::persona::channel_person_entity_id;
 use crate::security::policy::TenantPolicyContext;
 
 pub(super) fn gateway_autosave_entity_id(source: &str) -> String {

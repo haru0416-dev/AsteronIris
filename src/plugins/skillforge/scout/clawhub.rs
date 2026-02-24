@@ -2,7 +2,8 @@
 
 use super::{Scout, ScoutResult, ScoutSource, dedup, owner_from_url, urlencoding};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use tracing::debug;
 
 pub struct ClawHubScout {
@@ -138,51 +139,52 @@ impl ClawHubScout {
     }
 }
 
-#[async_trait]
 impl Scout for ClawHubScout {
-    async fn discover(&self) -> Result<Vec<ScoutResult>> {
-        let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
+    fn discover(&self) -> Pin<Box<dyn Future<Output = Result<Vec<ScoutResult>>> + Send + '_>> {
+        Box::pin(async move {
+            let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
 
-        for query in &self.queries {
-            let url = format!(
-                "{}/v1/skills?q={}&per_page=30",
-                self.base_url,
-                urlencoding(query)
-            );
-            debug!(query = query.as_str(), "Searching ClawHub");
+            for query in &self.queries {
+                let url = format!(
+                    "{}/v1/skills?q={}&per_page=30",
+                    self.base_url,
+                    urlencoding(query)
+                );
+                debug!(query = query.as_str(), "Searching ClawHub");
 
-            let resp = self
-                .client
-                .get(&url)
-                .send()
-                .await
-                .context("ClawHub API request failed")?;
+                let resp = self
+                    .client
+                    .get(&url)
+                    .send()
+                    .await
+                    .context("ClawHub API request failed")?;
 
-            let status = resp.status();
-            if !status.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                if status == reqwest::StatusCode::UNAUTHORIZED {
-                    anyhow::bail!("ClawHub authentication failed (401): {body}");
+                let status = resp.status();
+                if !status.is_success() {
+                    let body = resp.text().await.unwrap_or_default();
+                    if status == reqwest::StatusCode::UNAUTHORIZED {
+                        anyhow::bail!("ClawHub authentication failed (401): {body}");
+                    }
+                    anyhow::bail!("ClawHub search failed ({status}): {body}");
                 }
-                anyhow::bail!("ClawHub search failed ({status}): {body}");
+
+                let body: serde_json::Value = resp
+                    .json()
+                    .await
+                    .context("Failed to parse ClawHub response")?;
+
+                let mut items = Self::parse_items(&body);
+                debug!(
+                    count = items.len(),
+                    query = query.as_str(),
+                    "Parsed ClawHub items"
+                );
+                all.append(&mut items);
             }
 
-            let body: serde_json::Value = resp
-                .json()
-                .await
-                .context("Failed to parse ClawHub response")?;
-
-            let mut items = Self::parse_items(&body);
-            debug!(
-                count = items.len(),
-                query = query.as_str(),
-                "Parsed ClawHub items"
-            );
-            all.append(&mut items);
-        }
-
-        dedup(&mut all);
-        Ok(all)
+            dedup(&mut all);
+            Ok(all)
+        })
     }
 }
 

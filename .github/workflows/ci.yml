@@ -183,7 +183,7 @@ jobs:
           set -euo pipefail
           mkdir -p .sisyphus/evidence
           printf 'schema-migration-check\n' | tee .sisyphus/evidence/task-24-ci-happy.txt
-          cargo test sqlite_schema_migrates_from_v1_to_v2 -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-happy.txt
+          cargo test --lib init_schema_creates_expected_tables -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-happy.txt
       - name: Upload migration evidence
         uses: actions/upload-artifact@v4
         with:
@@ -208,7 +208,7 @@ jobs:
           set -euo pipefail
           mkdir -p .sisyphus/evidence
           printf 'schema-rollback-check\n' | tee .sisyphus/evidence/task-24-ci-error.txt
-          cargo test sqlite_schema_rejects_inconsistent_state -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-error.txt
+          cargo test --lib init_schema_rejects_legacy_unversioned_database -- --nocapture 2>&1 | tee -a .sisyphus/evidence/task-24-ci-error.txt
       - name: Upload rollback evidence
         uses: actions/upload-artifact@v4
         with:

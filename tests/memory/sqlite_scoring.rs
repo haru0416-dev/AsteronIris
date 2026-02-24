@@ -1,4 +1,4 @@
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     IngestionPipeline, Memory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent,
     MemorySource, PrivacyLevel, RecallQuery, SignalEnvelope, SignalTier, SourceKind,
     SqliteIngestionPipeline, SqliteMemory,
@@ -21,7 +21,7 @@ fn promotion_status_for(tmp: &TempDir, unit_id: &str) -> Option<String> {
 #[tokio::test]
 async fn sqlite_retrieval_salience_decay_ordering() {
     let tmp = TempDir::new().expect("tempdir");
-    let memory = SqliteMemory::new(tmp.path()).expect("sqlite memory");
+    let memory = SqliteMemory::new(tmp.path()).await.expect("sqlite memory");
     let now = Utc::now();
 
     memory
@@ -81,7 +81,7 @@ async fn sqlite_retrieval_salience_decay_ordering() {
 #[tokio::test]
 async fn sqlite_contradiction_penalty_affects_order() {
     let tmp = TempDir::new().expect("tempdir");
-    let memory = SqliteMemory::new(tmp.path()).expect("sqlite memory");
+    let memory = SqliteMemory::new(tmp.path()).await.expect("sqlite memory");
     let now = Utc::now();
 
     memory
@@ -169,7 +169,7 @@ async fn sqlite_contradiction_penalty_affects_order() {
 #[tokio::test]
 async fn sqlite_keyword_tokenization_or_matching() {
     let tmp = TempDir::new().expect("tempdir");
-    let memory = SqliteMemory::new(tmp.path()).expect("sqlite memory");
+    let memory = SqliteMemory::new(tmp.path()).await.expect("sqlite memory");
 
     // Store three facts with distinct keyword combinations
     memory
@@ -288,7 +288,7 @@ async fn sqlite_keyword_tokenization_or_matching() {
 #[tokio::test]
 async fn sqlite_recall_edge_cases() {
     let tmp = TempDir::new().expect("tempdir");
-    let memory = SqliteMemory::new(tmp.path()).expect("sqlite memory");
+    let memory = SqliteMemory::new(tmp.path()).await.expect("sqlite memory");
 
     memory
         .append_event(
@@ -369,7 +369,7 @@ async fn sqlite_recall_edge_cases() {
 #[tokio::test]
 async fn sqlite_raw_signal_promotes_to_candidate_after_corroboration() {
     let tmp = TempDir::new().expect("tempdir");
-    let memory = SqliteMemory::new(tmp.path()).expect("sqlite memory");
+    let memory = SqliteMemory::new(tmp.path()).await.expect("sqlite memory");
     let entity_id = "promotion-entity";
     let slot_key = "profile.location.city";
 
@@ -415,7 +415,7 @@ async fn sqlite_raw_signal_promotes_to_candidate_after_corroboration() {
 #[tokio::test]
 async fn sqlite_multi_phase_trend_boost_prefers_recent_raw_trend_candidate() {
     let tmp = TempDir::new().expect("tempdir");
-    let memory = SqliteMemory::new(tmp.path()).expect("sqlite memory");
+    let memory = SqliteMemory::new(tmp.path()).await.expect("sqlite memory");
     let now = Utc::now();
 
     for source in [
@@ -496,7 +496,8 @@ async fn sqlite_multi_phase_trend_boost_prefers_recent_raw_trend_candidate() {
 #[tokio::test]
 async fn ingestion_pipeline_end_to_end() {
     let tmp = TempDir::new().expect("tempdir");
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(tmp.path()).expect("sqlite memory"));
+    let memory: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(tmp.path()).await.expect("sqlite memory"));
     let pipeline = SqliteIngestionPipeline::new(Arc::clone(&memory));
 
     let content = "Discord channel reports user prefers Rust for backend services";

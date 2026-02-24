@@ -1,6 +1,4 @@
-use crate::core::memory::{
-    MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SourceKind,
-};
+use crate::memory::{MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SourceKind};
 use anyhow::Context as _;
 
 fn expected_person_entity(person_id: &str) -> String {

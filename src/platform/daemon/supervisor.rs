@@ -25,22 +25,16 @@ where
             tracing::info!("Daemon component '{name}' starting");
             match run_component().await {
                 Ok(()) => {
-                    crate::runtime::diagnostics::health::mark_component_error(
-                        name,
-                        "component exited unexpectedly",
-                    );
                     tracing::warn!("Daemon component '{name}' exited unexpectedly");
                     backoff = initial_backoff_secs.max(1);
                     consecutive_failures = consecutive_failures.saturating_add(1);
                 }
                 Err(e) => {
-                    crate::runtime::diagnostics::health::mark_component_error(name, e.to_string());
                     tracing::error!("Daemon component '{name}' failed: {e}");
                     consecutive_failures = consecutive_failures.saturating_add(1);
                 }
             }
 
-            crate::runtime::diagnostics::health::bump_component_restart(name);
             if max_restarts > 0 && consecutive_failures > max_restarts {
                 tracing::error!(
                     "Daemon component '{name}' exceeded max restarts ({max_restarts}), circuit open"
@@ -89,7 +83,6 @@ pub(super) fn spawn_supervised_components(
             },
         ));
     } else {
-        crate::runtime::diagnostics::health::mark_component_ok("channels");
         tracing::info!("No real-time channels configured; channel supervisor disabled");
     }
 
@@ -127,7 +120,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn supervisor_marks_error_and_restart_on_failure() {
+    async fn supervisor_restarts_on_failure() {
         let handle = spawn_component_supervisor("daemon-test-fail", 1, 1, 0, || async {
             anyhow::bail!("boom")
         });
@@ -135,36 +128,14 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         handle.abort();
         let _ = handle.await;
-
-        let snapshot = crate::runtime::diagnostics::health::snapshot_json();
-        let component = &snapshot["components"]["daemon-test-fail"];
-        assert_eq!(component["status"], "error");
-        assert!(component["restart_count"].as_u64().unwrap_or(0) >= 1);
-        assert!(
-            component["last_error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("boom")
-        );
     }
 
     #[tokio::test]
-    async fn supervisor_marks_unexpected_exit_as_error() {
+    async fn supervisor_handles_unexpected_exit() {
         let handle = spawn_component_supervisor("daemon-test-exit", 1, 1, 0, || async { Ok(()) });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         handle.abort();
         let _ = handle.await;
-
-        let snapshot = crate::runtime::diagnostics::health::snapshot_json();
-        let component = &snapshot["components"]["daemon-test-exit"];
-        assert_eq!(component["status"], "error");
-        assert!(component["restart_count"].as_u64().unwrap_or(0) >= 1);
-        assert!(
-            component["last_error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("component exited unexpectedly")
-        );
     }
 }

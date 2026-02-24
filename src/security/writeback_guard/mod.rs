@@ -13,6 +13,3 @@ pub use policy::{
 };
 pub use types::{ImmutableStateHeader, SelfTaskWriteback, WritebackGuardVerdict};
 pub use validation::validate_writeback_payload;
-
-#[cfg(test)]
-mod tests;

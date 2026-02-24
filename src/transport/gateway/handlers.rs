@@ -1,16 +1,20 @@
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
-use crate::core::persona::person_identity::channel_person_entity_id;
-use crate::core::providers;
-use crate::core::tools::middleware::ExecutionContext;
-use crate::security::pairing::constant_time_eq;
+use crate::agent::{
+    IntegrationRuntimeTurnOptions, IntegrationTurnParams, LoopStopReason,
+    run_main_session_turn_for_runtime_with_policy,
+};
+use crate::llm;
+use crate::persona::channel_person_entity_id;
 use crate::security::policy::TenantPolicyContext;
 use crate::security::writeback_guard::enforce_external_autosave_write_policy;
+use crate::tools::ExecutionContext;
 #[cfg(feature = "whatsapp")]
 use crate::transport::channels::{Channel, WhatsAppChannel};
+#[cfg(feature = "whatsapp")]
 use crate::utils::text::truncate_with_ellipsis;
+#[cfg(feature = "whatsapp")]
+use axum::{body::Bytes, extract::Query};
 use axum::{
-    body::Bytes,
-    extract::{Query, State},
+    extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
 };
@@ -18,11 +22,10 @@ use std::sync::Arc;
 
 #[cfg(feature = "whatsapp")]
 use super::WhatsAppVerifyQuery;
+use super::autosave::gateway_webhook_autosave_event;
 #[cfg(feature = "whatsapp")]
 use super::autosave::gateway_whatsapp_autosave_event;
-use super::autosave::{
-    gateway_autosave_entity_id, gateway_runtime_policy_context, gateway_webhook_autosave_event,
-};
+use super::autosave::{gateway_autosave_entity_id, gateway_runtime_policy_context};
 use super::defense::{
     PolicyViolation, apply_external_ingress_policy, must_enforce_auth_violation,
     policy_accounting_response, policy_violation_response,
@@ -30,6 +33,9 @@ use super::defense::{
 #[cfg(feature = "whatsapp")]
 use super::signature::verify_whatsapp_signature;
 use super::{AppState, WebhookBody};
+
+const ACTION_LIMIT_EXCEEDED_ERROR: &str = "blocked by security policy: action limit exceeded";
+const COST_LIMIT_EXCEEDED_ERROR: &str = "blocked by security policy: daily cost limit exceeded";
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     headers
@@ -51,9 +57,23 @@ fn log_tool_loop_stop(source: &str, stop_reason: &LoopStopReason, iterations: u3
         LoopStopReason::ApprovalDenied => {
             tracing::warn!(source, "tool loop halted pending approval");
         }
+        LoopStopReason::HookBlocked(reason) => {
+            tracing::warn!(source, reason, "tool loop halted by prompt hook");
+        }
         LoopStopReason::Error(error) => {
             tracing::warn!(source, error = %error, "tool loop ended with provider error");
         }
+    }
+}
+
+fn policy_accounting_error(error: &anyhow::Error) -> Option<&'static str> {
+    let message = error.to_string();
+    if message.contains(ACTION_LIMIT_EXCEEDED_ERROR) {
+        Some(ACTION_LIMIT_EXCEEDED_ERROR)
+    } else if message.contains(COST_LIMIT_EXCEEDED_ERROR) {
+        Some(COST_LIMIT_EXCEEDED_ERROR)
+    } else {
+        None
     }
 }
 
@@ -64,34 +84,45 @@ async fn run_gateway_tool_loop(
     model: &str,
     temperature: f64,
     source_identifier: &str,
-) -> anyhow::Result<crate::core::agent::tool_loop::ToolLoopResult> {
-    let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
-    let full_prompt = system_prompt.unwrap_or_default();
+) -> anyhow::Result<crate::agent::tool_loop::ToolLoopResult> {
+    let full_prompt = system_prompt.unwrap_or(state.system_prompt.as_str());
+    let entity_id = channel_person_entity_id("gateway", source_identifier);
+    let policy_context = TenantPolicyContext::disabled();
     let ctx = ExecutionContext {
         security: Arc::clone(&state.security),
         autonomy_level: state.security.autonomy,
-        entity_id: channel_person_entity_id("gateway", source_identifier),
+        entity_id: entity_id.clone(),
         turn_number: 0,
         workspace_dir: state.security.workspace_dir.clone(),
         allowed_tools: None,
-        permission_store: Some(Arc::clone(&state.permission_store)),
         rate_limiter: Arc::clone(&state.rate_limiter),
-        tenant_context: TenantPolicyContext::disabled(),
-        approval_broker: None,
+        tenant_context: policy_context.clone(),
     };
-    let result = tool_loop
-        .run(ToolLoopRunParams {
-            provider: state.provider.as_ref(),
+    let result = run_main_session_turn_for_runtime_with_policy(
+        IntegrationTurnParams {
+            config: state.config.as_ref(),
+            security: state.security.as_ref(),
+            mem: Arc::clone(&state.mem),
+            answer_provider: state.provider.as_ref(),
+            reflect_provider: state.provider.as_ref(),
             system_prompt: full_prompt,
-            user_message,
-            image_content: &[],
-            model,
+            model_name: model,
             temperature,
-            ctx: &ctx,
+            entity_id: &entity_id,
+            policy_context,
+            user_message,
+        },
+        IntegrationRuntimeTurnOptions {
+            registry: Arc::clone(&state.registry),
+            max_tool_iterations: state.max_tool_loop_iterations,
+            repeated_tool_call_streak_limit: state.repeated_tool_call_streak_limit,
+            execution_context: ctx,
             stream_sink: None,
             conversation_history: &[],
-        })
-        .await?;
+            hooks: &[],
+        },
+    )
+    .await?;
     if let LoopStopReason::Error(error) = &result.stop_reason {
         anyhow::bail!("tool loop failed: {error}");
     }
@@ -180,17 +211,6 @@ async fn process_whatsapp_message(
         return;
     }
 
-    if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-        if let Err(error) = wa
-            .send_chunked("I cannot respond right now due to policy limits.", sender)
-            .await
-        {
-            tracing::warn!(%error, "failed to send whatsapp policy limit reply");
-        }
-        tracing::warn!("{policy_error}");
-        return;
-    }
-
     match run_gateway_tool_loop(
         state,
         None,
@@ -206,6 +226,16 @@ async fn process_whatsapp_message(
             send_whatsapp_reply_or_log(wa, sender, &result.final_text).await;
         }
         Err(error) => {
+            if policy_accounting_error(&error).is_some() {
+                if let Err(send_error) = wa
+                    .send_chunked("I cannot respond right now due to policy limits.", sender)
+                    .await
+                {
+                    tracing::warn!(%send_error, "failed to send whatsapp policy limit reply");
+                }
+                tracing::warn!("{error}");
+                return;
+            }
             tracing::error!("LLM error for WhatsApp message: {error:#}");
             if let Err(error) = wa
                 .send_chunked("Sorry, I couldn't process your message right now.", sender)
@@ -217,17 +247,16 @@ async fn process_whatsapp_message(
     }
 }
 
-/// GET /health — always public (no secrets leaked)
+/// GET /health -- always public (no secrets leaked)
 pub(super) async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
     let body = serde_json::json!({
         "status": "ok",
         "paired": state.pairing.is_paired(),
-        "runtime": crate::runtime::diagnostics::health::snapshot_json(),
     });
     Json(body)
 }
 
-/// POST /pair — exchange one-time code for bearer token
+/// POST /pair -- exchange one-time code for bearer token
 pub(super) async fn handle_pair(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -239,7 +268,7 @@ pub(super) async fn handle_pair(
 
     match state.pairing.try_pair(code) {
         Ok(Some(token)) => {
-            tracing::info!("🔐 New client paired successfully");
+            tracing::info!("New client paired successfully");
             let body = serde_json::json!({
                 "paired": true,
                 "token": token,
@@ -248,13 +277,13 @@ pub(super) async fn handle_pair(
             (StatusCode::OK, Json(body))
         }
         Ok(None) => {
-            tracing::warn!("🔐 Pairing attempt with invalid code");
+            tracing::warn!("Pairing attempt with invalid code");
             let err = serde_json::json!({"error": "Invalid pairing code"});
             (StatusCode::FORBIDDEN, Json(err))
         }
         Err(lockout_secs) => {
             tracing::warn!(
-                "🔐 Pairing locked out — too many failed attempts ({lockout_secs}s remaining)"
+                "Pairing locked out — too many failed attempts ({lockout_secs}s remaining)"
             );
             let err = serde_json::json!({
                 "error": format!("Too many failed attempts. Try again in {lockout_secs}s."),
@@ -265,7 +294,13 @@ pub(super) async fn handle_pair(
     }
 }
 
-/// POST /webhook — main webhook endpoint
+/// Constant-time equality comparison for secret tokens.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
+/// POST /webhook -- main webhook endpoint
 #[allow(clippy::too_many_lines)]
 pub(super) async fn handle_webhook(
     State(state): State<AppState>,
@@ -327,6 +362,14 @@ pub(super) async fn handle_webhook(
         }
     };
 
+    // ── Replay protection: reject duplicate webhook payloads within TTL ──
+    let replay_fingerprint = serde_json::to_vec(&webhook_body).unwrap_or_default();
+    if !state.replay_guard.check_and_record(&replay_fingerprint) {
+        tracing::warn!("Webhook replay detected");
+        let body = serde_json::json!({"status": "duplicate"});
+        return (StatusCode::OK, Json(body));
+    }
+
     let source = "gateway:webhook";
     let ingress = apply_external_ingress_policy(source, &webhook_body.message);
 
@@ -361,10 +404,6 @@ pub(super) async fn handle_webhook(
         return (StatusCode::BAD_REQUEST, Json(err));
     }
 
-    if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-        return policy_accounting_response(policy_error);
-    }
-
     let source_identifier = bearer_token(&headers).unwrap_or("anonymous");
     match run_gateway_tool_loop(
         &state,
@@ -382,9 +421,12 @@ pub(super) async fn handle_webhook(
             (StatusCode::OK, Json(body))
         }
         Err(e) => {
+            if let Some(policy_error) = policy_accounting_error(&e) {
+                return policy_accounting_response(policy_error);
+            }
             tracing::error!(
                 "Webhook provider error: {}",
-                providers::sanitize_api_error(&e.to_string())
+                llm::sanitize_api_error(&e.to_string())
             );
             let err = serde_json::json!({"error": "LLM request failed"});
             (StatusCode::INTERNAL_SERVER_ERROR, Json(err))
@@ -392,7 +434,7 @@ pub(super) async fn handle_webhook(
     }
 }
 
-/// GET /whatsapp — Meta webhook verification
+/// GET /whatsapp -- Meta webhook verification
 #[cfg(feature = "whatsapp")]
 pub(super) async fn handle_whatsapp_verify(
     State(state): State<AppState>,
@@ -419,7 +461,7 @@ pub(super) async fn handle_whatsapp_verify(
     (StatusCode::FORBIDDEN, "Forbidden".to_string())
 }
 
-/// POST /whatsapp — incoming message webhook
+/// POST /whatsapp -- incoming message webhook
 #[cfg(feature = "whatsapp")]
 pub(super) async fn handle_whatsapp_message(
     State(state): State<AppState>,
@@ -430,24 +472,27 @@ pub(super) async fn handle_whatsapp_message(
         return whatsapp_not_configured_response();
     };
 
-    // ── Security: Verify X-Hub-Signature-256 if app_secret is configured ──
-    if let Some(ref app_secret) = state.whatsapp_app_secret {
-        let signature = headers
-            .get("X-Hub-Signature-256")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+    // ── Security: require and verify X-Hub-Signature-256 ──
+    let Some(ref app_secret) = state.whatsapp_app_secret else {
+        tracing::warn!("WhatsApp webhook rejected: app_secret is not configured");
+        return invalid_whatsapp_signature_response();
+    };
 
-        if !verify_whatsapp_signature(app_secret, &body, signature) {
-            tracing::warn!(
-                "WhatsApp webhook signature verification failed (signature: {})",
-                if signature.is_empty() {
-                    "missing"
-                } else {
-                    "invalid"
-                }
-            );
-            return invalid_whatsapp_signature_response();
-        }
+    let signature = headers
+        .get("X-Hub-Signature-256")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !verify_whatsapp_signature(app_secret, &body, signature) {
+        tracing::warn!(
+            "WhatsApp webhook signature verification failed (signature: {})",
+            if signature.is_empty() {
+                "missing"
+            } else {
+                "invalid"
+            }
+        );
+        return invalid_whatsapp_signature_response();
     }
 
     // ── Replay protection: check if we've seen this body before ──

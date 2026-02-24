@@ -2,40 +2,55 @@ use super::types::{MediaConfig, MediaFile, MediaType};
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
-
-const METADATA_DB_FILE: &str = "media.db";
+use std::sync::{Arc, Mutex};
 
 pub struct MediaStore {
     storage_dir: PathBuf,
-    metadata_db_path: PathBuf,
+    conn: Arc<Mutex<Connection>>,
     max_file_size: u64,
 }
 
 impl MediaStore {
-    pub fn new(config: &MediaConfig, workspace_dir: &str) -> Result<Self> {
+    pub async fn new(config: &MediaConfig, workspace_dir: &Path) -> Result<Self> {
         let storage_dir = config
             .storage_dir
             .as_deref()
-            .map_or_else(|| PathBuf::from(workspace_dir).join("media"), PathBuf::from);
+            .map_or_else(|| workspace_dir.join("media"), PathBuf::from);
 
-        std::fs::create_dir_all(&storage_dir)?;
+        tokio::fs::create_dir_all(&storage_dir).await?;
 
-        let metadata_db_path = storage_dir.join(METADATA_DB_FILE);
-        let store = Self {
+        let db_path = storage_dir.join("media.db");
+        let conn = tokio::task::spawn_blocking(move || -> Result<Connection> {
+            let conn = Connection::open(&db_path)?;
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS media_files (
+                    id TEXT PRIMARY KEY,
+                    mime_type TEXT NOT NULL,
+                    media_type TEXT NOT NULL,
+                    filename TEXT,
+                    size_bytes INTEGER NOT NULL,
+                    storage_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )",
+                [],
+            )?;
+            Ok(conn)
+        })
+        .await??;
+
+        Ok(Self {
             storage_dir,
-            metadata_db_path,
+            conn: Arc::new(Mutex::new(conn)),
             max_file_size: config.max_file_size_mb * 1_024 * 1_024,
-        };
-        store.init_db()?;
-
-        Ok(store)
+        })
     }
 
-    pub fn store(&self, data: &[u8], filename: Option<&str>) -> Result<MediaFile> {
-        if data.len() as u64 > self.max_file_size {
+    pub async fn store(&self, data: &[u8], filename: Option<&str>) -> Result<MediaFile> {
+        let size = data.len() as u64;
+        if size > self.max_file_size {
             anyhow::bail!(
                 "file size {} exceeds maximum {} bytes",
-                data.len(),
+                size,
                 self.max_file_size
             );
         }
@@ -45,101 +60,116 @@ impl MediaStore {
 
         let ext = extension_from_mime(&mime_type);
         let storage_filename = format!("{id}.{ext}");
-        let storage_path = self.storage_dir.join(storage_filename);
+        let storage_path = self.storage_dir.join(&storage_filename);
 
-        std::fs::write(&storage_path, data)?;
+        tokio::fs::write(&storage_path, data).await?;
 
         let created_at = chrono::Utc::now().to_rfc3339();
+        let storage_path_str = storage_path.to_string_lossy().into_owned();
+
         let media_file = MediaFile {
             id,
             mime_type,
             media_type,
             filename: filename.map(String::from),
-            size_bytes: data.len() as u64,
-            storage_path: storage_path.to_string_lossy().into_owned(),
+            size_bytes: size,
+            storage_path: storage_path_str,
             created_at,
         };
-        self.persist_metadata(&media_file)?;
+
+        let file_clone = media_file.clone();
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = conn.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let size_i64 = i64::try_from(file_clone.size_bytes)?;
+            conn.execute(
+                "INSERT INTO media_files (id, mime_type, media_type, filename, size_bytes, storage_path, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    file_clone.id,
+                    file_clone.mime_type,
+                    file_clone.media_type.as_str(),
+                    file_clone.filename,
+                    size_i64,
+                    file_clone.storage_path,
+                    file_clone.created_at,
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
 
         Ok(media_file)
     }
 
-    pub fn retrieve(&self, id: &str) -> Result<(MediaFile, Vec<u8>)> {
-        let media_file = self.load_metadata(id)?;
-        let data = std::fs::read(&media_file.storage_path)?;
+    pub async fn retrieve(&self, id: &str) -> Result<(MediaFile, Vec<u8>)> {
+        let conn = Arc::clone(&self.conn);
+        let id_owned = id.to_string();
+        let media_file = tokio::task::spawn_blocking(move || -> Result<MediaFile> {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let mut stmt = conn.prepare(
+                "SELECT id, mime_type, media_type, filename, size_bytes, storage_path, created_at
+                 FROM media_files
+                 WHERE id = ?1",
+            )?;
+            let file = stmt.query_row([&id_owned], |row| {
+                let media_type_str: String = row.get(2)?;
+                let size_i64: i64 = row.get(4)?;
+                let size_bytes = u64::try_from(size_i64).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Integer,
+                        Box::new(e),
+                    )
+                })?;
+                Ok(MediaFile {
+                    id: row.get(0)?,
+                    mime_type: row.get(1)?,
+                    media_type: MediaType::from_kind(&media_type_str),
+                    filename: row.get(3)?,
+                    size_bytes,
+                    storage_path: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?;
+            Ok(file)
+        })
+        .await??;
+
+        let data = tokio::fs::read(&media_file.storage_path).await?;
         Ok((media_file, data))
+    }
+
+    pub async fn delete(&self, id: &str) -> Result<()> {
+        let conn = Arc::clone(&self.conn);
+        let id_owned = id.to_string();
+        let storage_path = tokio::task::spawn_blocking(move || -> Result<String> {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let path: String = conn.query_row(
+                "SELECT storage_path FROM media_files WHERE id = ?1",
+                [&id_owned],
+                |row| row.get(0),
+            )?;
+            conn.execute("DELETE FROM media_files WHERE id = ?1", [&id_owned])?;
+            Ok(path)
+        })
+        .await??;
+
+        let path = Path::new(&storage_path);
+        if path.exists() {
+            tokio::fs::remove_file(path).await?;
+        }
+
+        Ok(())
     }
 
     #[must_use]
     pub fn storage_dir(&self) -> &Path {
         &self.storage_dir
-    }
-
-    fn init_db(&self) -> Result<()> {
-        let conn = Connection::open(&self.metadata_db_path)?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS media_files (
-                id TEXT PRIMARY KEY,
-                mime_type TEXT NOT NULL,
-                media_type TEXT NOT NULL,
-                filename TEXT,
-                size_bytes INTEGER NOT NULL,
-                storage_path TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )",
-            [],
-        )?;
-        Ok(())
-    }
-
-    fn persist_metadata(&self, media_file: &MediaFile) -> Result<()> {
-        let conn = Connection::open(&self.metadata_db_path)?;
-        let size_bytes = i64::try_from(media_file.size_bytes)?;
-        conn.execute(
-            "INSERT INTO media_files (
-                id, mime_type, media_type, filename, size_bytes, storage_path, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                media_file.id,
-                media_file.mime_type,
-                media_file.media_type.as_str(),
-                media_file.filename,
-                size_bytes,
-                media_file.storage_path,
-                media_file.created_at,
-            ],
-        )?;
-        Ok(())
-    }
-
-    fn load_metadata(&self, id: &str) -> Result<MediaFile> {
-        let conn = Connection::open(&self.metadata_db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT id, mime_type, media_type, filename, size_bytes, storage_path, created_at
-             FROM media_files
-             WHERE id = ?1",
-        )?;
-        let media_file = stmt.query_row([id], |row| {
-            let media_type: String = row.get(2)?;
-            let size_bytes_i64: i64 = row.get(4)?;
-            let size_bytes = u64::try_from(size_bytes_i64).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    4,
-                    rusqlite::types::Type::Integer,
-                    Box::new(e),
-                )
-            })?;
-            Ok(MediaFile {
-                id: row.get(0)?,
-                mime_type: row.get(1)?,
-                media_type: MediaType::from_kind(&media_type),
-                filename: row.get(3)?,
-                size_bytes,
-                storage_path: row.get(5)?,
-                created_at: row.get(6)?,
-            })
-        })?;
-        Ok(media_file)
     }
 }
 
@@ -166,15 +196,16 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    #[test]
-    fn store_and_retrieve_roundtrip() {
+    #[tokio::test]
+    async fn store_and_retrieve_roundtrip() {
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().to_string_lossy().into_owned();
-        let store = MediaStore::new(&MediaConfig::default(), &workspace_dir).unwrap();
+        let store = MediaStore::new(&MediaConfig::default(), temp_dir.path())
+            .await
+            .unwrap();
 
         let data = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00];
-        let stored = store.store(&data, Some("sample.png")).unwrap();
-        let (retrieved, bytes) = store.retrieve(&stored.id).unwrap();
+        let stored = store.store(&data, Some("sample.png")).await.unwrap();
+        let (retrieved, bytes) = store.retrieve(&stored.id).await.unwrap();
 
         assert_eq!(bytes, data);
         assert_eq!(retrieved.id, stored.id);
@@ -182,39 +213,71 @@ mod tests {
         assert_eq!(retrieved.filename.as_deref(), Some("sample.png"));
     }
 
-    #[test]
-    fn store_rejects_oversized_file() {
+    #[tokio::test]
+    async fn store_rejects_oversized_file() {
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().to_string_lossy().into_owned();
         let config = MediaConfig {
             max_file_size_mb: 1,
             ..MediaConfig::default()
         };
-        let store = MediaStore::new(&config, &workspace_dir).unwrap();
+        let store = MediaStore::new(&config, temp_dir.path()).await.unwrap();
 
         let oversized = vec![0_u8; (1_024 * 1_024) + 1];
-        let result = store.store(&oversized, Some("too_large.bin"));
+        let result = store.store(&oversized, Some("too_large.bin")).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn store_creates_file_on_disk() {
+    #[tokio::test]
+    async fn store_creates_file_on_disk() {
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().to_string_lossy().into_owned();
-        let store = MediaStore::new(&MediaConfig::default(), &workspace_dir).unwrap();
+        let store = MediaStore::new(&MediaConfig::default(), temp_dir.path())
+            .await
+            .unwrap();
 
         let data = b"hello";
-        let stored = store.store(data, Some("hello.txt")).unwrap();
+        let stored = store.store(data, Some("hello.txt")).await.unwrap();
         assert!(Path::new(&stored.storage_path).exists());
     }
 
-    #[test]
-    fn retrieve_errors_for_nonexistent_id() {
+    #[tokio::test]
+    async fn retrieve_errors_for_nonexistent_id() {
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().to_string_lossy().into_owned();
-        let store = MediaStore::new(&MediaConfig::default(), &workspace_dir).unwrap();
+        let store = MediaStore::new(&MediaConfig::default(), temp_dir.path())
+            .await
+            .unwrap();
 
-        let result = store.retrieve("missing-id");
+        let result = store.retrieve("missing-id").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_removes_file_and_metadata() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = MediaStore::new(&MediaConfig::default(), temp_dir.path())
+            .await
+            .unwrap();
+
+        let data = b"to be deleted";
+        let stored = store.store(data, Some("delete_me.txt")).await.unwrap();
+        let id = stored.id.clone();
+        let path = stored.storage_path.clone();
+
+        assert!(Path::new(&path).exists());
+
+        store.delete(&id).await.unwrap();
+
+        assert!(!Path::new(&path).exists());
+        assert!(store.retrieve(&id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_errors_for_nonexistent_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = MediaStore::new(&MediaConfig::default(), temp_dir.path())
+            .await
+            .unwrap();
+
+        let result = store.delete("nonexistent-id").await;
         assert!(result.is_err());
     }
 }

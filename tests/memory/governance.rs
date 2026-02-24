@@ -1,17 +1,19 @@
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
-use asteroniris::core::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 use asteroniris::security::policy::TenantPolicyContext;
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
+use asteroniris::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-fn fixture() -> (TempDir, Arc<dyn Memory>, Arc<SecurityPolicy>) {
+async fn fixture() -> (TempDir, Arc<dyn Memory>, Arc<SecurityPolicy>) {
     let temp = TempDir::new().expect("temp dir should be created");
-    let memory = SqliteMemory::new(temp.path()).expect("sqlite memory should initialize");
+    let memory = SqliteMemory::new(temp.path())
+        .await
+        .expect("sqlite memory should initialize");
     let security = SecurityPolicy {
         autonomy: AutonomyLevel::Full,
         workspace_dir: temp.path().to_path_buf(),
@@ -46,7 +48,7 @@ async fn seed_slot(
 
 #[tokio::test]
 async fn memory_governance_inspect_export_delete() {
-    let (_temp, memory, security) = fixture();
+    let (_temp, memory, security) = fixture().await;
     seed_slot(
         memory.as_ref(),
         "tenant-alpha:user-1",
@@ -153,7 +155,7 @@ async fn memory_governance_inspect_export_delete() {
 
 #[tokio::test]
 async fn memory_governance_export_returns_scoped_bundle() {
-    let (_temp, memory, security) = fixture();
+    let (_temp, memory, security) = fixture().await;
     seed_slot(
         memory.as_ref(),
         "tenant-alpha:user-2",
@@ -237,7 +239,7 @@ async fn memory_governance_export_returns_scoped_bundle() {
 
 #[tokio::test]
 async fn memory_governance_delete_denied_is_audited() {
-    let (_temp, memory, security) = fixture();
+    let (_temp, memory, security) = fixture().await;
     seed_slot(
         memory.as_ref(),
         "tenant-alpha:user-3",

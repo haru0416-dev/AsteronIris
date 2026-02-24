@@ -1,15 +1,71 @@
-use super::AppState;
 use super::events::{ClientMessage, ServerMessage};
-use crate::core::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
-use crate::core::tools::middleware::ExecutionContext;
+use super::{AppState, MAX_BODY_SIZE};
+use crate::agent::{
+    IntegrationRuntimeTurnOptions, IntegrationTurnParams, LoopStopReason,
+    run_main_session_turn_for_runtime_with_policy,
+};
 use crate::security::policy::TenantPolicyContext;
+use crate::tools::ExecutionContext;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
 
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
+}
+
+fn websocket_auth_response(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Option<(StatusCode, &'static str)> {
+    let pairing_active = state.pairing.is_paired() || state.pairing.require_pairing();
+    let api_keys = state.openai_compat_api_keys.as_deref().unwrap_or(&[]);
+    let api_key_ok =
+        bearer_token(headers).is_some_and(|token| api_keys.iter().any(|key| key == token));
+
+    if pairing_active {
+        let pairing_authenticated =
+            bearer_token(headers).is_some_and(|token| state.pairing.is_authenticated(token));
+        if pairing_authenticated || api_key_ok {
+            None
+        } else {
+            Some((
+                StatusCode::UNAUTHORIZED,
+                "WebSocket upgrade requires authentication (pairing token or API key)",
+            ))
+        }
+    } else if api_keys.is_empty() {
+        Some((
+            StatusCode::FORBIDDEN,
+            "WebSocket disabled: no authentication is configured. Enable pairing or API keys.",
+        ))
+    } else if api_key_ok {
+        None
+    } else {
+        Some((
+            StatusCode::UNAUTHORIZED,
+            "WebSocket upgrade requires a valid API key",
+        ))
+    }
+}
+
+pub async fn ws_handler(
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if let Some(response) = websocket_auth_response(&state, &headers) {
+        return response.into_response();
+    }
+
     ws.on_upgrade(move |socket| handle_socket(socket, state))
+        .into_response()
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
@@ -28,22 +84,35 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         };
 
         match message {
-            Message::Text(text) => match serde_json::from_str::<ClientMessage>(&text) {
-                Ok(client_message) => {
-                    if handle_client_message(&mut socket, &state, client_message)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    let server_message = ServerMessage::error(format!("invalid message: {error}"));
+            Message::Text(text) => {
+                if text.len() > MAX_BODY_SIZE {
+                    let server_message = ServerMessage::error(format!(
+                        "message too large: max {MAX_BODY_SIZE} bytes"
+                    ));
                     if send_message(&mut socket, &server_message).await.is_err() {
                         break;
                     }
+                    continue;
                 }
-            },
+
+                match serde_json::from_str::<ClientMessage>(&text) {
+                    Ok(client_message) => {
+                        if handle_client_message(&mut socket, &state, client_message)
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let server_message =
+                            ServerMessage::error(format!("invalid message: {error}"));
+                        if send_message(&mut socket, &server_message).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
             Message::Close(_) => break,
             Message::Ping(data) => {
                 if socket.send(Message::Pong(data)).await.is_err() {
@@ -68,35 +137,45 @@ async fn handle_client_message(
             let typing = ServerMessage::Typing { agent: true };
             let _ = send_message(socket, &typing).await;
 
-            let tool_loop =
-                ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
             let source_identifier = session_id.as_deref().unwrap_or("websocket");
+            let entity_id = format!("gateway:{source_identifier}");
+            let policy_context = TenantPolicyContext::disabled();
             let ctx = ExecutionContext {
                 security: Arc::clone(&state.security),
                 autonomy_level: state.security.autonomy,
-                entity_id: format!("gateway:{source_identifier}"),
+                entity_id: entity_id.clone(),
                 turn_number: 0,
                 workspace_dir: state.security.workspace_dir.clone(),
                 allowed_tools: None,
-                permission_store: Some(Arc::clone(&state.permission_store)),
                 rate_limiter: Arc::clone(&state.rate_limiter),
-                tenant_context: TenantPolicyContext::disabled(),
-                approval_broker: None,
+                tenant_context: policy_context.clone(),
             };
 
-            match tool_loop
-                .run(ToolLoopRunParams {
-                    provider: state.provider.as_ref(),
-                    system_prompt: "",
-                    user_message: &message,
-                    image_content: &[],
-                    model: &state.model,
+            match run_main_session_turn_for_runtime_with_policy(
+                IntegrationTurnParams {
+                    config: state.config.as_ref(),
+                    security: state.security.as_ref(),
+                    mem: Arc::clone(&state.mem),
+                    answer_provider: state.provider.as_ref(),
+                    reflect_provider: state.provider.as_ref(),
+                    system_prompt: state.system_prompt.as_str(),
+                    model_name: &state.model,
                     temperature: state.temperature,
-                    ctx: &ctx,
+                    entity_id: &entity_id,
+                    policy_context,
+                    user_message: &message,
+                },
+                IntegrationRuntimeTurnOptions {
+                    registry: Arc::clone(&state.registry),
+                    max_tool_iterations: state.max_tool_loop_iterations,
+                    repeated_tool_call_streak_limit: state.repeated_tool_call_streak_limit,
+                    execution_context: ctx,
                     stream_sink: None,
                     conversation_history: &[],
-                })
-                .await
+                    hooks: &[],
+                },
+            )
+            .await
             {
                 Ok(result) => {
                     if let LoopStopReason::Error(error) = &result.stop_reason {

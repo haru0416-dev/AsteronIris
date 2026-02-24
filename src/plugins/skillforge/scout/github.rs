@@ -2,7 +2,8 @@
 
 use super::{Scout, ScoutResult, ScoutSource, dedup, urlencoding};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use tracing::{debug, warn};
 
 /// Searches GitHub for repos matching skill-related queries.
@@ -95,58 +96,59 @@ impl GitHubScout {
     }
 }
 
-#[async_trait]
 impl Scout for GitHubScout {
-    async fn discover(&self) -> Result<Vec<ScoutResult>> {
-        let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
+    fn discover(&self) -> Pin<Box<dyn Future<Output = Result<Vec<ScoutResult>>> + Send + '_>> {
+        Box::pin(async move {
+            let mut all: Vec<ScoutResult> = Vec::with_capacity(self.queries.len() * 30);
 
-        for query in &self.queries {
-            let url = format!(
-                "https://api.github.com/search/repositories?q={}&sort=stars&order=desc&per_page=30",
-                urlencoding(query)
-            );
-            debug!(query = query.as_str(), "Searching GitHub");
+            for query in &self.queries {
+                let url = format!(
+                    "https://api.github.com/search/repositories?q={}&sort=stars&order=desc&per_page=30",
+                    urlencoding(query)
+                );
+                debug!(query = query.as_str(), "Searching GitHub");
 
-            let resp = match self.client.get(&url).send().await {
-                Ok(r) => r,
-                Err(e) => {
+                let resp = match self.client.get(&url).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(
+                            query = query.as_str(),
+                            error = %e,
+                            "GitHub API request failed, skipping query"
+                        );
+                        continue;
+                    }
+                };
+
+                if !resp.status().is_success() {
                     warn!(
+                        status = %resp.status(),
                         query = query.as_str(),
-                        error = %e,
-                        "GitHub API request failed, skipping query"
+                        "GitHub search returned non-200"
                     );
                     continue;
                 }
-            };
 
-            if !resp.status().is_success() {
-                warn!(
-                    status = %resp.status(),
-                    query = query.as_str(),
-                    "GitHub search returned non-200"
-                );
-                continue;
+                let body: serde_json::Value = match resp.json().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(
+                            query = query.as_str(),
+                            error = %e,
+                            "Failed to parse GitHub response, skipping query"
+                        );
+                        continue;
+                    }
+                };
+
+                let mut items = Self::parse_items(&body);
+                debug!(count = items.len(), query = query.as_str(), "Parsed items");
+                all.append(&mut items);
             }
 
-            let body: serde_json::Value = match resp.json().await {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(
-                        query = query.as_str(),
-                        error = %e,
-                        "Failed to parse GitHub response, skipping query"
-                    );
-                    continue;
-                }
-            };
-
-            let mut items = Self::parse_items(&body);
-            debug!(count = items.len(), query = query.as_str(), "Parsed items");
-            all.append(&mut items);
-        }
-
-        dedup(&mut all);
-        Ok(all)
+            dedup(&mut all);
+            Ok(all)
+        })
     }
 }
 

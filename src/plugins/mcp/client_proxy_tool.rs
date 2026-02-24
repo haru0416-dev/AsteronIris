@@ -1,8 +1,8 @@
-use crate::core::tools::middleware::ExecutionContext;
-use crate::core::tools::{Tool, ToolResult};
 use crate::plugins::mcp::client_connection::McpConnection;
 use crate::plugins::mcp::content::{ToolContent, render_content_to_text};
-use async_trait::async_trait;
+use crate::tools::{ExecutionContext, Tool, ToolResult};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct McpToolProxy {
@@ -63,7 +63,6 @@ impl McpToolProxy {
     }
 }
 
-#[async_trait]
 impl Tool for McpToolProxy {
     fn name(&self) -> &str {
         &self.namespaced_name
@@ -77,16 +76,18 @@ impl Tool for McpToolProxy {
         self.parameters_schema.clone()
     }
 
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         args: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> anyhow::Result<ToolResult> {
-        let result = match self.connection.call_tool(&self.tool_name, args).await {
-            Ok(content) => Self::result_from_content(&content),
-            Err(ref error) => Self::result_from_error(error),
-        };
-        Ok(result)
+        _ctx: &'a ExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let result = match self.connection.call_tool(&self.tool_name, args).await {
+                Ok(content) => Self::result_from_content(&content),
+                Err(ref error) => Self::result_from_error(error),
+            };
+            Ok(result)
+        })
     }
 }
 

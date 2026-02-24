@@ -1,5 +1,5 @@
-use asteroniris::core::memory::traits::MemoryLayer;
-use asteroniris::core::memory::{
+use asteroniris::memory::traits::MemoryLayer;
+use asteroniris::memory::{
     MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource, PrivacyLevel,
 };
 

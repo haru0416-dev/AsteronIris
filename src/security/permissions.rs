@@ -1,4 +1,4 @@
-use crate::security::approval::{GrantScope, PermissionGrant};
+use crate::security::grants::{GrantScope, PermissionGrant};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,8 @@
 use super::TelegramChannel;
 use crate::transport::channels::traits::{Channel, ChannelMessage, MediaAttachment, MediaData};
-use async_trait::async_trait;
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use uuid::Uuid;
 
 impl TelegramChannel {
@@ -134,7 +135,6 @@ impl TelegramChannel {
     }
 }
 
-#[async_trait]
 impl Channel for TelegramChannel {
     fn name(&self) -> &str {
         "telegram"
@@ -144,186 +144,203 @@ impl Channel for TelegramChannel {
         4096
     }
 
-    async fn send(&self, message: &str, chat_id: &str) -> anyhow::Result<()> {
-        let body = serde_json::json!({
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": "Markdown"
-        });
-
-        let resp = self
-            .client
-            .post(self.api_url("sendMessage"))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let err = resp
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
-            anyhow::bail!("Telegram sendMessage failed ({status}): {err}");
-        }
-
-        Ok(())
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let mut offset: i64 = 0;
-
-        tracing::info!("Telegram channel listening for messages...");
-
-        loop {
-            let url = self.api_url("getUpdates");
+    fn send<'a>(
+        &'a self,
+        message: &'a str,
+        chat_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
             let body = serde_json::json!({
-                "offset": offset,
-                "timeout": 30,
-                "allowed_updates": ["message"]
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "Markdown"
             });
 
-            let resp = match self.client.post(&url).json(&body).send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Telegram poll error: {e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    continue;
-                }
-            };
+            let resp = self
+                .client
+                .post(self.api_url("sendMessage"))
+                .json(&body)
+                .send()
+                .await?;
 
-            let data: serde_json::Value = match resp.json().await {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("Telegram parse error: {e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    continue;
-                }
-            };
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let err = resp
+                    .text()
+                    .await
+                    .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+                anyhow::bail!("Telegram sendMessage failed ({status}): {err}");
+            }
 
-            if let Some(results) = data.get("result").and_then(serde_json::Value::as_array) {
-                for update in results {
-                    // Advance offset past this update
-                    if let Some(uid) = update.get("update_id").and_then(serde_json::Value::as_i64) {
-                        offset = uid + 1;
-                    }
+            Ok(())
+        })
+    }
 
-                    let Some(message) = update.get("message") else {
+    fn listen<'a>(
+        &'a self,
+        tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut offset: i64 = 0;
+
+            tracing::info!("Telegram channel listening for messages...");
+
+            loop {
+                let url = self.api_url("getUpdates");
+                let body = serde_json::json!({
+                    "offset": offset,
+                    "timeout": 30,
+                    "allowed_updates": ["message"]
+                });
+
+                let resp = match self.client.post(&url).json(&body).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!("Telegram poll error: {e}");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         continue;
-                    };
-
-                    let username_opt = message
-                        .get("from")
-                        .and_then(|f| f.get("username"))
-                        .and_then(|u| u.as_str());
-                    let username = username_opt.unwrap_or("unknown");
-
-                    let user_id = message
-                        .get("from")
-                        .and_then(|f| f.get("id"))
-                        .and_then(serde_json::Value::as_i64);
-                    let user_id_str = user_id.map(|id| id.to_string());
-
-                    let mut identities = vec![username];
-                    if let Some(ref id) = user_id_str {
-                        identities.push(id.as_str());
                     }
+                };
 
-                    if !self.is_any_user_allowed(identities.iter().copied()) {
-                        tracing::warn!(
-                            "Telegram: ignoring message from unauthorized user: username={username}, user_id={}. \
+                let data: serde_json::Value = match resp.json().await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!("Telegram parse error: {e}");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                };
+
+                if let Some(results) = data.get("result").and_then(serde_json::Value::as_array) {
+                    for update in results {
+                        // Advance offset past this update
+                        if let Some(uid) =
+                            update.get("update_id").and_then(serde_json::Value::as_i64)
+                        {
+                            offset = uid + 1;
+                        }
+
+                        let Some(message) = update.get("message") else {
+                            continue;
+                        };
+
+                        let username_opt = message
+                            .get("from")
+                            .and_then(|f| f.get("username"))
+                            .and_then(|u| u.as_str());
+                        let username = username_opt.unwrap_or("unknown");
+
+                        let user_id = message
+                            .get("from")
+                            .and_then(|f| f.get("id"))
+                            .and_then(serde_json::Value::as_i64);
+                        let user_id_str = user_id.map(|id| id.to_string());
+
+                        let mut identities = vec![username];
+                        if let Some(ref id) = user_id_str {
+                            identities.push(id.as_str());
+                        }
+
+                        if !self.is_any_user_allowed(identities.iter().copied()) {
+                            tracing::warn!(
+                                "Telegram: ignoring message from unauthorized user: username={username}, user_id={}. \
  Allowlist Telegram @username or numeric user ID, then run `asteroniris onboard --channels-only`.",
-                            user_id_str.as_deref().unwrap_or("unknown")
-                        );
-                        continue;
-                    }
+                                user_id_str.as_deref().unwrap_or("unknown")
+                            );
+                            continue;
+                        }
 
-                    let text = message
-                        .get("text")
-                        .and_then(serde_json::Value::as_str)
-                        .or_else(|| message.get("caption").and_then(serde_json::Value::as_str))
-                        .unwrap_or("");
+                        let text = message
+                            .get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .or_else(|| message.get("caption").and_then(serde_json::Value::as_str))
+                            .unwrap_or("");
 
-                    let attachments = self.parse_telegram_attachments(message).await;
-                    if text.is_empty() && attachments.is_empty() {
-                        continue;
-                    }
+                        let attachments = self.parse_telegram_attachments(message).await;
+                        if text.is_empty() && attachments.is_empty() {
+                            continue;
+                        }
 
-                    let chat_id = message
-                        .get("chat")
-                        .and_then(|c| c.get("id"))
-                        .and_then(serde_json::Value::as_i64)
-                        .map(|id| id.to_string())
-                        .unwrap_or_default();
+                        let chat_id = message
+                            .get("chat")
+                            .and_then(|c| c.get("id"))
+                            .and_then(serde_json::Value::as_i64)
+                            .map(|id| id.to_string())
+                            .unwrap_or_default();
 
-                    let msg = ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
-                        sender: chat_id,
-                        content: text.to_string(),
-                        channel: "telegram".to_string(),
-                        conversation_id: None,
-                        thread_id: None,
-                        reply_to: None,
-                        message_id: None,
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        attachments,
-                    };
+                        let msg = ChannelMessage {
+                            id: Uuid::new_v4().to_string(),
+                            sender: chat_id,
+                            content: text.to_string(),
+                            channel: "telegram".to_string(),
+                            conversation_id: None,
+                            thread_id: None,
+                            reply_to: None,
+                            message_id: None,
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            attachments,
+                        };
 
-                    if tx.send(msg).await.is_err() {
-                        return Ok(());
+                        if tx.send(msg).await.is_err() {
+                            return Ok(());
+                        }
                     }
                 }
             }
-        }
+        })
     }
 
-    async fn health_check(&self) -> bool {
-        self.client
-            .get(self.api_url("getMe"))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+    fn health_check<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            self.client
+                .get(self.api_url("getMe"))
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false)
+        })
     }
 
-    async fn send_media(
-        &self,
-        attachment: &MediaAttachment,
-        recipient: &str,
-    ) -> anyhow::Result<()> {
-        let mime = attachment.mime_type.as_str();
-        let filename = attachment.filename.as_deref().unwrap_or("attachment");
+    fn send_media<'a>(
+        &'a self,
+        attachment: &'a MediaAttachment,
+        recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let mime = attachment.mime_type.as_str();
+            let filename = attachment.filename.as_deref().unwrap_or("attachment");
 
-        match &attachment.data {
-            MediaData::Url(url) => {
-                if mime.starts_with("image/") {
-                    self.send_photo_by_url(recipient, url, None).await
-                } else if mime.starts_with("audio/") {
-                    self.send_audio_by_url(recipient, url, None).await
-                } else if mime.starts_with("video/") {
-                    self.send_video_by_url(recipient, url, None).await
-                } else {
-                    self.send_document_by_url(recipient, url, None).await
+            match &attachment.data {
+                MediaData::Url(url) => {
+                    if mime.starts_with("image/") {
+                        self.send_photo_by_url(recipient, url, None).await
+                    } else if mime.starts_with("audio/") {
+                        self.send_audio_by_url(recipient, url, None).await
+                    } else if mime.starts_with("video/") {
+                        self.send_video_by_url(recipient, url, None).await
+                    } else {
+                        self.send_document_by_url(recipient, url, None).await
+                    }
+                }
+                MediaData::Bytes(bytes) => {
+                    if mime.starts_with("image/") {
+                        self.send_photo_bytes(recipient, bytes.clone(), filename, None)
+                            .await
+                    } else if mime.starts_with("audio/") {
+                        self.send_audio_bytes(recipient, bytes.clone(), filename, None)
+                            .await
+                    } else if mime.starts_with("video/") {
+                        self.send_video_bytes(recipient, bytes.clone(), filename, None)
+                            .await
+                    } else {
+                        self.send_document_bytes(recipient, bytes.clone(), filename, None)
+                            .await
+                    }
                 }
             }
-            MediaData::Bytes(bytes) => {
-                if mime.starts_with("image/") {
-                    self.send_photo_bytes(recipient, bytes.clone(), filename, None)
-                        .await
-                } else if mime.starts_with("audio/") {
-                    self.send_audio_bytes(recipient, bytes.clone(), filename, None)
-                        .await
-                } else if mime.starts_with("video/") {
-                    self.send_video_bytes(recipient, bytes.clone(), filename, None)
-                        .await
-                } else {
-                    self.send_document_bytes(recipient, bytes.clone(), filename, None)
-                        .await
-                }
-            }
-        }
+        })
     }
 }

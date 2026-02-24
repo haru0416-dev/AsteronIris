@@ -30,7 +30,9 @@ pub(crate) fn spawn_supervised_listener(
         let max_backoff = max_backoff_secs.max(backoff);
 
         loop {
-            crate::runtime::diagnostics::health::mark_component_ok(&component);
+            // TODO: Port runtime::diagnostics::health to v2.
+            // For now, supervised listener operates without health tracking.
+            tracing::debug!(component, "channel listener starting");
             let result = ch.listen(tx.clone()).await;
 
             if tx.is_closed() {
@@ -40,23 +42,14 @@ pub(crate) fn spawn_supervised_listener(
             match result {
                 Ok(()) => {
                     tracing::warn!("Channel {} exited unexpectedly; restarting", ch.name());
-                    crate::runtime::diagnostics::health::mark_component_error(
-                        &component,
-                        "listener exited unexpectedly",
-                    );
-                    // Clean exit — reset backoff since the listener ran successfully
+                    // Clean exit -- reset backoff since the listener ran successfully
                     backoff = initial_backoff_secs.max(1);
                 }
                 Err(e) => {
                     tracing::error!("Channel {} error: {e}; restarting", ch.name());
-                    crate::runtime::diagnostics::health::mark_component_error(
-                        &component,
-                        e.to_string(),
-                    );
                 }
             }
 
-            crate::runtime::diagnostics::health::bump_component_restart(&component);
             tokio::time::sleep(Duration::from_secs(backoff)).await;
             // Double backoff AFTER sleeping so first error uses initial_backoff
             backoff = backoff.saturating_mul(2).min(max_backoff);
@@ -74,27 +67,34 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
-    #[async_trait::async_trait]
     impl Channel for AlwaysFailChannel {
         fn name(&self) -> &str {
             self.name
         }
 
-        async fn send(&self, _message: &str, _recipient: &str) -> anyhow::Result<()> {
-            Ok(())
+        fn send<'a>(
+            &'a self,
+            _message: &'a str,
+            _recipient: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>>
+        {
+            Box::pin(async move { Ok(()) })
         }
 
-        async fn listen(
-            &self,
+        fn listen<'a>(
+            &'a self,
             _tx: tokio::sync::mpsc::Sender<ChannelMessage>,
-        ) -> anyhow::Result<()> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            anyhow::bail!("listen boom")
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("listen boom")
+            })
         }
     }
 
     #[tokio::test]
-    async fn supervised_listener_marks_error_and_restarts_on_failures() {
+    async fn supervised_listener_restarts_on_failures() {
         let calls = Arc::new(AtomicUsize::new(0));
         let channel: Arc<dyn Channel> = Arc::new(AlwaysFailChannel {
             name: "test-supervised-fail",
@@ -109,16 +109,6 @@ mod tests {
         handle.abort();
         let _ = handle.await;
 
-        let snapshot = crate::runtime::diagnostics::health::snapshot_json();
-        let component = &snapshot["components"]["channel:test-supervised-fail"];
-        assert_eq!(component["status"], "error");
-        assert!(component["restart_count"].as_u64().unwrap_or(0) >= 1);
-        assert!(
-            component["last_error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("listen boom")
-        );
         assert!(calls.load(Ordering::SeqCst) >= 1);
     }
 }

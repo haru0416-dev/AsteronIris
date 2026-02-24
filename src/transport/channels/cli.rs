@@ -1,9 +1,10 @@
 use super::traits::{Channel, ChannelMessage};
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
-/// CLI channel — stdin/stdout, always available, zero deps
+/// CLI channel -- stdin/stdout, always available, zero deps
 pub struct CliChannel;
 
 impl CliChannel {
@@ -12,7 +13,6 @@ impl CliChannel {
     }
 }
 
-#[async_trait]
 impl Channel for CliChannel {
     fn name(&self) -> &str {
         "cli"
@@ -22,46 +22,57 @@ impl Channel for CliChannel {
         usize::MAX
     }
 
-    async fn send(&self, message: &str, _recipient: &str) -> anyhow::Result<()> {
-        println!("{message}");
-        Ok(())
+    fn send<'a>(
+        &'a self,
+        message: &'a str,
+        _recipient: &'a str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            println!("{message}");
+            Ok(())
+        })
     }
 
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let stdin = io::stdin();
-        let reader = BufReader::new(stdin);
-        let mut lines = reader.lines();
+    fn listen<'a>(
+        &'a self,
+        tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let stdin = io::stdin();
+            let reader = BufReader::new(stdin);
+            let mut lines = reader.lines();
 
-        while let Ok(Some(line)) = lines.next_line().await {
-            let line = line.trim().to_string();
-            if line.is_empty() {
-                continue;
-            }
-            if line == "/quit" || line == "/exit" {
-                break;
-            }
+            while let Ok(Some(line)) = lines.next_line().await {
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                if line == "/quit" || line == "/exit" {
+                    break;
+                }
 
-            let msg = ChannelMessage {
-                id: Uuid::new_v4().to_string(),
-                sender: "user".to_string(),
-                content: line,
-                channel: "cli".to_string(),
-                conversation_id: None,
-                thread_id: None,
-                reply_to: None,
-                message_id: None,
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                attachments: Vec::new(),
-            };
+                let msg = ChannelMessage {
+                    id: Uuid::new_v4().to_string(),
+                    sender: "user".to_string(),
+                    content: line,
+                    channel: "cli".to_string(),
+                    conversation_id: None,
+                    thread_id: None,
+                    reply_to: None,
+                    message_id: None,
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    attachments: Vec::new(),
+                };
 
-            if tx.send(msg).await.is_err() {
-                break;
+                if tx.send(msg).await.is_err() {
+                    break;
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 

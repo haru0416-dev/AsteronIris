@@ -38,8 +38,7 @@ impl Drop for EnvVarGuard {
                 std::env::set_var(self.key, value);
             }
         } else {
-            // SAFETY: Test-only cleanup. Removes a variable introduced
-            // by EnvVarGuard::set; ENV_LOCK serializes access.
+            // SAFETY: Test-only cleanup.
             unsafe {
                 std::env::remove_var(self.key);
             }

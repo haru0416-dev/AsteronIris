@@ -525,7 +525,12 @@ pub trait Provider: Send + Sync {
 
     /// ツール付きストリーミングチャット
     async fn chat_with_tools_stream(
-        &self, req: ProviderChatRequest,
+        &self,
+        system_prompt: Option<&str>,
+        messages: &[ProviderMessage],
+        tools: &[ToolSpec],
+        model: &str,
+        temperature: f64,
     ) -> Result<ProviderStream>;
 }
 ```

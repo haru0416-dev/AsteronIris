@@ -1,33 +1,37 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use asteroniris::config::Config;
-use asteroniris::core::agent::loop_::{
+use asteroniris::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
 };
-use asteroniris::core::memory::{Memory, SqliteMemory};
-use asteroniris::core::providers::Provider;
+use asteroniris::config::Config;
+use asteroniris::memory::{Memory, SqliteMemory};
+use asteroniris::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
 use asteroniris::transport::channels::build_system_prompt;
-use async_trait::async_trait;
 use rusqlite::{Connection, params};
+use std::future::Future;
+use std::pin::Pin;
 use tempfile::TempDir;
 
 struct FixedResponseProvider {
     response: String,
 }
 
-#[async_trait]
 impl Provider for FixedResponseProvider {
-    async fn chat_with_system(
-        &self,
-        _system_prompt: Option<&str>,
-        _message: &str,
-        _model: &str,
+    fn name(&self) -> &str {
+        "mock"
+    }
+
+    fn chat_with_system<'a>(
+        &'a self,
+        _system_prompt: Option<&'a str>,
+        _message: &'a str,
+        _model: &'a str,
         _temperature: f64,
-    ) -> Result<String> {
-        Ok(self.response.clone())
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move { Ok(self.response.clone()) })
     }
 }
 
@@ -57,7 +61,7 @@ async fn memory_autosave_includes_layer_provenance() {
     config.memory.auto_save = true;
     config.persona.enabled_main_session = false;
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).await.unwrap());
     let provider = FixedResponseProvider {
         response: "INFERRED_CLAIM inference.preference.language => User prefers Rust\nCONTRADICTION_EVENT contradiction.preference.language => Earlier note said Python".to_string(),
     };
@@ -145,7 +149,7 @@ fn prompt_no_daily_memory_injection() {
     )
     .unwrap();
 
-    let prompt = build_system_prompt(ws.path(), "model", &[], &[]);
+    let prompt = build_system_prompt(ws.path(), "model", &[]);
     assert!(!prompt.contains("Daily Notes"));
     assert!(!prompt.contains("Some note"));
 }
