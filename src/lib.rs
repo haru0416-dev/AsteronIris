@@ -19,6 +19,7 @@ i18n!("locales", fallback = "en");
 // ── Phase 0: Foundation ──────────────────────────────────────────────────────
 pub mod config;
 pub mod error;
+pub mod eval;
 pub mod media;
 pub mod security;
 pub mod ui;
@@ -55,3 +56,14 @@ pub mod onboard;
 
 // ── Re-exports ───────────────────────────────────────────────────────────────
 pub use config::Config;
+
+/// Compatibility alias: v1 tests import `asteroniris::providers::*`.
+pub mod providers {
+    pub use crate::llm::traits::Provider;
+    pub mod traits {
+        pub use crate::llm::traits::Provider;
+    }
+    pub mod response {
+        pub use crate::llm::types::{ContentBlock, ProviderMessage, ProviderResponse, StopReason};
+    }
+}

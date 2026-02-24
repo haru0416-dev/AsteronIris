@@ -1,15 +1,13 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use asteroniris::agent::loop_::{IntegrationTurnParams, run_main_session_turn_for_integration};
 use asteroniris::config::{Config, PersonaConfig};
-use asteroniris::agent::loop_::{
-    IntegrationTurnParams, run_main_session_turn_for_integration,
-};
 use asteroniris::memory::{Memory, SqliteMemory};
 use asteroniris::persona::state_header::StateHeader;
 use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
-use asteroniris::providers::Provider;
 use asteroniris::platform::cron::{self, CronJobKind, CronJobOrigin};
+use asteroniris::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
 use std::future::Future;
@@ -29,6 +27,10 @@ impl SequenceProvider {
 }
 
 impl Provider for SequenceProvider {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
     fn chat_with_system<'a>(
         &'a self,
         _system_prompt: Option<&'a str>,
@@ -84,7 +86,8 @@ async fn persona_reflect_self_task_flows_through_scheduler_planner_route() {
     std::fs::create_dir_all(&workspace).expect("workspace dir");
     let config = test_config(&workspace);
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).expect("sqlite memory"));
+    let mem: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(&workspace).await.expect("sqlite memory"));
     let persistence = BackendCanonicalStateHeaderPersistence::new(
         mem.clone(),
         config.workspace_dir.clone(),
@@ -137,7 +140,7 @@ async fn persona_reflect_self_task_flows_through_scheduler_planner_route() {
     .expect("main session turn");
     assert_eq!(response, "bounded-autonomy-answer");
 
-    let queued = cron::list_jobs(&config).expect("queued jobs");
+    let queued = cron::list_jobs(&config).await.expect("queued jobs");
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].job_kind, CronJobKind::Agent);
     assert_eq!(queued[0].origin, CronJobOrigin::Agent);
@@ -165,7 +168,8 @@ async fn persona_reflect_self_task_enqueue_rejects_payload_above_pending_cap() {
     std::fs::create_dir_all(&workspace).expect("workspace dir");
     let config = test_config(&workspace);
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).expect("sqlite memory"));
+    let mem: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(&workspace).await.expect("sqlite memory"));
     let persistence = BackendCanonicalStateHeaderPersistence::new(
         mem.clone(),
         config.workspace_dir.clone(),
@@ -222,7 +226,7 @@ async fn persona_reflect_self_task_enqueue_rejects_payload_above_pending_cap() {
     .expect("main session turn");
     assert_eq!(response, "bounded-autonomy-answer");
 
-    let queued = cron::list_jobs(&config).expect("queued jobs");
+    let queued = cron::list_jobs(&config).await.expect("queued jobs");
     assert!(queued.is_empty());
 }
 
@@ -233,7 +237,8 @@ async fn persona_reflect_rejects_top_level_source_identity_injection() {
     std::fs::create_dir_all(&workspace).expect("workspace dir");
     let config = test_config(&workspace);
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).expect("sqlite memory"));
+    let mem: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(&workspace).await.expect("sqlite memory"));
     let persistence = BackendCanonicalStateHeaderPersistence::new(
         mem.clone(),
         config.workspace_dir.clone(),
@@ -288,7 +293,7 @@ async fn persona_reflect_rejects_top_level_source_identity_injection() {
     .expect("main session turn");
     assert_eq!(response, "bounded-autonomy-answer");
 
-    let queued = cron::list_jobs(&config).expect("queued jobs");
+    let queued = cron::list_jobs(&config).await.expect("queued jobs");
     assert!(queued.is_empty());
 }
 
@@ -299,7 +304,8 @@ async fn persona_reflect_rejects_top_level_source_kind_only_injection() {
     std::fs::create_dir_all(&workspace).expect("workspace dir");
     let config = test_config(&workspace);
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).expect("sqlite memory"));
+    let mem: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(&workspace).await.expect("sqlite memory"));
     let persistence = BackendCanonicalStateHeaderPersistence::new(
         mem.clone(),
         config.workspace_dir.clone(),
@@ -353,7 +359,7 @@ async fn persona_reflect_rejects_top_level_source_kind_only_injection() {
     .expect("main session turn");
     assert_eq!(response, "bounded-autonomy-answer");
 
-    let queued = cron::list_jobs(&config).expect("queued jobs");
+    let queued = cron::list_jobs(&config).await.expect("queued jobs");
     assert!(queued.is_empty());
 }
 
@@ -364,7 +370,8 @@ async fn persona_reflect_rejects_top_level_source_ref_only_injection() {
     std::fs::create_dir_all(&workspace).expect("workspace dir");
     let config = test_config(&workspace);
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).expect("sqlite memory"));
+    let mem: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(&workspace).await.expect("sqlite memory"));
     let persistence = BackendCanonicalStateHeaderPersistence::new(
         mem.clone(),
         config.workspace_dir.clone(),
@@ -418,7 +425,7 @@ async fn persona_reflect_rejects_top_level_source_ref_only_injection() {
     .expect("main session turn");
     assert_eq!(response, "bounded-autonomy-answer");
 
-    let queued = cron::list_jobs(&config).expect("queued jobs");
+    let queued = cron::list_jobs(&config).await.expect("queued jobs");
     assert!(queued.is_empty());
 }
 
@@ -429,7 +436,8 @@ async fn persona_reflect_enqueues_bounded_self_tasks_within_pending_cap() {
     std::fs::create_dir_all(&workspace).expect("workspace dir");
     let config = test_config(&workspace);
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).expect("sqlite memory"));
+    let mem: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(&workspace).await.expect("sqlite memory"));
     let persistence = BackendCanonicalStateHeaderPersistence::new(
         mem.clone(),
         config.workspace_dir.clone(),
@@ -486,7 +494,7 @@ async fn persona_reflect_enqueues_bounded_self_tasks_within_pending_cap() {
     .expect("main session turn");
     assert_eq!(response, "bounded-autonomy-answer");
 
-    let queued = cron::list_jobs(&config).expect("queued jobs");
+    let queued = cron::list_jobs(&config).await.expect("queued jobs");
     assert!(!queued.is_empty());
     assert!(queued.len() <= 5);
     assert!(queued.iter().all(|job| job.origin == CronJobOrigin::Agent));

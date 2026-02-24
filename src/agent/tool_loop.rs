@@ -350,7 +350,7 @@ fn build_initial_messages(
     messages
 }
 
-fn augment_prompt_with_trust_boundary(prompt: &str, has_tools: bool) -> String {
+pub fn augment_prompt_with_trust_boundary(prompt: &str, has_tools: bool) -> String {
     if has_tools {
         format!("{prompt}\n\n{TOOL_RESULT_TRUST_POLICY}")
     } else {

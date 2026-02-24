@@ -24,7 +24,7 @@ fn channel_prompt_default_path_does_not_inject_state_mirror() {
     )
     .unwrap();
 
-    let prompt = build_system_prompt(workspace.path(), "test-model", &[], &[]);
+    let prompt = build_system_prompt(workspace.path(), "test-model", &[]);
 
     assert!(!prompt.contains("### State Header Mirror"));
     assert!(!prompt.contains("must stay main-session only"));

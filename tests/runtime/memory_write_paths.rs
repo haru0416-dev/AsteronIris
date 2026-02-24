@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use asteroniris::config::Config;
 use asteroniris::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
 };
+use asteroniris::config::Config;
 use asteroniris::memory::{Memory, SqliteMemory};
 use asteroniris::providers::Provider;
 use asteroniris::security::SecurityPolicy;
@@ -20,6 +20,10 @@ struct FixedResponseProvider {
 }
 
 impl Provider for FixedResponseProvider {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
     fn chat_with_system<'a>(
         &'a self,
         _system_prompt: Option<&'a str>,
@@ -57,7 +61,7 @@ async fn memory_autosave_includes_layer_provenance() {
     config.memory.auto_save = true;
     config.persona.enabled_main_session = false;
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).await.unwrap());
     let provider = FixedResponseProvider {
         response: "INFERRED_CLAIM inference.preference.language => User prefers Rust\nCONTRADICTION_EVENT contradiction.preference.language => Earlier note said Python".to_string(),
     };
@@ -145,7 +149,7 @@ fn prompt_no_daily_memory_injection() {
     )
     .unwrap();
 
-    let prompt = build_system_prompt(ws.path(), "model", &[], &[]);
+    let prompt = build_system_prompt(ws.path(), "model", &[]);
     assert!(!prompt.contains("Daily Notes"));
     assert!(!prompt.contains("Some note"));
 }

@@ -34,7 +34,7 @@ fn guard_immutable(state: &StateHeader) -> ImmutableStateHeader {
 #[tokio::test]
 async fn prompt_injection_payload_is_rejected_and_writeback_is_not_persisted() {
     let workspace = TempDir::new().unwrap();
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(workspace.path()).unwrap());
+    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(workspace.path()).await.unwrap());
     let persistence = BackendCanonicalStateHeaderPersistence::new(
         memory.clone(),
         workspace.path().to_path_buf(),

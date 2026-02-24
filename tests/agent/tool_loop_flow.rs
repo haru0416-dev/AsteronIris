@@ -7,9 +7,9 @@ use asteroniris::providers::response::{
     ContentBlock, ProviderMessage, ProviderResponse, StopReason,
 };
 use asteroniris::providers::traits::Provider;
+use asteroniris::security::{AutonomyLevel, EntityRateLimiter, SecurityPolicy};
 use asteroniris::tools::middleware::{ExecutionContext, default_middleware_chain};
 use asteroniris::tools::{FileReadTool, ShellTool, ToolRegistry, ToolSpec};
-use asteroniris::security::{AutonomyLevel, EntityRateLimiter, SecurityPolicy};
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;
@@ -47,6 +47,10 @@ impl MockProvider {
 }
 
 impl Provider for MockProvider {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
     fn chat_with_system<'a>(
         &'a self,
         _system_prompt: Option<&'a str>,
@@ -175,6 +179,7 @@ async fn tool_loop_single_call() {
             ctx: &ctx,
             stream_sink: None,
             conversation_history: &[],
+            hooks: &[],
         })
         .await
         .expect("tool loop should run");
@@ -218,6 +223,7 @@ async fn tool_loop_chain() {
             ctx: &ctx,
             stream_sink: None,
             conversation_history: &[],
+            hooks: &[],
         })
         .await
         .expect("tool loop should run");
@@ -253,6 +259,7 @@ async fn tool_loop_max_iterations() {
             ctx: &ctx,
             stream_sink: None,
             conversation_history: &[],
+            hooks: &[],
         })
         .await
         .expect("tool loop should run");
@@ -288,6 +295,7 @@ async fn tool_loop_hard_cap() {
             ctx: &ctx,
             stream_sink: None,
             conversation_history: &[],
+            hooks: &[],
         })
         .await
         .expect("tool loop should run");
@@ -318,6 +326,7 @@ async fn tool_loop_error_recovery() {
             ctx: &ctx,
             stream_sink: None,
             conversation_history: &[],
+            hooks: &[],
         })
         .await
         .expect("tool loop should run");
@@ -359,6 +368,7 @@ async fn tool_loop_no_tools() {
             ctx: &ctx,
             stream_sink: None,
             conversation_history: &[],
+            hooks: &[],
         })
         .await
         .expect("tool loop should run");

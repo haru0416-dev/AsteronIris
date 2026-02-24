@@ -1,14 +1,17 @@
+pub mod action_intent;
 pub mod common;
 pub mod factory;
 pub mod file_read;
 pub mod file_write;
 pub mod isolation;
 pub mod memory;
+pub mod middleware;
 pub mod registry;
 pub mod shell;
 pub mod traits;
 pub mod types;
 
+pub use action_intent::{ActionIntent, ActionOperator, ActionResult, NoopOperator};
 pub use factory::{all_tools, default_tools, tool_descriptions};
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;

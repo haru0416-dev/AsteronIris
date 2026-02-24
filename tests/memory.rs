@@ -9,9 +9,8 @@ mod backend_parity;
 mod capability_contract;
 #[path = "memory/comparison.rs"]
 mod comparison;
-// TODO(v2): rewrite for v2 API (references agent::loop_::IntegrationTurnParams, providers::Provider)
-// #[path = "memory/consolidation_orchestrator.rs"]
-// mod consolidation_orchestrator;
+#[path = "memory/consolidation_orchestrator.rs"]
+mod consolidation_orchestrator;
 #[path = "memory/delete_contract.rs"]
 mod delete_contract;
 #[path = "memory/governance.rs"]
@@ -28,9 +27,8 @@ mod layer_schema;
 mod markdown_tagged;
 #[path = "memory/provenance_validation.rs"]
 mod provenance_validation;
-// TODO(v2): rewrite for v2 API (references agent::loop_::build_context_for_integration)
-// #[path = "memory/revocation_gate.rs"]
-// mod revocation_gate;
+#[path = "memory/revocation_gate.rs"]
+mod revocation_gate;
 #[path = "memory/sqlite_contract.rs"]
 mod sqlite_contract;
 #[path = "memory/sqlite_persistence.rs"]
@@ -41,9 +39,8 @@ mod sqlite_schema;
 mod sqlite_scoring;
 #[path = "memory/sqlite_search.rs"]
 mod sqlite_search;
-// TODO(v2): rewrite for v2 API (references agent::loop_::, providers::Provider)
-// #[path = "memory/tenant_recall.rs"]
-// mod tenant_recall;
+#[path = "memory/tenant_recall.rs"]
+mod tenant_recall;
 #[path = "memory/throughput.rs"]
 mod throughput;
 #[path = "memory/tool_contract.rs"]

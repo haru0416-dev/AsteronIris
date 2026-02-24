@@ -2,10 +2,11 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use asteroniris::planner::{PlanExecutor, PlanParser, ToolStepRunner};
-use asteroniris::tools::ToolRegistry;
-use asteroniris::tools::middleware::ExecutionContext;
-use asteroniris::tools::traits::{Tool, ToolResult};
 use asteroniris::security::SecurityPolicy;
+use asteroniris::tools::ToolRegistry;
+use asteroniris::tools::ToolResult;
+use asteroniris::tools::middleware::ExecutionContext;
+use asteroniris::tools::traits::Tool;
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;

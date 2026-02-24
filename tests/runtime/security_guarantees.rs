@@ -2,11 +2,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use asteroniris::agent::augment_prompt_with_trust_boundary;
-use asteroniris::tools::middleware::{ExecutionContext, default_middleware_chain};
-use asteroniris::tools::{FileReadTool, ShellTool, ToolRegistry};
 use asteroniris::security::{
     AutonomyLevel, EntityRateLimiter, GrantScope, PermissionGrant, PermissionStore, SecurityPolicy,
 };
+use asteroniris::tools::middleware::{ExecutionContext, default_middleware_chain};
+use asteroniris::tools::{FileReadTool, ShellTool, ToolRegistry};
 use asteroniris::transport::channels::policy::min_autonomy;
 use serde_json::json;
 use tempfile::TempDir;

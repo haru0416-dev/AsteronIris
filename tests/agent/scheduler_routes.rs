@@ -226,6 +226,7 @@ async fn scheduler_routes_ingestion_pipeline_paths_end_to_end() {
     assert!(x_output.contains("accepted=true"));
 
     let memory = create_memory(&config.memory, &config.workspace_dir, None)
+        .await
         .expect("memory backend should initialize");
     memory
         .append_event(MemoryEventInput::new(

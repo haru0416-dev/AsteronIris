@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use asteroniris::config::Config;
 use asteroniris::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
 };
+use asteroniris::config::Config;
 use asteroniris::memory::traits::MemoryLayer;
 use asteroniris::memory::{
     CONSOLIDATION_SLOT_KEY, ConsolidationDisposition, ConsolidationInput, Memory, MemoryEventInput,
@@ -26,6 +26,10 @@ struct FixedResponseProvider {
 }
 
 impl Provider for FixedResponseProvider {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
     fn chat_with_system<'a>(
         &'a self,
         _system_prompt: Option<&'a str>,
@@ -54,11 +58,8 @@ impl Memory for DelayedConsolidationMemory {
     fn append_event(
         &self,
         input: MemoryEventInput,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = anyhow::Result<asteroniris::memory::MemoryEvent>> + Send + '_,
-        >,
-    > {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<asteroniris::memory::MemoryEvent>> + Send + '_>>
+    {
         Box::pin(async move {
             if input.slot_key == CONSOLIDATION_SLOT_KEY {
                 tokio::time::sleep(self.delay).await;
@@ -100,13 +101,8 @@ impl Memory for DelayedConsolidationMemory {
         slot_key: &'a str,
         mode: asteroniris::memory::ForgetMode,
         reason: &'a str,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = anyhow::Result<asteroniris::memory::ForgetOutcome>>
-                + Send
-                + 'a,
-        >,
-    > {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<asteroniris::memory::ForgetOutcome>> + Send + 'a>>
+    {
         Box::pin(async move {
             self.inner
                 .forget_slot(entity_id, slot_key, mode, reason)
@@ -281,7 +277,8 @@ async fn memory_consolidation_failure_isolated() {
 #[tokio::test]
 async fn memory_consolidation_long_run() {
     let temp = TempDir::new().expect("tempdir");
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).await.expect("sqlite memory"));
+    let memory: Arc<dyn Memory> =
+        Arc::new(SqliteMemory::new(temp.path()).await.expect("sqlite memory"));
     let entity_id = "tenant-alpha:long-run";
     let cycle_count = 10usize;
 

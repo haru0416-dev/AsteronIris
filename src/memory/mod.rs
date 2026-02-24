@@ -20,6 +20,9 @@ pub use capability::{
     backend_capability_matrix, capability_matrix_for_backend, capability_matrix_for_memory,
     ensure_forget_mode_supported,
 };
+pub use consolidation::{
+    CONSOLIDATION_SLOT_KEY, ConsolidationDisposition, ConsolidationInput, run_consolidation_once,
+};
 pub use embeddings::{
     EmbeddingProvider, NoopEmbedding, OpenAiEmbedding, create_embedding_provider,
 };
