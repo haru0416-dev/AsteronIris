@@ -29,6 +29,8 @@ pub struct GatewayConfig {
     pub defense_kill_switch: bool,
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    #[serde(default)]
+    pub openai_compat_api_keys: Vec<String>,
 }
 
 fn default_gateway_port() -> u16 {
@@ -56,6 +58,7 @@ impl Default for GatewayConfig {
             defense_mode: GatewayDefenseMode::default(),
             defense_kill_switch: false,
             cors_origins: Vec::new(),
+            openai_compat_api_keys: Vec::new(),
         }
     }
 }
@@ -74,6 +77,7 @@ mod tests {
         assert_eq!(config.token_ttl_secs, 2_592_000);
         assert_eq!(config.defense_mode, GatewayDefenseMode::Enforce);
         assert!(config.cors_origins.is_empty());
+        assert!(config.openai_compat_api_keys.is_empty());
     }
 
     #[test]
@@ -88,11 +92,16 @@ mod tests {
             defense_mode: GatewayDefenseMode::Warn,
             defense_kill_switch: true,
             cors_origins: vec!["https://example.com".into()],
+            openai_compat_api_keys: vec!["test-openai-key".into()],
         };
         let toml = toml::to_string(&original).unwrap();
         let decoded: GatewayConfig = toml::from_str(&toml).unwrap();
         assert_eq!(decoded.port, original.port);
         assert_eq!(decoded.host, original.host);
         assert_eq!(decoded.require_pairing, original.require_pairing);
+        assert_eq!(
+            decoded.openai_compat_api_keys,
+            original.openai_compat_api_keys
+        );
     }
 }

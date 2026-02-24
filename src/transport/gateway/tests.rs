@@ -401,6 +401,73 @@ async fn webhook_audit_mode_still_blocks_missing_bearer_when_paired() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+#[tokio::test]
+async fn webhook_replay_guard_rejects_duplicate_payload() {
+    let tmp = TempDir::new().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn Provider> = Arc::new(CountingProvider {
+        calls: calls.clone(),
+    });
+    let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
+
+    let state = AppState {
+        config: Arc::new(Config::default()),
+        provider,
+        registry: test_registry(),
+        rate_limiter: test_rate_limiter(),
+        max_tool_loop_iterations: 10,
+        model: "test-model".to_string(),
+        temperature: 0.0,
+        system_prompt: "test-system".to_string(),
+        openai_compat_api_keys: None,
+        mem,
+        auto_save: false,
+        webhook_secret: Some(Arc::from("test-secret")),
+        pairing: Arc::new(PairingGuard::new(false, &[], None)),
+        #[cfg(feature = "whatsapp")]
+        whatsapp: None,
+        #[cfg(feature = "whatsapp")]
+        whatsapp_app_secret: None,
+        defense_mode: GatewayDefenseMode::Enforce,
+        defense_kill_switch: false,
+        security: Arc::new(SecurityPolicy::default()),
+        replay_guard: Arc::new(ReplayGuard::new()),
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Webhook-Secret", "test-secret".parse().unwrap());
+
+    let first = handle_webhook(
+        State(state.clone()),
+        headers.clone(),
+        Ok(Json(WebhookBody {
+            message: "same payload".to_string(),
+        })),
+    )
+    .await
+    .into_response();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = handle_webhook(
+        State(state),
+        headers,
+        Ok(Json(WebhookBody {
+            message: "same payload".to_string(),
+        })),
+    )
+    .await
+    .into_response();
+    assert_eq!(second.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .expect("webhook replay response body should be readable");
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).expect("webhook replay response should be valid json");
+    assert_eq!(json.get("status"), Some(&serde_json::json!("duplicate")));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
 // ---------------------------------------------------------------
 // Defense helper tests
 // ---------------------------------------------------------------

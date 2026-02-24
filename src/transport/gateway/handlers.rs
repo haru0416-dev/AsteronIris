@@ -361,6 +361,14 @@ pub(super) async fn handle_webhook(
         }
     };
 
+    // ── Replay protection: reject duplicate webhook payloads within TTL ──
+    let replay_fingerprint = serde_json::to_vec(&webhook_body).unwrap_or_default();
+    if !state.replay_guard.check_and_record(&replay_fingerprint) {
+        tracing::warn!("Webhook replay detected");
+        let body = serde_json::json!({"status": "duplicate"});
+        return (StatusCode::OK, Json(body));
+    }
+
     let source = "gateway:webhook";
     let ingress = apply_external_ingress_policy(source, &webhook_body.message);
 

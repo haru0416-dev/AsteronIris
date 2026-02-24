@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::llm::manager::LlmManager;
 use crate::memory::factory::create_memory;
 use crate::security::SecurityPolicy;
+use crate::tools::middleware::default_middleware_chain;
 use crate::tools::{ExecutionContext, ToolRegistry, all_tools};
 use anyhow::Result;
 use arc_swap::ArcSwap;
@@ -36,7 +37,7 @@ pub(super) async fn run_heartbeat_worker(config: Arc<Config>) -> Result<()> {
         &config.workspace_dir,
     ));
     let memory = Arc::from(create_memory(&config.memory, &config.workspace_dir, None).await?);
-    let mut registry = ToolRegistry::new(vec![]);
+    let mut registry = ToolRegistry::new(default_middleware_chain());
     for tool in all_tools(Arc::clone(&memory)) {
         registry.register(tool);
     }

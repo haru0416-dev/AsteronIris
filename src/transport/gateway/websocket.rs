@@ -12,26 +12,56 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
 
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
+}
+
+fn websocket_auth_response(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Option<(StatusCode, &'static str)> {
+    let pairing_active = state.pairing.is_paired() || state.pairing.require_pairing();
+    let api_keys = state.openai_compat_api_keys.as_deref().unwrap_or(&[]);
+    let api_key_ok =
+        bearer_token(headers).is_some_and(|token| api_keys.iter().any(|key| key == token));
+
+    if pairing_active {
+        let pairing_authenticated =
+            bearer_token(headers).is_some_and(|token| state.pairing.is_authenticated(token));
+        if pairing_authenticated || api_key_ok {
+            None
+        } else {
+            Some((
+                StatusCode::UNAUTHORIZED,
+                "WebSocket upgrade requires authentication (pairing token or API key)",
+            ))
+        }
+    } else if api_keys.is_empty() {
+        Some((
+            StatusCode::FORBIDDEN,
+            "WebSocket disabled: no authentication is configured. Enable pairing or API keys.",
+        ))
+    } else if api_key_ok {
+        None
+    } else {
+        Some((
+            StatusCode::UNAUTHORIZED,
+            "WebSocket upgrade requires a valid API key",
+        ))
+    }
+}
+
 pub async fn ws_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if state.pairing.is_paired() || state.pairing.require_pairing() {
-        let token = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|raw| raw.strip_prefix("Bearer "));
-
-        let authenticated = token.is_some_and(|t| state.pairing.is_authenticated(t));
-
-        if !authenticated {
-            return (
-                StatusCode::UNAUTHORIZED,
-                "WebSocket upgrade requires authentication",
-            )
-                .into_response();
-        }
+    if let Some(response) = websocket_auth_response(&state, &headers) {
+        return response.into_response();
     }
 
     ws.on_upgrade(move |socket| handle_socket(socket, state))

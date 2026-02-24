@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::llm::traits::Provider;
 use crate::memory::traits::Memory;
 use crate::security::policy::{EntityRateLimiter, SecurityPolicy};
+use crate::tools::middleware::default_middleware_chain;
 use crate::tools::registry::ToolRegistry;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -66,7 +67,7 @@ pub(super) async fn init_channel_runtime(config: &Arc<Config>) -> Result<Channel
     );
 
     let tools = crate::tools::all_tools(Arc::clone(&mem));
-    let mut registry = ToolRegistry::new(vec![]);
+    let mut registry = ToolRegistry::new(default_middleware_chain());
     for tool in tools {
         registry.register(tool);
     }

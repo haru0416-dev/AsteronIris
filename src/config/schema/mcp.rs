@@ -83,14 +83,20 @@ impl McpConfig {
                             server.name
                         ));
                     }
-                    if let Ok(parsed) = url::Url::parse(url)
-                        && let Some(host) = parsed.host_str()
-                        && crate::security::url_validation::is_private_host(host)
-                    {
-                        errors.push(format!(
-                            "MCP server '{}': http URL points to private/internal address",
-                            server.name
-                        ));
+                    match crate::security::url_validation::validate_url_not_ssrf(url) {
+                        Ok(()) => {}
+                        Err(_) if url::Url::parse(url).is_err() => {
+                            errors.push(format!(
+                                "MCP server '{}': http transport has an invalid URL",
+                                server.name
+                            ));
+                        }
+                        Err(_) => {
+                            errors.push(format!(
+                                "MCP server '{}': http URL points to private/internal address",
+                                server.name
+                            ));
+                        }
                     }
                 }
             }

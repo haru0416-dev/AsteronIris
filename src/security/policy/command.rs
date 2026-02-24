@@ -51,11 +51,33 @@ fn is_path_like_argument(arg: &str) -> bool {
     arg.starts_with('/') || arg.starts_with("~/") || arg.contains('/') || arg.contains("..")
 }
 
-fn has_forbidden_path_argument(words: &[&str]) -> bool {
-    let policy = SecurityPolicy::default();
+fn has_forbidden_path_argument(policy: &SecurityPolicy, words: &[&str]) -> bool {
     words
         .iter()
         .copied()
+        .filter(|word| is_path_like_argument(word))
+        .any(|word| !policy.is_path_allowed(word))
+}
+
+fn has_forbidden_find_start_path(policy: &SecurityPolicy, words: &[&str]) -> bool {
+    for word in words {
+        if word.starts_with('-') || matches!(*word, "(" | ")" | "!" | ",") {
+            break;
+        }
+        if is_path_like_argument(word) && !policy.is_path_allowed(word) {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_forbidden_path_in_simple_file_commands(policy: &SecurityPolicy, words: &[&str]) -> bool {
+    // These commands accept path arguments as positional values; reject any
+    // positional path that violates the workspace and forbidden-path policy.
+    words
+        .iter()
+        .copied()
+        .filter(|word| !word.starts_with('-'))
         .filter(|word| is_path_like_argument(word))
         .any(|word| !policy.is_path_allowed(word))
 }
@@ -96,7 +118,12 @@ fn extract_find_exec_payload(words: &[&str], start_idx: usize) -> Option<(String
     None
 }
 
-fn has_blocked_arguments(base_cmd: &str, full_segment: &str, allowed_commands: &[String]) -> bool {
+fn has_blocked_arguments(
+    policy: &SecurityPolicy,
+    base_cmd: &str,
+    full_segment: &str,
+    allowed_commands: &[String],
+) -> bool {
     let args = full_segment
         .trim()
         .strip_prefix(base_cmd)
@@ -156,8 +183,14 @@ fn has_blocked_arguments(base_cmd: &str, full_segment: &str, allowed_commands: &
             "publish" | "login" | "adduser" | "owner" | "token" | "access" | "profile"
         ),
         "cargo" => matches!(subcommand, "publish" | "login" | "owner" | "yank"),
+        "cat" | "head" | "tail" | "ls" | "wc" => {
+            has_forbidden_path_in_simple_file_commands(policy, &words)
+        }
         "find" => {
             if words.contains(&"-delete") {
+                return true;
+            }
+            if has_forbidden_find_start_path(policy, &words) {
                 return true;
             }
             let mut i = 0;
@@ -180,11 +213,11 @@ fn has_blocked_arguments(base_cmd: &str, full_segment: &str, allowed_commands: &
                     }
 
                     let exec_words: Vec<&str> = exec_cmd_part.split_whitespace().collect();
-                    if has_forbidden_path_argument(exec_words.get(1..).unwrap_or(&[])) {
+                    if has_forbidden_path_argument(policy, exec_words.get(1..).unwrap_or(&[])) {
                         return true;
                     }
 
-                    if has_blocked_arguments(exec_base, exec_cmd_part, allowed_commands) {
+                    if has_blocked_arguments(policy, exec_base, exec_cmd_part, allowed_commands) {
                         return true;
                     }
 
@@ -271,7 +304,7 @@ impl SecurityPolicy {
                 return false;
             }
 
-            if has_blocked_arguments(base_cmd, cmd_part, &self.allowed_commands) {
+            if has_blocked_arguments(self, base_cmd, cmd_part, &self.allowed_commands) {
                 return false;
             }
         }
@@ -346,49 +379,103 @@ mod tests {
 
     #[test]
     fn has_blocked_arguments_git_dangerous_subcommands_are_blocked() {
-        assert!(has_blocked_arguments("git", "git push", &[]));
-        assert!(has_blocked_arguments("git", "git send-email", &[]));
-        assert!(has_blocked_arguments("git", "git request-pull", &[]));
-        assert!(has_blocked_arguments("git", "git remote add origin x", &[]));
+        let policy = SecurityPolicy::default();
+        assert!(has_blocked_arguments(&policy, "git", "git push", &[]));
+        assert!(has_blocked_arguments(&policy, "git", "git send-email", &[]));
         assert!(has_blocked_arguments(
+            &policy,
+            "git",
+            "git request-pull",
+            &[]
+        ));
+        assert!(has_blocked_arguments(
+            &policy,
+            "git",
+            "git remote add origin x",
+            &[]
+        ));
+        assert!(has_blocked_arguments(
+            &policy,
             "git",
             "git remote set-url origin x",
             &[]
         ));
         assert!(has_blocked_arguments(
+            &policy,
             "git",
             "git config --global user.name x",
             &[]
         ));
-        assert!(has_blocked_arguments("git", "git credential fill", &[]));
+        assert!(has_blocked_arguments(
+            &policy,
+            "git",
+            "git credential fill",
+            &[]
+        ));
     }
 
     #[test]
     fn has_blocked_arguments_git_safe_subcommands_are_allowed() {
-        assert!(!has_blocked_arguments("git", "git status", &[]));
-        assert!(!has_blocked_arguments("git", "git log", &[]));
-        assert!(!has_blocked_arguments("git", "git diff", &[]));
+        let policy = SecurityPolicy::default();
+        assert!(!has_blocked_arguments(&policy, "git", "git status", &[]));
+        assert!(!has_blocked_arguments(&policy, "git", "git log", &[]));
+        assert!(!has_blocked_arguments(&policy, "git", "git diff", &[]));
     }
 
     #[test]
     fn has_blocked_arguments_npm_rules() {
-        assert!(has_blocked_arguments("npm", "npm publish", &[]));
-        assert!(!has_blocked_arguments("npm", "npm list", &[]));
-        assert!(!has_blocked_arguments("npm", "npm run test", &[]));
+        let policy = SecurityPolicy::default();
+        assert!(has_blocked_arguments(&policy, "npm", "npm publish", &[]));
+        assert!(!has_blocked_arguments(&policy, "npm", "npm list", &[]));
+        assert!(!has_blocked_arguments(&policy, "npm", "npm run test", &[]));
     }
 
     #[test]
     fn has_blocked_arguments_cargo_rules() {
-        assert!(has_blocked_arguments("cargo", "cargo publish", &[]));
-        assert!(!has_blocked_arguments("cargo", "cargo build", &[]));
-        assert!(!has_blocked_arguments("cargo", "cargo test", &[]));
+        let policy = SecurityPolicy::default();
+        assert!(has_blocked_arguments(
+            &policy,
+            "cargo",
+            "cargo publish",
+            &[]
+        ));
+        assert!(!has_blocked_arguments(&policy, "cargo", "cargo build", &[]));
+        assert!(!has_blocked_arguments(&policy, "cargo", "cargo test", &[]));
     }
 
     #[test]
     fn has_blocked_arguments_pip_is_unrestricted_by_this_filter() {
-        assert!(!has_blocked_arguments("pip", "pip install foo", &[]));
-        assert!(!has_blocked_arguments("pip", "pip uninstall foo", &[]));
-        assert!(!has_blocked_arguments("pip", "pip list", &[]));
+        let policy = SecurityPolicy::default();
+        assert!(!has_blocked_arguments(
+            &policy,
+            "pip",
+            "pip install foo",
+            &[]
+        ));
+        assert!(!has_blocked_arguments(
+            &policy,
+            "pip",
+            "pip uninstall foo",
+            &[]
+        ));
+        assert!(!has_blocked_arguments(&policy, "pip", "pip list", &[]));
+    }
+
+    #[test]
+    fn has_blocked_arguments_cat_blocks_forbidden_paths() {
+        let policy = SecurityPolicy::default();
+        assert!(has_blocked_arguments(
+            &policy,
+            "cat",
+            "cat /etc/shadow",
+            &[]
+        ));
+        assert!(!has_blocked_arguments(
+            &policy,
+            "cat",
+            "cat Cargo.toml",
+            &[]
+        ));
     }
 
     #[test]
@@ -465,8 +552,10 @@ mod tests {
 
     #[test]
     fn has_blocked_arguments_find_exec_blocks_forbidden_paths() {
+        let policy = SecurityPolicy::default();
         let allowed = vec!["find".to_string(), "cat".to_string()];
         assert!(has_blocked_arguments(
+            &policy,
             "find",
             r"find . -name '*.txt' -exec cat /etc/shadow \;",
             &allowed
@@ -475,8 +564,10 @@ mod tests {
 
     #[test]
     fn has_blocked_arguments_find_exec_blocks_disallowed_subcommands() {
+        let policy = SecurityPolicy::default();
         let allowed = vec!["find".to_string(), "cat".to_string()];
         assert!(has_blocked_arguments(
+            &policy,
             "find",
             r"find . -exec curl https://example.com \;",
             &allowed

@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, ToSocketAddrs};
 
 /// Returns `true` if the given host string resolves to a private / internal IP.
 #[must_use]
@@ -19,6 +19,31 @@ pub fn is_private_host(host: &str) -> bool {
     )
 }
 
+/// Returns `true` when DNS resolution yields at least one private/internal IP.
+#[must_use]
+pub fn host_resolves_to_private_ip(host: &str) -> bool {
+    let normalized = host
+        .trim_matches('[')
+        .trim_matches(']')
+        .trim_end_matches('.');
+
+    if normalized.is_empty() {
+        return false;
+    }
+
+    if let Ok(ip) = normalized.parse::<IpAddr>() {
+        return is_private_ip(ip);
+    }
+
+    let Ok(resolved) = format!("{normalized}:80").to_socket_addrs() else {
+        return false;
+    };
+
+    resolved
+        .map(|socket_addr| socket_addr.ip())
+        .any(is_private_ip)
+}
+
 /// Returns `true` when the given IP falls into a private/reserved range.
 #[must_use]
 pub fn is_private_ip(ip: IpAddr) -> bool {
@@ -34,7 +59,7 @@ pub fn is_private_ip(ip: IpAddr) -> bool {
 pub fn validate_url_not_ssrf(url_str: &str) -> anyhow::Result<()> {
     let parsed = url::Url::parse(url_str)?;
     if let Some(host) = parsed.host_str()
-        && is_private_host(host)
+        && (is_private_host(host) || host_resolves_to_private_ip(host))
     {
         anyhow::bail!("URL points to private/internal address: {host}");
     }
@@ -63,6 +88,12 @@ mod tests {
     fn ssrf_validation_rejects_private() {
         assert!(validate_url_not_ssrf("http://127.0.0.1/secret").is_err());
         assert!(validate_url_not_ssrf("http://localhost/admin").is_err());
+    }
+
+    #[test]
+    fn dns_resolution_detects_private_loopback_hosts() {
+        assert!(host_resolves_to_private_ip("127.0.0.1"));
+        assert!(host_resolves_to_private_ip("localhost"));
     }
 
     #[test]

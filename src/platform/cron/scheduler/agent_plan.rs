@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::planner::{PlanExecutor, PlanParser, ToolStepRunner};
 use crate::platform::cron::CronJob;
 use crate::security::SecurityPolicy;
+use crate::tools::middleware::default_middleware_chain;
 use crate::tools::{ExecutionContext, ToolRegistry, default_tools};
 use chrono::Utc;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -37,7 +38,7 @@ pub(super) async fn run_agent_job_command(
         };
 
         let security_arc = Arc::new(security.clone());
-        let mut registry = ToolRegistry::new(vec![]);
+        let mut registry = ToolRegistry::new(default_middleware_chain());
         for tool in default_tools() {
             registry.register(tool);
         }

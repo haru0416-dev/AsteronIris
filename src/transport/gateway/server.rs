@@ -14,6 +14,7 @@ use crate::memory::Memory;
 use crate::security::policy::{EntityRateLimiter, SecurityPolicy};
 use crate::tools;
 use crate::tools::ToolRegistry;
+use crate::tools::middleware::default_middleware_chain;
 #[cfg(feature = "whatsapp")]
 use crate::transport::channels::WhatsAppChannel;
 use anyhow::{Context, Result};
@@ -109,7 +110,7 @@ async fn build_gateway_resources(config: &Config) -> Result<GatewayResources> {
     ));
 
     let tool_list = tools::all_tools(Arc::clone(&mem));
-    let mut registry = ToolRegistry::new(vec![]);
+    let mut registry = ToolRegistry::new(default_middleware_chain());
     for tool in tool_list {
         registry.register(tool);
     }
@@ -171,7 +172,7 @@ fn build_gateway_state(
         model: resources.model,
         temperature: resources.temperature,
         system_prompt,
-        openai_compat_api_keys: None,
+        openai_compat_api_keys: Some(config.gateway.openai_compat_api_keys.clone()),
         mem: resources.mem,
         auto_save: config.memory.auto_save,
         webhook_secret,

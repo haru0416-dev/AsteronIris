@@ -81,7 +81,7 @@ pub struct AppState {
 }
 
 /// Webhook request body
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct WebhookBody {
     pub message: String,
 }

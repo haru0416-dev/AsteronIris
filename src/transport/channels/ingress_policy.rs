@@ -2,10 +2,8 @@ use crate::memory::{
     MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel, SourceKind,
 };
 use crate::persona::person_identity::channel_person_entity_id;
+use crate::security::external_content::{ExternalAction, prepare_external_content};
 use crate::security::policy::TenantPolicyContext;
-
-// TODO: Port security::external_content module to v2.
-// For now, provide minimal stubs for the external content policy functions.
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExternalIngressPolicyOutcome {
@@ -15,23 +13,16 @@ pub(crate) struct ExternalIngressPolicyOutcome {
 }
 
 /// Apply external ingress policy to incoming channel content.
-///
-/// NOTE: In v2, the `security::external_content` module is not yet ported.
-/// This stub passes content through with basic wrapping. Once the external
-/// content module is available, this should delegate to `prepare_external_content`.
 pub(crate) fn apply_external_ingress_policy(
     source: &str,
     text: &str,
 ) -> ExternalIngressPolicyOutcome {
-    // Minimal stub: wrap the content with a source marker for the model,
-    // and use the raw text as the persisted summary.
-    let tag = source.replace(':', "_");
-    let model_input = format!("[[external-content:{tag}]]{text}[[/external-content]]");
+    let prepared = prepare_external_content(source, text);
 
     ExternalIngressPolicyOutcome {
-        model_input,
-        persisted_summary: text.to_string(),
-        blocked: false,
+        model_input: prepared.model_input,
+        persisted_summary: prepared.persisted_summary.as_memory_value(),
+        blocked: prepared.action == ExternalAction::Block,
     }
 }
 
