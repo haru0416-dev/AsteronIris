@@ -169,6 +169,7 @@ fn build_gateway_state(
         registry: resources.registry,
         rate_limiter: resources.rate_limiter,
         max_tool_loop_iterations: config.autonomy.max_tool_loop_iterations,
+        repeated_tool_call_streak_limit: config.autonomy.repeated_tool_call_streak_limit,
         model: resources.model,
         temperature: resources.temperature,
         system_prompt,

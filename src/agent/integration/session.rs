@@ -409,7 +409,11 @@ async fn execute_turn_with_plan_or_tool_loop(
         });
     }
 
-    let tool_loop = ToolLoop::new(Arc::clone(&params.registry), params.max_tool_iterations);
+    let tool_loop = ToolLoop::with_limits(
+        Arc::clone(&params.registry),
+        params.max_tool_iterations,
+        params.repeated_tool_call_streak_limit,
+    );
     let tool_result = tool_loop
         .run(ToolLoopRunParams {
             provider: params.answer_provider,
@@ -490,6 +494,7 @@ pub async fn run_main_session_turn_for_integration_with_policy(
         temperature,
         registry,
         max_tool_iterations: config.autonomy.max_tool_loop_iterations,
+        repeated_tool_call_streak_limit: config.autonomy.repeated_tool_call_streak_limit,
         rate_limiter: Arc::new(EntityRateLimiter::new(
             config.autonomy.max_actions_per_hour,
             config.autonomy.max_actions_per_entity_per_hour,
@@ -528,6 +533,7 @@ pub async fn run_main_session_turn_for_runtime_with_policy(
     let IntegrationRuntimeTurnOptions {
         registry,
         max_tool_iterations,
+        repeated_tool_call_streak_limit,
         execution_context,
         stream_sink,
         conversation_history,
@@ -544,6 +550,7 @@ pub async fn run_main_session_turn_for_runtime_with_policy(
         temperature,
         registry,
         max_tool_iterations,
+        repeated_tool_call_streak_limit,
         rate_limiter: Arc::clone(&execution_context.rate_limiter),
     };
     let runtime_options = MainSessionRuntimeOptions {

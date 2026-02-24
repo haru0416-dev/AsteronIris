@@ -72,6 +72,7 @@ pub(super) struct MainSessionTurnParams<'a> {
     pub(super) temperature: f64,
     pub(super) registry: Arc<ToolRegistry>,
     pub(super) max_tool_iterations: u32,
+    pub(super) repeated_tool_call_streak_limit: u32,
     pub(super) rate_limiter: Arc<EntityRateLimiter>,
 }
 
@@ -92,6 +93,7 @@ pub struct IntegrationTurnParams<'a> {
 pub struct IntegrationRuntimeTurnOptions<'a> {
     pub registry: Arc<ToolRegistry>,
     pub max_tool_iterations: u32,
+    pub repeated_tool_call_streak_limit: u32,
     pub execution_context: ExecutionContext,
     pub stream_sink: Option<Arc<dyn StreamSink>>,
     pub conversation_history: &'a [ProviderMessage],

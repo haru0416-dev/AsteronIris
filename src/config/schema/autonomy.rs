@@ -22,6 +22,8 @@ pub struct AutonomyConfig {
     pub verify_repair_max_repair_depth: u32,
     #[serde(default = "default_max_tool_loop_iterations")]
     pub max_tool_loop_iterations: u32,
+    #[serde(default = "default_repeated_tool_call_streak_limit")]
+    pub repeated_tool_call_streak_limit: u32,
     #[serde(default)]
     pub temperature_bands: TemperatureBandsConfig,
 }
@@ -88,6 +90,9 @@ fn default_verify_repair_max_repair_depth() -> u32 {
 fn default_max_tool_loop_iterations() -> u32 {
     10
 }
+fn default_repeated_tool_call_streak_limit() -> u32 {
+    3
+}
 fn default_max_actions_per_entity_per_hour() -> u32 {
     20
 }
@@ -135,6 +140,7 @@ impl Default for AutonomyConfig {
             verify_repair_max_attempts: default_verify_repair_max_attempts(),
             verify_repair_max_repair_depth: default_verify_repair_max_repair_depth(),
             max_tool_loop_iterations: default_max_tool_loop_iterations(),
+            repeated_tool_call_streak_limit: default_repeated_tool_call_streak_limit(),
             temperature_bands: TemperatureBandsConfig::default(),
         }
     }
@@ -250,6 +256,7 @@ mod tests {
             verify_repair_max_attempts: 5,
             verify_repair_max_repair_depth: 2,
             max_tool_loop_iterations: 12,
+            repeated_tool_call_streak_limit: 4,
             temperature_bands: TemperatureBandsConfig {
                 read_only: TemperatureBand { min: 0.0, max: 0.1 },
                 supervised: TemperatureBand { min: 0.2, max: 0.6 },
@@ -270,5 +277,7 @@ mod tests {
         assert_eq!(deserialized.max_actions_per_hour, 42);
         assert_eq!(deserialized.max_actions_per_entity_per_hour, 11);
         assert_eq!(deserialized.max_cost_per_day_cents, 2_500);
+        assert_eq!(deserialized.max_tool_loop_iterations, 12);
+        assert_eq!(deserialized.repeated_tool_call_streak_limit, 4);
     }
 }

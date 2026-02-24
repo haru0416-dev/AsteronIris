@@ -115,6 +115,7 @@ async fn run_gateway_tool_loop(
         IntegrationRuntimeTurnOptions {
             registry: Arc::clone(&state.registry),
             max_tool_iterations: state.max_tool_loop_iterations,
+            repeated_tool_call_streak_limit: state.repeated_tool_call_streak_limit,
             execution_context: ctx,
             stream_sink: None,
             conversation_history: &[],

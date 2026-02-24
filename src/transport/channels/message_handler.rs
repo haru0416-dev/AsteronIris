@@ -344,6 +344,7 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
         IntegrationRuntimeTurnOptions {
             registry: Arc::clone(&rt.registry),
             max_tool_iterations: rt.config.autonomy.max_tool_loop_iterations,
+            repeated_tool_call_streak_limit: rt.config.autonomy.repeated_tool_call_streak_limit,
             execution_context: ctx,
             stream_sink,
             conversation_history: &[],

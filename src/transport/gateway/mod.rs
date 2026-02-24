@@ -61,6 +61,7 @@ pub struct AppState {
     pub registry: Arc<ToolRegistry>,
     pub rate_limiter: Arc<EntityRateLimiter>,
     pub max_tool_loop_iterations: u32,
+    pub repeated_tool_call_streak_limit: u32,
     pub model: String,
     pub temperature: f64,
     pub system_prompt: String,

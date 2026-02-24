@@ -86,6 +86,7 @@ async fn run_agent(
         crate::agent::IntegrationRuntimeTurnOptions {
             registry: Arc::clone(&registry),
             max_tool_iterations: 10,
+            repeated_tool_call_streak_limit: config.autonomy.repeated_tool_call_streak_limit,
             execution_context: ctx,
             stream_sink: None,
             conversation_history: &[],
