@@ -1,4 +1,6 @@
-use crate::memory::types::{PrivacyLevel, SignalTier, SourceKind};
+use crate::memory::types::{
+    PrivacyLevel, SignalTier, SourceKind, normalize_entity_id_for_boundary,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -218,14 +220,7 @@ fn normalize_content(raw: &str) -> anyhow::Result<String> {
 }
 
 fn normalize_entity_id(raw: &str) -> anyhow::Result<String> {
-    let normalized = normalize_identifier(raw, false);
-    if normalized.is_empty() {
-        anyhow::bail!("signal_envelope.entity_id must not be empty");
-    }
-    if normalized.len() > 128 {
-        anyhow::bail!("signal_envelope.entity_id must be <= 128 chars");
-    }
-    Ok(normalized)
+    normalize_entity_id_for_boundary(raw, "signal_envelope.entity_id")
 }
 
 fn normalize_language(raw: &str) -> anyhow::Result<String> {

@@ -1,7 +1,7 @@
 use asteroniris::transport::channels::build_system_prompt;
-use asteroniris::transport::gateway::{
-    MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS, WebhookBody, verify_whatsapp_signature,
-};
+#[cfg(feature = "whatsapp")]
+use asteroniris::transport::gateway::verify_whatsapp_signature;
+use asteroniris::transport::gateway::{MAX_BODY_SIZE, REQUEST_TIMEOUT_SECS, WebhookBody};
 use tempfile::TempDir;
 
 fn write_workspace_fixture(path: &std::path::Path) {
@@ -44,6 +44,7 @@ fn gateway_contract_regression_stays_stable() {
 }
 
 #[test]
+#[cfg(feature = "whatsapp")]
 fn gateway_signature_verification_behavior_is_unchanged() {
     let secret = "task7-secret";
     let body = br#"{"message":"hi"}"#;

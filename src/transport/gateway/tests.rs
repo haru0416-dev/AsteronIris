@@ -1,5 +1,6 @@
 use super::pairing::{PairingGuard, hash_token};
 use super::*;
+use crate::Config;
 use crate::config::GatewayDefenseMode;
 use crate::llm::Provider;
 use crate::memory::Memory;
@@ -310,12 +311,14 @@ async fn webhook_policy_blocks_when_action_limit_is_exhausted() {
     let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
 
     let state = AppState {
+        config: Arc::new(Config::default()),
         provider,
         registry: test_registry(),
         rate_limiter: test_rate_limiter(),
         max_tool_loop_iterations: 10,
         model: "test-model".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
         mem,
         auto_save: false,
@@ -361,12 +364,14 @@ async fn webhook_audit_mode_still_blocks_missing_bearer_when_paired() {
     let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
 
     let state = AppState {
+        config: Arc::new(Config::default()),
         provider,
         registry: test_registry(),
         rate_limiter: test_rate_limiter(),
         max_tool_loop_iterations: 10,
         model: "test-model".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
         mem,
         auto_save: false,
@@ -444,6 +449,7 @@ fn effective_defense_mode_kill_switch_forces_audit() {
     let mem: Arc<dyn Memory> = Arc::new(crate::memory::MarkdownMemory::new(tmp.path()));
     let calls = Arc::new(AtomicUsize::new(0));
     let state = AppState {
+        config: Arc::new(Config::default()),
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
@@ -452,6 +458,7 @@ fn effective_defense_mode_kill_switch_forces_audit() {
         max_tool_loop_iterations: 10,
         model: "test".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
         mem,
         auto_save: false,
@@ -528,6 +535,7 @@ fn make_test_state(pairing: PairingGuard) -> AppState {
     let tmp = TempDir::new().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     AppState {
+        config: Arc::new(Config::default()),
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
@@ -536,6 +544,7 @@ fn make_test_state(pairing: PairingGuard) -> AppState {
         max_tool_loop_iterations: 10,
         model: "test-model".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
         mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
         auto_save: false,
@@ -645,6 +654,7 @@ fn make_whatsapp_state() -> AppState {
     let tmp = TempDir::new().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     AppState {
+        config: Arc::new(Config::default()),
         provider: Arc::new(CountingProvider {
             calls: calls.clone(),
         }),
@@ -653,6 +663,7 @@ fn make_whatsapp_state() -> AppState {
         max_tool_loop_iterations: 10,
         model: "test-model".to_string(),
         temperature: 0.0,
+        system_prompt: "test-system".to_string(),
         openai_compat_api_keys: None,
         mem: Arc::new(crate::memory::MarkdownMemory::new(tmp.path())),
         auto_save: false,

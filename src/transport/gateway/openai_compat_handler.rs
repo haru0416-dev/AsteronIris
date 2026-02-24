@@ -1,4 +1,7 @@
-use crate::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
+use crate::agent::{
+    IntegrationRuntimeTurnOptions, IntegrationTurnParams, LoopStopReason,
+    run_main_session_turn_for_runtime_with_policy,
+};
 use crate::security::policy::TenantPolicyContext;
 use crate::tools::ExecutionContext;
 use crate::transport::gateway::AppState;
@@ -46,32 +49,43 @@ pub async fn handle_chat_completions(
     let temperature = request.temperature.unwrap_or(state.temperature);
     let model = request.model;
     let source_identifier = bearer_token(&headers).unwrap_or("openai-compat");
-    let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
+    let entity_id = format!("gateway:{source_identifier}");
+    let policy_context = TenantPolicyContext::disabled();
     let ctx = ExecutionContext {
         security: Arc::clone(&state.security),
         autonomy_level: state.security.autonomy,
-        entity_id: format!("gateway:{source_identifier}"),
+        entity_id: entity_id.clone(),
         turn_number: 0,
         workspace_dir: state.security.workspace_dir.clone(),
         allowed_tools: None,
         rate_limiter: Arc::clone(&state.rate_limiter),
-        tenant_context: TenantPolicyContext::disabled(),
+        tenant_context: policy_context.clone(),
     };
 
-    match tool_loop
-        .run(ToolLoopRunParams {
-            provider: state.provider.as_ref(),
+    match run_main_session_turn_for_runtime_with_policy(
+        IntegrationTurnParams {
+            config: state.config.as_ref(),
+            security: state.security.as_ref(),
+            mem: Arc::clone(&state.mem),
+            answer_provider: state.provider.as_ref(),
+            reflect_provider: state.provider.as_ref(),
             system_prompt: system_prompt.as_deref().unwrap_or_default(),
-            user_message: &user_message,
-            image_content: &[],
-            model: &model,
+            model_name: &model,
             temperature,
-            ctx: &ctx,
+            entity_id: &entity_id,
+            policy_context,
+            user_message: &user_message,
+        },
+        IntegrationRuntimeTurnOptions {
+            registry: Arc::clone(&state.registry),
+            max_tool_iterations: state.max_tool_loop_iterations,
+            execution_context: ctx,
             stream_sink: None,
             conversation_history: &[],
             hooks: &[],
-        })
-        .await
+        },
+    )
+    .await
     {
         Ok(result) => {
             if let LoopStopReason::Error(error) = &result.stop_reason {

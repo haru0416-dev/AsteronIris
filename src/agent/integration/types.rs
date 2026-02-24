@@ -1,10 +1,12 @@
 use crate::config::Config;
 use crate::llm::Provider;
+use crate::llm::{ProviderMessage, StreamSink};
 use crate::memory::Memory;
 use crate::persona::person_identity::person_entity_id;
 use crate::security::SecurityPolicy;
 use crate::security::policy::{EntityRateLimiter, TenantPolicyContext};
-use crate::tools::ToolRegistry;
+use crate::tools::{ExecutionContext, ToolRegistry};
+use crate::{agent::PromptHook, agent::ToolLoopResult};
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -56,11 +58,9 @@ impl TurnCallAccounting {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TurnExecutionOutcome {
     pub(super) response: String,
-    pub(super) tokens_used: Option<u64>,
-    pub(super) accounting: TurnCallAccounting,
+    pub(super) tool_result: ToolLoopResult,
 }
 
 pub(super) struct MainSessionTurnParams<'a> {
@@ -87,6 +87,15 @@ pub struct IntegrationTurnParams<'a> {
     pub entity_id: &'a str,
     pub policy_context: TenantPolicyContext,
     pub user_message: &'a str,
+}
+
+pub struct IntegrationRuntimeTurnOptions<'a> {
+    pub registry: Arc<ToolRegistry>,
+    pub max_tool_iterations: u32,
+    pub execution_context: ExecutionContext,
+    pub stream_sink: Option<Arc<dyn StreamSink>>,
+    pub conversation_history: &'a [ProviderMessage],
+    pub hooks: &'a [Arc<dyn PromptHook>],
 }
 
 #[derive(Debug, Clone)]

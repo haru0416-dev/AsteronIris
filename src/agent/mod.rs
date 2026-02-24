@@ -7,8 +7,9 @@ pub mod tool_loop;
 pub use hooks::{HookDecision, PromptHook};
 pub use hooks_leak::LeakDetectionHook;
 pub use integration::{
-    IntegrationTurnParams, build_context_for_integration, run_main_session_turn_for_integration,
-    run_main_session_turn_for_integration_with_policy,
+    IntegrationRuntimeTurnOptions, IntegrationTurnParams, build_context_for_integration,
+    run_main_session_turn_for_integration, run_main_session_turn_for_integration_with_policy,
+    run_main_session_turn_for_runtime_with_policy,
 };
 pub use token_estimate::{estimate_message_tokens, estimate_tokens};
 pub use tool_loop::{

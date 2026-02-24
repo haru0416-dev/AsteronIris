@@ -1,6 +1,8 @@
 pub mod defaults;
 pub mod external_content;
 pub mod grants;
+pub mod oauth;
+pub mod oauth_cli;
 pub mod permissions;
 pub mod policy;
 pub mod secrets;

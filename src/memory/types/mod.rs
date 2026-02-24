@@ -8,6 +8,7 @@ pub use forget::{
     ForgetArtifact, ForgetArtifactCheck, ForgetArtifactObservation, ForgetArtifactRequirement,
     ForgetMode, ForgetOutcome, ForgetStatus,
 };
+pub(crate) use ingress::normalize_entity_id_for_boundary;
 
 /// A single memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]

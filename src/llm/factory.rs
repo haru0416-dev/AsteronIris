@@ -2,14 +2,16 @@ use super::compatible::{AuthStyle, OpenAiCompatibleProvider};
 use super::oauth_recovery::OAuthRecoveryProvider;
 use super::reliable::ReliableProvider;
 use super::traits::Provider;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Resolve API key for a provider from config and environment variables.
 ///
 /// Resolution order:
 /// 1. Explicitly provided `api_key` parameter (trimmed, filtered if empty)
 /// 2. Provider-specific environment variable (e.g., `ANTHROPIC_OAUTH_TOKEN`, `OPENROUTER_API_KEY`)
-/// 3. Generic fallback variables (`ASTERONIRIS_API_KEY`, `API_KEY`)
+/// 3. Cached OAuth token import (Codex/Claude local credentials)
+/// 4. Generic fallback variables (`ASTERONIRIS_API_KEY`, `API_KEY`)
 ///
 /// For Anthropic, the provider-specific env var is `ANTHROPIC_OAUTH_TOKEN` (for setup-tokens)
 /// followed by `ANTHROPIC_API_KEY` (for regular API keys).
@@ -52,6 +54,17 @@ pub fn resolve_api_key(name: &str, explicit_api_key: Option<&str>) -> Option<Str
                 return Some(value.to_string());
             }
         }
+    }
+
+    if let Ok(Some((token, source))) =
+        crate::security::oauth::import_oauth_access_token_for_provider(name)
+    {
+        tracing::debug!(
+            provider = name,
+            oauth_source = source.as_str(),
+            "Using OAuth token imported from provider CLI cache"
+        );
+        return Some(token);
     }
 
     for env_var in ["ASTERONIRIS_API_KEY", "API_KEY"] {
@@ -102,6 +115,15 @@ pub fn compatible_provider_spec(name: &str) -> Option<(&'static str, &'static st
         _ => return None,
     };
     Some(spec)
+}
+
+fn oauth_provider_family(name: &str) -> Option<&'static str> {
+    let normalized = name.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "openai" | "openai-codex" | "codex" => Some("openai"),
+        "anthropic" | "claude" => Some("anthropic"),
+        _ => None,
+    }
 }
 
 fn create_custom_provider(
@@ -190,23 +212,56 @@ pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<
 }
 
 fn create_provider_with_runtime_recovery(
-    config: &crate::config::Config,
+    _config: &crate::config::Config,
     name: &str,
     api_key: Option<&str>,
 ) -> anyhow::Result<Box<dyn Provider>> {
     let provider_name = name.to_string();
     let initial_provider: Arc<dyn Provider> = Arc::from(create_provider(name, api_key)?);
-    let _config = Arc::new(config.clone());
+    let recovered_oauth_tokens: Arc<Mutex<HashMap<String, String>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     let recover = {
-        // OAuth recovery requires the security::auth module which is not
-        // yet ported to v2.  Return false (no recovery) until it lands.
-        Arc::new(move |_provider: &str| -> anyhow::Result<bool> { Ok(false) })
+        let recovered_oauth_tokens = Arc::clone(&recovered_oauth_tokens);
+        Arc::new(move |provider: &str| -> anyhow::Result<bool> {
+            let Some(family) = oauth_provider_family(provider) else {
+                return Ok(false);
+            };
+
+            let Some((token, source)) =
+                crate::security::oauth::import_oauth_access_token_for_provider(provider)?
+            else {
+                return Ok(false);
+            };
+
+            let mut cache = recovered_oauth_tokens
+                .lock()
+                .map_err(|_| anyhow::anyhow!("OAuth recovery cache lock poisoned"))?;
+            cache.insert(family.to_string(), token);
+
+            tracing::info!(
+                provider = provider,
+                oauth_source = source.as_str(),
+                "Recovered OAuth token from provider CLI cache"
+            );
+
+            Ok(true)
+        })
     };
 
     let rebuild = {
+        let recovered_oauth_tokens = Arc::clone(&recovered_oauth_tokens);
         Arc::new(move |provider: &str| -> anyhow::Result<Arc<dyn Provider>> {
-            let refreshed_key = resolve_api_key(provider, None);
+            let recovered_key = if let Some(family) = oauth_provider_family(provider) {
+                recovered_oauth_tokens
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("OAuth recovery cache lock poisoned"))?
+                    .get(family)
+                    .cloned()
+            } else {
+                None
+            };
+            let refreshed_key = recovered_key.or_else(|| resolve_api_key(provider, None));
             Ok(
                 Arc::from(create_provider(provider, refreshed_key.as_deref())?)
                     as Arc<dyn Provider>,
@@ -361,6 +416,14 @@ mod tests {
     #[test]
     fn compatible_provider_spec_unknown_returns_none() {
         assert!(compatible_provider_spec("totally-unknown").is_none());
+    }
+
+    #[test]
+    fn oauth_provider_family_maps_aliases() {
+        assert_eq!(oauth_provider_family("openai"), Some("openai"));
+        assert_eq!(oauth_provider_family("openai-codex"), Some("openai"));
+        assert_eq!(oauth_provider_family("claude"), Some("anthropic"));
+        assert_eq!(oauth_provider_family("openrouter"), None);
     }
 
     #[test]

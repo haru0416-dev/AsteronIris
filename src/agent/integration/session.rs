@@ -2,15 +2,15 @@ use super::context::build_context_with_policy;
 use super::inference::run_post_turn_inference_pass;
 use super::reflect::run_persona_reflect_writeback;
 use super::types::{
-    IntegrationTurnParams, MainSessionTurnParams, RuntimeMemoryWriteContext, TurnCallAccounting,
-    TurnExecutionOutcome,
+    IntegrationRuntimeTurnOptions, IntegrationTurnParams, MainSessionTurnParams,
+    RuntimeMemoryWriteContext, TurnCallAccounting, TurnExecutionOutcome,
 };
 use super::verify_repair::{
     VerifyRepairCaps, analyze_verify_failure, decide_verify_repair_escalation,
     emit_verify_repair_escalation_event,
 };
 
-use crate::agent::{LoopStopReason, ToolLoop, ToolLoopRunParams};
+use crate::agent::{LoopStopReason, PromptHook, ToolLoop, ToolLoopResult, ToolLoopRunParams};
 use crate::config::Config;
 use crate::llm::ProviderMessage;
 use crate::llm::{CliStreamSink, StreamSink};
@@ -18,7 +18,7 @@ use crate::memory::{
     self, Memory, MemoryEventInput, MemoryEventType, MemoryLayer, MemoryProvenance, MemorySource,
     PrivacyLevel, SourceKind,
 };
-use crate::persona::person_identity::{person_entity_id, resolve_person_id};
+use crate::persona::person_identity::resolve_person_id;
 use crate::planner::{ExecutionReport, Plan, PlanExecutor, PlanParser, StepStatus, ToolStepRunner};
 use crate::runtime::observability::traits::AutonomyLifecycleSignal;
 use crate::runtime::observability::{NoopObserver, Observer};
@@ -29,6 +29,13 @@ use crate::tools::middleware::ExecutionContext;
 use crate::utils::text::truncate_with_ellipsis;
 use anyhow::{Context, Result};
 use std::sync::Arc;
+
+pub(super) struct MainSessionRuntimeOptions<'a> {
+    execution_context_override: Option<ExecutionContext>,
+    stream_sink: Option<Arc<dyn StreamSink>>,
+    conversation_history: &'a [ProviderMessage],
+    hooks: &'a [Arc<dyn PromptHook>],
+}
 
 #[cfg(test)]
 #[allow(dead_code)]
@@ -63,6 +70,12 @@ pub(super) async fn execute_main_session_turn_with_metrics(
     observer: &Arc<dyn Observer>,
     conversation_history: &[ProviderMessage],
 ) -> Result<TurnExecutionOutcome> {
+    let runtime_options = MainSessionRuntimeOptions {
+        execution_context_override: None,
+        stream_sink: Some(Arc::new(CliStreamSink::new()) as Arc<dyn StreamSink>),
+        conversation_history,
+        hooks: &[],
+    };
     execute_main_session_turn_with_policy_outcome(
         config,
         security,
@@ -71,7 +84,7 @@ pub(super) async fn execute_main_session_turn_with_metrics(
         user_message,
         RuntimeMemoryWriteContext::main_session_person(params.person_id),
         observer,
-        conversation_history,
+        &runtime_options,
     )
     .await
 }
@@ -85,7 +98,7 @@ async fn execute_main_session_turn_with_policy_outcome(
     user_message: &str,
     write_context: RuntimeMemoryWriteContext,
     observer: &Arc<dyn Observer>,
-    conversation_history: &[ProviderMessage],
+    runtime_options: &MainSessionRuntimeOptions<'_>,
 ) -> Result<TurnExecutionOutcome> {
     let caps = VerifyRepairCaps::from_config(config);
     let mut attempts = 0_u32;
@@ -101,7 +114,7 @@ async fn execute_main_session_turn_with_policy_outcome(
             user_message,
             &write_context,
             observer,
-            conversation_history,
+            runtime_options,
         )
         .await
         {
@@ -149,6 +162,12 @@ async fn execute_main_session_turn_with_policy(
     write_context: RuntimeMemoryWriteContext,
     observer: &Arc<dyn Observer>,
 ) -> Result<String> {
+    let runtime_options = MainSessionRuntimeOptions {
+        execution_context_override: None,
+        stream_sink: Some(Arc::new(CliStreamSink::new()) as Arc<dyn StreamSink>),
+        conversation_history: &[],
+        hooks: &[],
+    };
     execute_main_session_turn_with_policy_outcome(
         config,
         security,
@@ -157,7 +176,7 @@ async fn execute_main_session_turn_with_policy(
         user_message,
         write_context,
         observer,
-        &[],
+        &runtime_options,
     )
     .await
     .map(|outcome| outcome.response)
@@ -175,17 +194,18 @@ fn build_main_session_execution_context(
     config: &Config,
     security: &SecurityPolicy,
     params: &MainSessionTurnParams<'_>,
+    write_context: &RuntimeMemoryWriteContext,
     effective_autonomy_level: AutonomyLevel,
 ) -> ExecutionContext {
     ExecutionContext {
         security: Arc::new(security.clone()),
         autonomy_level: effective_autonomy_level,
-        entity_id: person_entity_id(params.person_id),
+        entity_id: write_context.entity_id.clone(),
         turn_number: 0,
         workspace_dir: config.workspace_dir.clone(),
         allowed_tools: None,
         rate_limiter: Arc::clone(&params.rate_limiter),
-        tenant_context: TenantPolicyContext::disabled(),
+        tenant_context: write_context.policy_context.clone(),
     }
 }
 
@@ -353,6 +373,7 @@ async fn try_execute_with_planner(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_turn_with_plan_or_tool_loop(
     params: &MainSessionTurnParams<'_>,
     user_message: &str,
@@ -360,7 +381,9 @@ async fn execute_turn_with_plan_or_tool_loop(
     clamped_temperature: f64,
     ctx: &ExecutionContext,
     conversation_history: &[ProviderMessage],
-) -> Result<(String, Option<u64>)> {
+    stream_sink: Option<Arc<dyn StreamSink>>,
+    hooks: &[Arc<dyn PromptHook>],
+) -> Result<ToolLoopResult> {
     let planner_response = if should_attempt_planner(user_message) {
         try_execute_with_planner(
             params,
@@ -376,7 +399,14 @@ async fn execute_turn_with_plan_or_tool_loop(
 
     if let Some(planned_response) = planner_response {
         tracing::info!(entity_id = %ctx.entity_id, "planner path selected for main session turn");
-        return Ok((planned_response, None));
+        return Ok(ToolLoopResult {
+            final_text: planned_response,
+            tool_calls: Vec::new(),
+            attachments: Vec::new(),
+            iterations: 0,
+            tokens_used: None,
+            stop_reason: LoopStopReason::Completed,
+        });
     }
 
     let tool_loop = ToolLoop::new(Arc::clone(&params.registry), params.max_tool_iterations);
@@ -389,9 +419,9 @@ async fn execute_turn_with_plan_or_tool_loop(
             model: params.model_name,
             temperature: clamped_temperature,
             ctx,
-            stream_sink: Some(Arc::new(CliStreamSink::new()) as Arc<dyn StreamSink>),
+            stream_sink,
             conversation_history,
-            hooks: &[],
+            hooks,
         })
         .await
         .context("run agent tool loop")?;
@@ -402,7 +432,7 @@ async fn execute_turn_with_plan_or_tool_loop(
         "main session tool loop completed"
     );
     handle_tool_loop_stop_reason(&tool_result.stop_reason, tool_result.iterations)?;
-    Ok((tool_result.final_text, tool_result.tokens_used))
+    Ok(tool_result)
 }
 
 async fn build_enriched_message(
@@ -478,6 +508,65 @@ pub async fn run_main_session_turn_for_integration_with_policy(
     .await
 }
 
+pub async fn run_main_session_turn_for_runtime_with_policy(
+    params: IntegrationTurnParams<'_>,
+    runtime_options: IntegrationRuntimeTurnOptions<'_>,
+) -> Result<ToolLoopResult> {
+    let IntegrationTurnParams {
+        config,
+        security,
+        mem,
+        answer_provider,
+        reflect_provider,
+        system_prompt,
+        model_name,
+        temperature,
+        entity_id,
+        policy_context,
+        user_message,
+    } = params;
+    let IntegrationRuntimeTurnOptions {
+        registry,
+        max_tool_iterations,
+        execution_context,
+        stream_sink,
+        conversation_history,
+        hooks,
+    } = runtime_options;
+    let observer: Arc<dyn Observer> = Arc::new(NoopObserver);
+    let person_id = resolve_person_id(config);
+    let session_params = MainSessionTurnParams {
+        answer_provider,
+        reflect_provider,
+        person_id: &person_id,
+        system_prompt,
+        model_name,
+        temperature,
+        registry,
+        max_tool_iterations,
+        rate_limiter: Arc::clone(&execution_context.rate_limiter),
+    };
+    let runtime_options = MainSessionRuntimeOptions {
+        execution_context_override: Some(execution_context),
+        stream_sink,
+        conversation_history,
+        hooks,
+    };
+
+    execute_main_session_turn_with_policy_outcome(
+        config,
+        security,
+        mem,
+        &session_params,
+        user_message,
+        RuntimeMemoryWriteContext::for_entity_with_policy(entity_id, policy_context),
+        &observer,
+        &runtime_options,
+    )
+    .await
+    .map(|outcome| outcome.tool_result)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_main_session_turn_with_accounting(
     config: &Config,
@@ -487,7 +576,7 @@ pub(super) async fn execute_main_session_turn_with_accounting(
     user_message: &str,
     write_context: &RuntimeMemoryWriteContext,
     observer: &Arc<dyn Observer>,
-    conversation_history: &[ProviderMessage],
+    runtime_options: &MainSessionRuntimeOptions<'_>,
 ) -> Result<TurnExecutionOutcome> {
     observer.record_autonomy_lifecycle(AutonomyLifecycleSignal::IntentCreated);
     let mut accounting = TurnCallAccounting::for_persona_mode(config.persona.enabled_main_session);
@@ -504,18 +593,29 @@ pub(super) async fn execute_main_session_turn_with_accounting(
     let effective_autonomy_level = config.autonomy.effective_autonomy_level();
     let clamped_temperature =
         clamp_temperature_for_turn(config, params.temperature, effective_autonomy_level);
-    let ctx =
-        build_main_session_execution_context(config, security, params, effective_autonomy_level);
-    let (response, tokens_used) = execute_turn_with_plan_or_tool_loop(
+    let default_ctx = build_main_session_execution_context(
+        config,
+        security,
+        params,
+        write_context,
+        effective_autonomy_level,
+    );
+    let execution_context = runtime_options
+        .execution_context_override
+        .as_ref()
+        .unwrap_or(&default_ctx);
+    let tool_result = execute_turn_with_plan_or_tool_loop(
         params,
         user_message,
         &enriched,
         clamped_temperature,
-        &ctx,
-        conversation_history,
+        execution_context,
+        runtime_options.conversation_history,
+        runtime_options.stream_sink.clone(),
+        runtime_options.hooks,
     )
     .await?;
-
+    let response = tool_result.final_text.clone();
     run_persona_reflect_if_enabled(
         config,
         security,
@@ -539,8 +639,7 @@ pub(super) async fn execute_main_session_turn_with_accounting(
 
     Ok(TurnExecutionOutcome {
         response,
-        tokens_used,
-        accounting,
+        tool_result,
     })
 }
 

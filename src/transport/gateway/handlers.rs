@@ -1,7 +1,11 @@
-use crate::agent::tool_loop::{LoopStopReason, ToolLoop, ToolLoopRunParams};
+use crate::agent::{
+    IntegrationRuntimeTurnOptions, IntegrationTurnParams, LoopStopReason,
+    run_main_session_turn_for_runtime_with_policy,
+};
 use crate::llm;
 use crate::persona::channel_person_entity_id;
 use crate::security::policy::TenantPolicyContext;
+use crate::security::writeback_guard::enforce_external_autosave_write_policy;
 use crate::tools::ExecutionContext;
 #[cfg(feature = "whatsapp")]
 use crate::transport::channels::{Channel, WhatsAppChannel};
@@ -29,6 +33,9 @@ use super::defense::{
 #[cfg(feature = "whatsapp")]
 use super::signature::verify_whatsapp_signature;
 use super::{AppState, WebhookBody};
+
+const ACTION_LIMIT_EXCEEDED_ERROR: &str = "blocked by security policy: action limit exceeded";
+const COST_LIMIT_EXCEEDED_ERROR: &str = "blocked by security policy: daily cost limit exceeded";
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     headers
@@ -59,6 +66,17 @@ fn log_tool_loop_stop(source: &str, stop_reason: &LoopStopReason, iterations: u3
     }
 }
 
+fn policy_accounting_error(error: &anyhow::Error) -> Option<&'static str> {
+    let message = error.to_string();
+    if message.contains(ACTION_LIMIT_EXCEEDED_ERROR) {
+        Some(ACTION_LIMIT_EXCEEDED_ERROR)
+    } else if message.contains(COST_LIMIT_EXCEEDED_ERROR) {
+        Some(COST_LIMIT_EXCEEDED_ERROR)
+    } else {
+        None
+    }
+}
+
 async fn run_gateway_tool_loop(
     state: &AppState,
     system_prompt: Option<&str>,
@@ -67,32 +85,43 @@ async fn run_gateway_tool_loop(
     temperature: f64,
     source_identifier: &str,
 ) -> anyhow::Result<crate::agent::tool_loop::ToolLoopResult> {
-    let tool_loop = ToolLoop::new(Arc::clone(&state.registry), state.max_tool_loop_iterations);
-    let full_prompt = system_prompt.unwrap_or_default();
+    let full_prompt = system_prompt.unwrap_or(state.system_prompt.as_str());
+    let entity_id = channel_person_entity_id("gateway", source_identifier);
+    let policy_context = TenantPolicyContext::disabled();
     let ctx = ExecutionContext {
         security: Arc::clone(&state.security),
         autonomy_level: state.security.autonomy,
-        entity_id: channel_person_entity_id("gateway", source_identifier),
+        entity_id: entity_id.clone(),
         turn_number: 0,
         workspace_dir: state.security.workspace_dir.clone(),
         allowed_tools: None,
         rate_limiter: Arc::clone(&state.rate_limiter),
-        tenant_context: TenantPolicyContext::disabled(),
+        tenant_context: policy_context.clone(),
     };
-    let result = tool_loop
-        .run(ToolLoopRunParams {
-            provider: state.provider.as_ref(),
+    let result = run_main_session_turn_for_runtime_with_policy(
+        IntegrationTurnParams {
+            config: state.config.as_ref(),
+            security: state.security.as_ref(),
+            mem: Arc::clone(&state.mem),
+            answer_provider: state.provider.as_ref(),
+            reflect_provider: state.provider.as_ref(),
             system_prompt: full_prompt,
-            user_message,
-            image_content: &[],
-            model,
+            model_name: model,
             temperature,
-            ctx: &ctx,
+            entity_id: &entity_id,
+            policy_context,
+            user_message,
+        },
+        IntegrationRuntimeTurnOptions {
+            registry: Arc::clone(&state.registry),
+            max_tool_iterations: state.max_tool_loop_iterations,
+            execution_context: ctx,
             stream_sink: None,
             conversation_history: &[],
             hooks: &[],
-        })
-        .await?;
+        },
+    )
+    .await?;
     if let LoopStopReason::Error(error) = &result.stop_reason {
         anyhow::bail!("tool loop failed: {error}");
     }
@@ -159,8 +188,9 @@ async fn process_whatsapp_message(
                 sender,
                 ingress.persisted_summary.clone(),
             );
-            // TODO: enforce_external_autosave_write_policy once writeback_guard is ported
-            if let Err(error) = state.mem.append_event(event).await {
+            if let Err(error) = enforce_external_autosave_write_policy(&event) {
+                tracing::warn!(%error, "gateway whatsapp autosave rejected by write policy");
+            } else if let Err(error) = state.mem.append_event(event).await {
                 tracing::warn!(%error, "failed to autosave whatsapp event");
             }
         }
@@ -180,17 +210,6 @@ async fn process_whatsapp_message(
         return;
     }
 
-    if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-        if let Err(error) = wa
-            .send_chunked("I cannot respond right now due to policy limits.", sender)
-            .await
-        {
-            tracing::warn!(%error, "failed to send whatsapp policy limit reply");
-        }
-        tracing::warn!("{policy_error}");
-        return;
-    }
-
     match run_gateway_tool_loop(
         state,
         None,
@@ -206,6 +225,16 @@ async fn process_whatsapp_message(
             send_whatsapp_reply_or_log(wa, sender, &result.final_text).await;
         }
         Err(error) => {
+            if policy_accounting_error(&error).is_some() {
+                if let Err(send_error) = wa
+                    .send_chunked("I cannot respond right now due to policy limits.", sender)
+                    .await
+                {
+                    tracing::warn!(%send_error, "failed to send whatsapp policy limit reply");
+                }
+                tracing::warn!("{error}");
+                return;
+            }
             tracing::error!("LLM error for WhatsApp message: {error:#}");
             if let Err(error) = wa
                 .send_chunked("Sorry, I couldn't process your message right now.", sender)
@@ -349,8 +378,9 @@ pub(super) async fn handle_webhook(
                 &autosave_entity_id,
                 ingress.persisted_summary.clone(),
             );
-            // TODO: enforce_external_autosave_write_policy once writeback_guard is ported
-            if let Err(error) = state.mem.append_event(event).await {
+            if let Err(error) = enforce_external_autosave_write_policy(&event) {
+                tracing::warn!(%error, "gateway webhook autosave rejected by write policy");
+            } else if let Err(error) = state.mem.append_event(event).await {
                 tracing::warn!(%error, "failed to autosave webhook event");
             }
         }
@@ -363,10 +393,6 @@ pub(super) async fn handle_webhook(
         );
         let err = serde_json::json!({"error": "External content blocked by safety policy"});
         return (StatusCode::BAD_REQUEST, Json(err));
-    }
-
-    if let Err(policy_error) = state.security.consume_action_and_cost(0) {
-        return policy_accounting_response(policy_error);
     }
 
     let source_identifier = bearer_token(&headers).unwrap_or("anonymous");
@@ -386,6 +412,9 @@ pub(super) async fn handle_webhook(
             (StatusCode::OK, Json(body))
         }
         Err(e) => {
+            if let Some(policy_error) = policy_accounting_error(&e) {
+                return policy_accounting_response(policy_error);
+            }
             tracing::error!(
                 "Webhook provider error: {}",
                 llm::sanitize_api_error(&e.to_string())

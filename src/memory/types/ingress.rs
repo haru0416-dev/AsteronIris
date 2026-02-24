@@ -1,7 +1,8 @@
 use super::{MemoryEventInput, MemoryProvenance, MemorySource};
 
 pub(super) fn normalize_memory_event_input(input: &mut MemoryEventInput) -> anyhow::Result<()> {
-    input.entity_id = normalize_entity_id(&input.entity_id)?;
+    input.entity_id =
+        normalize_entity_id_for_boundary(&input.entity_id, "memory_event_input.entity_id")?;
     input.slot_key = normalize_slot_key(&input.slot_key)?;
     input.confidence = normalize_score(input.confidence, "memory_event_input.confidence")?;
     input.importance = normalize_score(input.importance, "memory_event_input.importance")?;
@@ -18,13 +19,13 @@ fn normalize_score(score: f64, field: &str) -> anyhow::Result<f64> {
     Ok(score.clamp(0.0, 1.0))
 }
 
-fn normalize_entity_id(raw: &str) -> anyhow::Result<String> {
+pub(crate) fn normalize_entity_id_for_boundary(raw: &str, field: &str) -> anyhow::Result<String> {
     let normalized = normalize_identifier(raw, false);
     if normalized.is_empty() {
-        anyhow::bail!("memory_event_input.entity_id must not be empty");
+        anyhow::bail!("{field} must not be empty");
     }
     if normalized.len() > 128 {
-        anyhow::bail!("memory_event_input.entity_id must be <= 128 chars");
+        anyhow::bail!("{field} must be <= 128 chars");
     }
     Ok(normalized)
 }

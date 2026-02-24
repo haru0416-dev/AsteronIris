@@ -29,6 +29,7 @@ pub use server::run_gateway_with_listener;
 #[allow(unused_imports)]
 pub use signature::verify_whatsapp_signature;
 
+use crate::Config;
 use crate::config::GatewayDefenseMode;
 use crate::llm::Provider;
 use crate::memory::Memory;
@@ -55,12 +56,14 @@ pub const REQUEST_TIMEOUT_SECS: u64 = 30;
 /// Shared state for all axum handlers
 #[derive(Clone)]
 pub struct AppState {
+    pub config: Arc<Config>,
     pub provider: Arc<dyn Provider>,
     pub registry: Arc<ToolRegistry>,
     pub rate_limiter: Arc<EntityRateLimiter>,
     pub max_tool_loop_iterations: u32,
     pub model: String,
     pub temperature: f64,
+    pub system_prompt: String,
     pub openai_compat_api_keys: Option<Vec<String>>,
     pub mem: Arc<dyn Memory>,
     pub auto_save: bool,

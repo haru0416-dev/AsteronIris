@@ -1,5 +1,9 @@
-use crate::agent::tool_loop::{ToolLoop, ToolLoopRunParams};
+use crate::agent::{
+    IntegrationRuntimeTurnOptions, IntegrationTurnParams, LoopStopReason, ToolLoopResult,
+    run_main_session_turn_for_runtime_with_policy,
+};
 use crate::llm::streaming::{ChannelStreamSink, StreamSink};
+use crate::security::writeback_guard::enforce_external_autosave_write_policy;
 use crate::tools::ExecutionContext;
 use crate::utils::text::truncate_with_ellipsis;
 use anyhow::Result;
@@ -13,8 +17,6 @@ use super::ingress_policy::{
 use super::policy::min_autonomy;
 use super::startup::ChannelRuntime;
 use super::traits::{Channel, ChannelMessage, MediaAttachment};
-use crate::agent::tool_loop::LoopStopReason;
-use crate::agent::tool_loop::ToolLoopResult;
 use crate::security::policy::AutonomyLevel;
 use std::collections::HashSet;
 use tokio::task::JoinHandle;
@@ -89,9 +91,9 @@ async fn autosave_and_ingest(
                 &msg.sender,
                 persisted_summary.to_string(),
             );
-            // TODO: Port security::writeback_guard to v2.
-            // For now, skip the write policy check and append directly.
-            if let Err(error) = rt.mem.append_event(event).await {
+            if let Err(error) = enforce_external_autosave_write_policy(&event) {
+                tracing::warn!(%error, "channel autosave rejected by write policy");
+            } else if let Err(error) = rt.mem.append_event(event).await {
                 tracing::warn!(%error, "failed to autosave channel input");
             }
         }
@@ -290,15 +292,9 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
         tool_allowlist,
     )
     .await;
-    let tool_loop = ToolLoop::new(
-        Arc::clone(&rt.registry),
-        rt.config.autonomy.max_tool_loop_iterations,
-    );
-
     // TODO: Port MediaProcessor to v2 for image attachment handling.
     // For now, use the text content directly without image block conversion.
     let message_input = ingress.model_input;
-    let image_blocks = vec![];
 
     let mut stream_forward_handle = None;
     let stream_sink: Option<Arc<dyn StreamSink>> = rt
@@ -329,19 +325,31 @@ pub(super) async fn handle_channel_message(rt: &ChannelRuntime, msg: &ChannelMes
             Arc::new(ChannelStreamSink::new(tx, 80)) as Arc<dyn StreamSink>
         });
 
-    let result = tool_loop
-        .run(ToolLoopRunParams {
-            provider: rt.provider.as_ref(),
+    let entity_id = ctx.entity_id.clone();
+    let policy_context = ctx.tenant_context.clone();
+    let result = run_main_session_turn_for_runtime_with_policy(
+        IntegrationTurnParams {
+            config: rt.config.as_ref(),
+            security: rt.security.as_ref(),
+            mem: Arc::clone(&rt.mem),
+            answer_provider: rt.provider.as_ref(),
+            reflect_provider: rt.provider.as_ref(),
             system_prompt: &rt.system_prompt,
-            user_message: &message_input,
-            image_content: &image_blocks,
-            model: &rt.model,
+            model_name: &rt.model,
             temperature: rt.temperature,
-            ctx: &ctx,
+            entity_id: &entity_id,
+            policy_context,
+            user_message: &message_input,
+        },
+        IntegrationRuntimeTurnOptions {
+            registry: Arc::clone(&rt.registry),
+            max_tool_iterations: rt.config.autonomy.max_tool_loop_iterations,
+            execution_context: ctx,
             stream_sink,
             conversation_history: &[],
             hooks: &[],
-        })
-        .await;
+        },
+    )
+    .await;
     process_tool_loop_result(rt, msg, result, stream_forward_handle).await;
 }

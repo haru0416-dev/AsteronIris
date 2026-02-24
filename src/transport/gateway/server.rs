@@ -147,27 +147,39 @@ fn build_whatsapp_channel(config: &Config) -> Option<Arc<WhatsAppChannel>> {
 }
 
 fn build_gateway_state(
-    config: &Config,
+    config: &Arc<Config>,
     resources: GatewayResources,
     pairing: Arc<PairingGuard>,
     webhook_secret: Option<Arc<str>>,
 ) -> AppState {
+    let tool_descs = tools::tool_descriptions();
+    let prompt_tool_descs: Vec<(&str, &str)> = tool_descs
+        .iter()
+        .map(|(name, description)| (name.as_str(), description.as_str()))
+        .collect();
+    let system_prompt = crate::transport::channels::build_system_prompt(
+        &config.workspace_dir,
+        &resources.model,
+        &prompt_tool_descs,
+    );
     AppState {
+        config: Arc::clone(config),
         provider: resources.provider,
         registry: resources.registry,
         rate_limiter: resources.rate_limiter,
         max_tool_loop_iterations: config.autonomy.max_tool_loop_iterations,
         model: resources.model,
         temperature: resources.temperature,
+        system_prompt,
         openai_compat_api_keys: None,
         mem: resources.mem,
         auto_save: config.memory.auto_save,
         webhook_secret,
         pairing,
         #[cfg(feature = "whatsapp")]
-        whatsapp: build_whatsapp_channel(config),
+        whatsapp: build_whatsapp_channel(config.as_ref()),
         #[cfg(feature = "whatsapp")]
-        whatsapp_app_secret: resolve_whatsapp_app_secret(config),
+        whatsapp_app_secret: resolve_whatsapp_app_secret(config.as_ref()),
         defense_mode: config.gateway.defense_mode,
         defense_kill_switch: config.gateway.defense_kill_switch,
         security: resources.security,

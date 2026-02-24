@@ -9,12 +9,12 @@ use tracing::info;
 use crate::Config;
 use crate::app::status::render_status;
 
-/// Run the AI agent loop via the v2 tool-loop API.
+/// Run the AI agent loop via the integrated main-session API.
 ///
 /// 1. Creates an LLM provider via the resilient factory with OAuth recovery.
 /// 2. Creates memory via `memory::factory::create_memory`.
 /// 3. Builds the tool registry from `tools::all_tools(memory)`.
-/// 4. Runs a `ToolLoop` and prints the result.
+/// 4. Runs an integrated main-session turn and prints the result.
 async fn run_agent(
     config: Arc<Config>,
     message: Option<String>,
@@ -22,61 +22,77 @@ async fn run_agent(
     model_override: Option<String>,
     temperature: f64,
 ) -> Result<()> {
-    let provider_name = provider_override
-        .as_deref()
-        .or(config.default_provider.as_deref())
-        .unwrap_or("openrouter");
-
-    let model = model_override
-        .as_deref()
-        .or(config.default_model.as_deref())
-        .unwrap_or("anthropic/claude-sonnet-4-20250514");
+    validate_cli_temperature(temperature)?;
+    let provider_name = resolve_agent_provider_name(&config, provider_override.as_deref())?;
+    let model = resolve_agent_model_name(&config, model_override.as_deref())?;
 
     let user_message = message.unwrap_or_else(|| "Hello! How can you help me today?".to_string());
 
     // 1. Create resilient LLM provider
     let provider = crate::llm::factory::create_resilient_provider_with_oauth_recovery(
         &config,
-        provider_name,
+        &provider_name,
         &config.reliability,
         |name| crate::llm::factory::resolve_api_key(name, config.api_key.as_deref()),
     )?;
 
     // 2. Create memory
-    let memory = crate::memory::factory::create_memory(
-        &config.memory,
-        &config.workspace_dir,
-        config.api_key.as_deref(),
-    )
-    .await?;
+    let memory: Arc<dyn crate::memory::Memory> = Arc::from(
+        crate::memory::factory::create_memory(
+            &config.memory,
+            &config.workspace_dir,
+            config.api_key.as_deref(),
+        )
+        .await?,
+    );
 
     // 3. Build tool registry
-    let tools = crate::tools::all_tools(Arc::from(memory));
+    let tools = crate::tools::all_tools(Arc::clone(&memory));
     let mut registry = crate::tools::ToolRegistry::default();
     for tool in tools {
         registry.register(tool);
     }
     let registry = Arc::new(registry);
 
-    // 4. Create and run the tool loop
-    let tool_loop = crate::agent::tool_loop::ToolLoop::new(Arc::clone(&registry), 10);
+    // 4. Build runtime context and run the integrated main session turn
     let security = Arc::new(crate::security::SecurityPolicy::default());
-    let ctx = crate::tools::ExecutionContext::from_security(security);
-
-    let result = tool_loop
-        .run(crate::agent::tool_loop::ToolLoopRunParams {
-            provider: provider.as_ref(),
-            system_prompt: "You are AsteronIris, a helpful AI assistant.",
-            user_message: &user_message,
-            image_content: &[],
-            model,
+    let ctx = crate::tools::ExecutionContext::from_security(Arc::clone(&security));
+    let entity_id = ctx.entity_id.clone();
+    let policy_context = ctx.tenant_context.clone();
+    let tool_descs = crate::tools::tool_descriptions();
+    let prompt_tool_descs: Vec<(&str, &str)> = tool_descs
+        .iter()
+        .map(|(name, description)| (name.as_str(), description.as_str()))
+        .collect();
+    let system_prompt = crate::transport::channels::build_system_prompt(
+        &config.workspace_dir,
+        &model,
+        &prompt_tool_descs,
+    );
+    let result = crate::agent::run_main_session_turn_for_runtime_with_policy(
+        crate::agent::IntegrationTurnParams {
+            config: &config,
+            security: &security,
+            mem: Arc::clone(&memory),
+            answer_provider: provider.as_ref(),
+            reflect_provider: provider.as_ref(),
+            system_prompt: &system_prompt,
+            model_name: &model,
             temperature,
-            ctx: &ctx,
+            entity_id: &entity_id,
+            policy_context,
+            user_message: &user_message,
+        },
+        crate::agent::IntegrationRuntimeTurnOptions {
+            registry: Arc::clone(&registry),
+            max_tool_iterations: 10,
+            execution_context: ctx,
             stream_sink: None,
             conversation_history: &[],
             hooks: &[],
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     println!("{}", result.final_text);
 
@@ -89,6 +105,52 @@ async fn run_agent(
     }
 
     Ok(())
+}
+
+fn validate_cli_temperature(temperature: f64) -> Result<()> {
+    if !temperature.is_finite() {
+        bail!("--temperature must be a finite number in [0.0, 2.0]");
+    }
+
+    if !(0.0..=2.0).contains(&temperature) {
+        bail!("--temperature must be in [0.0, 2.0]");
+    }
+
+    Ok(())
+}
+
+fn resolve_agent_provider_name(config: &Config, provider_override: Option<&str>) -> Result<String> {
+    if let Some(provider) = provider_override {
+        let trimmed = provider.trim();
+        if trimmed.is_empty() {
+            bail!("--provider cannot be empty");
+        }
+        return Ok(trimmed.to_string());
+    }
+
+    if let Some(provider) = config.default_provider.as_deref() {
+        let trimmed = provider.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    Ok("openrouter".to_string())
+}
+
+fn resolve_agent_model_name(config: &Config, model_override: Option<&str>) -> Result<String> {
+    if let Some(model) = model_override {
+        return normalize_non_empty_arg(model, "--model");
+    }
+
+    if let Some(model) = config.default_model.as_deref() {
+        let trimmed = model.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    Ok("anthropic/claude-sonnet-4-20250514".to_string())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -202,7 +264,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
 
         Commands::Model { set, provider } => {
             let mut updated = config.as_ref().clone();
-            updated.default_model = Some(set.clone());
+            updated.default_model = Some(normalize_non_empty_arg(&set, "--set")?);
             if let Some(provider_name) = provider.as_deref() {
                 let trimmed = provider_name.trim();
                 if trimmed.is_empty() {
@@ -304,11 +366,8 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             }
         },
 
-        Commands::Auth { auth_command: _ } => {
-            // TODO: security::auth CLI not yet ported to v2
-            bail!(
-                "auth command not yet available in v2 -- run `asteroniris onboard` to configure API keys"
-            )
+        Commands::Auth { auth_command } => {
+            crate::security::oauth_cli::handle_auth_command(auth_command, &config)
         }
 
         Commands::Skills { skill_command } => match skill_command {
@@ -335,5 +394,66 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
                 )
             }
         },
+    }
+}
+
+fn normalize_non_empty_arg(value: &str, flag_name: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("{flag_name} cannot be empty");
+    }
+    Ok(trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        normalize_non_empty_arg, resolve_agent_model_name, resolve_agent_provider_name,
+        validate_cli_temperature,
+    };
+    use crate::Config;
+
+    #[test]
+    fn validate_cli_temperature_accepts_in_range() {
+        assert!(validate_cli_temperature(0.7).is_ok());
+        assert!(validate_cli_temperature(0.0).is_ok());
+        assert!(validate_cli_temperature(2.0).is_ok());
+    }
+
+    #[test]
+    fn validate_cli_temperature_rejects_non_finite() {
+        assert!(validate_cli_temperature(f64::NAN).is_err());
+        assert!(validate_cli_temperature(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn validate_cli_temperature_rejects_out_of_range() {
+        assert!(validate_cli_temperature(-0.1).is_err());
+        assert!(validate_cli_temperature(2.1).is_err());
+    }
+
+    #[test]
+    fn normalize_non_empty_arg_rejects_empty() {
+        assert!(normalize_non_empty_arg("   ", "--x").is_err());
+    }
+
+    #[test]
+    fn normalize_non_empty_arg_trims_value() {
+        assert_eq!(
+            normalize_non_empty_arg("  gpt-5.3-codex  ", "--x").unwrap(),
+            "gpt-5.3-codex"
+        );
+    }
+
+    #[test]
+    fn resolve_agent_provider_name_rejects_blank_override() {
+        let config = Config::default();
+        assert!(resolve_agent_provider_name(&config, Some("   ")).is_err());
+    }
+
+    #[test]
+    fn resolve_agent_model_name_rejects_blank_override() {
+        let config = Config::default();
+        assert!(resolve_agent_model_name(&config, Some("   ")).is_err());
     }
 }

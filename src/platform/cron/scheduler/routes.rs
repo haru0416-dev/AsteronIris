@@ -9,7 +9,7 @@ use crate::memory::ingestion::{IngestionPipeline, SignalEnvelope, SqliteIngestio
 use crate::memory::traits::Memory;
 use crate::memory::types::{
     MemoryEventInput, MemoryEventType, MemoryLayer, MemoryProvenance, MemorySource, PrivacyLevel,
-    RecallQuery, SourceKind,
+    RecallQuery, SourceKind, normalize_entity_id_for_boundary,
 };
 use crate::security::SecurityPolicy;
 use chrono::Utc;
@@ -437,10 +437,20 @@ pub(super) async fn run_trend_aggregation_job_command(
         Ok(memory) => memory,
         Err(output) => return output,
     };
+    let entity_id =
+        match normalize_entity_id_for_boundary(&job.entity_id, "trend_aggregation.entity_id") {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    false,
+                    format!("{ROUTE_MARKER_TREND_AGGREGATION}\ninvalid entity_id: {error}"),
+                );
+            }
+        };
 
     let recalled = match memory
         .recall_scoped(RecallQuery::new(
-            &job.entity_id,
+            &entity_id,
             &job.query,
             TREND_AGGREGATION_LIMIT,
         ))
@@ -492,7 +502,7 @@ pub(super) async fn run_trend_aggregation_job_command(
     );
 
     let input = MemoryEventInput::new(
-        &job.entity_id,
+        &entity_id,
         &slot_key,
         MemoryEventType::SummaryCompacted,
         payload,

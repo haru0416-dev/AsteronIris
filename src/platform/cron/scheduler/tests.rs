@@ -439,6 +439,47 @@ async fn run_job_command_ingest_trend_writes_snapshot_slot() {
 }
 
 #[tokio::test]
+async fn run_job_command_ingest_trend_normalizes_entity_id_for_recall() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+    let raw_entity_id = "person:trend/slash.1";
+    let normalized_entity_id = "person:trend_slash.1";
+
+    let memory = create_memory(&config.memory, &config.workspace_dir, None)
+        .await
+        .expect("sqlite memory");
+    let _: crate::memory::types::MemoryEvent = memory
+        .append_event(MemoryEventInput::new(
+            raw_entity_id,
+            "external.api.api-item-1",
+            MemoryEventType::FactAdded,
+            "release pulse signal",
+            MemorySource::ExternalSecondary,
+            PrivacyLevel::Private,
+        ))
+        .await
+        .expect("seed api event");
+
+    let trend_job = test_job("ingest:trend person:trend/slash.1 release release pulse");
+    let (trend_ok, trend_out) = run_job_command(&config, &security, &trend_job).await;
+    assert!(trend_ok, "{trend_out}");
+    assert!(trend_out.contains("route=user-trend-aggregation"));
+    assert!(trend_out.contains("accepted=true"), "{trend_out}");
+    assert!(trend_out.contains("slot_key=trend.snapshot.release"));
+
+    let memory = create_memory(&config.memory, &config.workspace_dir, None)
+        .await
+        .expect("sqlite memory should open");
+    let slot = memory
+        .resolve_slot(normalized_entity_id, "trend.snapshot.release")
+        .await
+        .expect("resolve trend snapshot should succeed")
+        .expect("trend snapshot should exist");
+    assert!(slot.value.contains("trend topic=release"));
+}
+
+#[tokio::test]
 async fn run_job_command_failure() {
     let tmp = TempDir::new().unwrap();
     let config = test_config(&tmp);
