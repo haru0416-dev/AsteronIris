@@ -1,6 +1,6 @@
 use super::memory_harness::append_test_event;
 use super::memory_harness::sqlite_fixture;
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     Memory, MemoryCategory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource,
     PrivacyLevel,
 };
@@ -8,7 +8,7 @@ use rusqlite::Connection;
 
 #[tokio::test]
 async fn memory_inferred_claim_persists() {
-    let (_tmp, memory) = sqlite_fixture();
+    let (_tmp, memory) = sqlite_fixture().await;
 
     let events = memory
         .append_inference_events(vec![MemoryInferenceEvent::inferred_claim(
@@ -33,7 +33,7 @@ async fn memory_inferred_claim_persists() {
 
 #[tokio::test]
 async fn memory_contradiction_event_recorded() {
-    let (_tmp, memory) = sqlite_fixture();
+    let (_tmp, memory) = sqlite_fixture().await;
 
     append_test_event(
         &memory,
@@ -67,7 +67,7 @@ async fn memory_contradiction_event_recorded() {
 
 #[tokio::test]
 async fn memory_conflict_resolver_precedence() {
-    let (tmp, memory) = sqlite_fixture();
+    let (tmp, memory) = sqlite_fixture().await;
 
     let explicit = memory
         .append_event(
@@ -176,7 +176,7 @@ async fn memory_conflict_resolver_precedence() {
 
 #[tokio::test]
 async fn memory_conflict_resolver_timestamp_normalization() {
-    let (_tmp, memory) = sqlite_fixture();
+    let (_tmp, memory) = sqlite_fixture().await;
 
     memory
         .append_event(

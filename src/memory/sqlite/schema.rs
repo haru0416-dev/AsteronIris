@@ -161,6 +161,76 @@ PRAGMA mmap_size = 268435456;
 PRAGMA busy_timeout = 5000;
 ";
 
+const SCHEMA_META_TABLE_DDL: &str = "
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+";
+
+const MEMORY_SCHEMA_VERSION_KEY: &str = "memory_schema_version";
+const MEMORY_SCHEMA_VERSION: u32 = 1;
+
+async fn ensure_schema_version(pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::raw_sql(SCHEMA_META_TABLE_DDL)
+        .execute(pool)
+        .await
+        .context("create schema_meta table")?;
+
+    let stored_version: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM schema_meta WHERE key = ?1")
+            .bind(MEMORY_SCHEMA_VERSION_KEY)
+            .fetch_optional(pool)
+            .await
+            .context("load memory schema version")?;
+
+    if let Some((value,)) = stored_version {
+        let parsed = value
+            .parse::<u32>()
+            .with_context(|| format!("invalid memory schema version value: {value}"))?;
+
+        anyhow::ensure!(
+            parsed == MEMORY_SCHEMA_VERSION,
+            "incompatible memory schema version: stored={parsed}, expected={MEMORY_SCHEMA_VERSION}. \
+compatibility is disabled; remove workspace/memory/brain.db and restart."
+        );
+        return Ok(());
+    }
+
+    let legacy_table_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
+         FROM sqlite_master
+         WHERE type = 'table'
+           AND name IN (
+             'memory_events',
+             'belief_slots',
+             'retrieval_units',
+             'deletion_ledger',
+             'embedding_cache',
+             'associations'
+           )",
+    )
+    .fetch_one(pool)
+    .await
+    .context("detect legacy sqlite memory tables")?;
+
+    if legacy_table_count.0 > 0 {
+        anyhow::bail!(
+            "legacy sqlite memory database detected without schema version metadata. \
+compatibility is disabled; remove workspace/memory/brain.db and restart."
+        );
+    }
+
+    sqlx::query("INSERT INTO schema_meta (key, value) VALUES (?1, ?2)")
+        .bind(MEMORY_SCHEMA_VERSION_KEY)
+        .bind(MEMORY_SCHEMA_VERSION.to_string())
+        .execute(pool)
+        .await
+        .context("persist memory schema version")?;
+
+    Ok(())
+}
+
 /// Initialise the full schema on the given pool.
 ///
 /// All statements use `IF NOT EXISTS` so the function is idempotent.
@@ -170,6 +240,8 @@ pub(super) async fn init_schema(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await
         .context("configure SQLite pragmas")?;
+
+    ensure_schema_version(pool).await?;
 
     sqlx::raw_sql(CREATE_EMBEDDING_CACHE)
         .execute(pool)
@@ -212,6 +284,7 @@ mod tests {
         let pool = fresh_pool().await;
 
         let expected = [
+            "schema_meta",
             "memory_events",
             "belief_slots",
             "retrieval_units",
@@ -237,5 +310,61 @@ mod tests {
         let pool = fresh_pool().await;
         // Second call must not fail.
         init_schema(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_schema_rejects_legacy_unversioned_database() {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory SQLite");
+
+        sqlx::query("CREATE TABLE memory_events (event_id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .expect("seed legacy table");
+
+        let err = init_schema(&pool)
+            .await
+            .expect_err("legacy schema without version metadata must fail");
+
+        assert!(
+            err.to_string()
+                .contains("legacy sqlite memory database detected without schema version metadata"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_schema_rejects_version_mismatch() {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory SQLite");
+
+        sqlx::query(
+            "CREATE TABLE schema_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create schema_meta");
+
+        sqlx::query("INSERT INTO schema_meta (key, value) VALUES (?1, ?2)")
+            .bind(MEMORY_SCHEMA_VERSION_KEY)
+            .bind("999")
+            .execute(&pool)
+            .await
+            .expect("insert mismatched version");
+
+        let err = init_schema(&pool)
+            .await
+            .expect_err("schema version mismatch must fail");
+
+        assert!(
+            err.to_string()
+                .contains("incompatible memory schema version"),
+            "unexpected error: {err}"
+        );
     }
 }

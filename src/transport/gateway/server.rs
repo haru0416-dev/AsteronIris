@@ -71,13 +71,14 @@ struct GatewayResources {
 
 async fn build_gateway_resources(config: &Config) -> Result<GatewayResources> {
     let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
-    let api_key = llm::factory::resolve_api_key(provider_name, None);
+    let api_key = llm::factory::resolve_api_key(provider_name, config.api_key.as_deref());
+    let config_api_key = config.api_key.clone();
     let provider: Arc<dyn llm::Provider> = Arc::from(
         llm::create_resilient_provider_with_oauth_recovery(
             config,
             provider_name,
             &config.reliability,
-            |name| llm::factory::resolve_api_key(name, None),
+            move |name| llm::factory::resolve_api_key(name, config_api_key.as_deref()),
         )
         .context("create resilient LLM provider")?,
     );

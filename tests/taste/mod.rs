@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use asteroniris::config::TasteConfig;
-use asteroniris::core::taste::{
+use asteroniris::taste::{
     Artifact, Axis, AxisScores, Domain, PairComparison, Priority, Suggestion, TasteContext,
     TasteReport, TextFormat, TextOp, UiOp, Winner,
 };

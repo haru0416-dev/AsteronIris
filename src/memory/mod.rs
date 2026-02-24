@@ -16,9 +16,15 @@ pub mod vector;
 pub mod lancedb;
 
 pub use associations::{AssociationKind, MemoryAssociation};
+pub use capability::{
+    backend_capability_matrix, capability_matrix_for_backend, capability_matrix_for_memory,
+    ensure_forget_mode_supported,
+};
 pub use embeddings::{
     EmbeddingProvider, NoopEmbedding, OpenAiEmbedding, create_embedding_provider,
 };
+pub use factory::create_memory;
+pub use ingestion::{IngestionPipeline, SignalEnvelope, SqliteIngestionPipeline};
 #[cfg(feature = "vector-search")]
 pub use lancedb::LanceDbMemory;
 pub use markdown::MarkdownMemory;

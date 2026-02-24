@@ -2,7 +2,7 @@ use asteroniris::config::{Config, GatewayDefenseMode, ObservabilityConfig, Webho
 use asteroniris::runtime::observability::create_observer;
 use asteroniris::runtime::observability::multi::MultiObserver;
 use asteroniris::runtime::observability::traits::{Observer, ObserverEvent, ObserverMetric};
-use asteroniris::security::pairing::{PairingGuard, hash_token};
+use asteroniris::transport::gateway::pairing::{PairingGuard, hash_token};
 use asteroniris::transport::gateway::run_gateway_with_listener;
 use reqwest::StatusCode;
 use serde_json::Value;

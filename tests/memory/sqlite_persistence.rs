@@ -1,5 +1,5 @@
-use asteroniris::core::memory::traits::MemoryLayer;
-use asteroniris::core::memory::{
+use asteroniris::memory::traits::MemoryLayer;
+use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemoryProvenance, MemorySource, PrivacyLevel,
     SqliteMemory,
 };
@@ -9,7 +9,7 @@ use tempfile::TempDir;
 #[tokio::test]
 async fn sqlite_persists_layer_and_provenance() {
     let tmp = TempDir::new().unwrap();
-    let memory = SqliteMemory::new(tmp.path()).unwrap();
+    let memory = SqliteMemory::new(tmp.path()).await.unwrap();
 
     let persisted = memory
         .append_event(

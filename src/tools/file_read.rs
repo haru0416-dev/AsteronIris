@@ -47,6 +47,12 @@ impl Tool for FileReadTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
 
+            if !ctx.security.is_path_allowed(path) {
+                return Ok(failed_tool_result(
+                    "blocked by security policy: path not allowed",
+                ));
+            }
+
             let full_path = ctx.workspace_dir.join(path);
 
             // Resolve path before reading to block symlink escapes.
@@ -58,6 +64,12 @@ impl Tool for FileReadTool {
                     )));
                 }
             };
+
+            if !ctx.security.is_resolved_path_allowed(&resolved_path) {
+                return Ok(failed_tool_result(
+                    "blocked by security policy: resolved path escapes workspace",
+                ));
+            }
 
             let mut file = match tokio::fs::File::open(&resolved_path).await {
                 Ok(file) => file,
@@ -216,6 +228,68 @@ mod tests {
         assert_eq!(result.output, "deep content");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn file_read_rejects_path_traversal() {
+        let dir = std::env::temp_dir().join("asteroniris_test_file_read_traversal");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let tool = FileReadTool::new();
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
+        let result = tool
+            .execute(json!({"path": "../../etc/shadow"}), &ctx)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("blocked by security policy")
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn file_read_rejects_symlink_escape() {
+        let workspace = std::env::temp_dir().join("asteroniris_test_file_read_symlink");
+        let outside = std::env::temp_dir().join("asteroniris_test_file_read_symlink_outside");
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        let _ = tokio::fs::remove_dir_all(&outside).await;
+        tokio::fs::create_dir_all(&workspace).await.unwrap();
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        tokio::fs::write(outside.join("secret.txt"), "secret data")
+            .await
+            .unwrap();
+
+        #[cfg(unix)]
+        {
+            tokio::fs::symlink(outside.join("secret.txt"), workspace.join("link.txt"))
+                .await
+                .unwrap();
+
+            let tool = FileReadTool::new();
+            let ctx = ExecutionContext::test_default(test_security_policy(workspace.clone()));
+            let result = tool
+                .execute(json!({"path": "link.txt"}), &ctx)
+                .await
+                .unwrap();
+            assert!(!result.success);
+            assert!(
+                result
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .contains("blocked by security policy")
+            );
+        }
+
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        let _ = tokio::fs::remove_dir_all(&outside).await;
     }
 
     #[tokio::test]

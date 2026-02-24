@@ -57,6 +57,15 @@ impl Tool for ShellTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'command' parameter"))?;
 
+            if !ctx.security.is_command_allowed(command) {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("blocked by security policy: command not allowed".to_string()),
+                    attachments: Vec::new(),
+                });
+            }
+
             // Execute with timeout to prevent hanging commands.
             // Clear the environment to prevent leaking API keys and other secrets
             // (CWE-200), then re-add only safe, functional variables.
@@ -277,6 +286,55 @@ mod tests {
         assert!(
             !result.output.contains("sk-test-secret-67890"),
             "ASTERONIRIS_API_KEY leaked to shell command output"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_disallowed_command() {
+        let tool = ShellTool::new();
+        // Create a policy that only allows "echo"
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: std::env::temp_dir(),
+            allowed_commands: vec!["echo".into()],
+            ..SecurityPolicy::default()
+        });
+        let ctx = ExecutionContext::test_default(security);
+        let result = tool
+            .execute(json!({"command": "rm -rf /"}), &ctx)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("blocked by security policy")
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_subshell_operator() {
+        let tool = ShellTool::new();
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: std::env::temp_dir(),
+            allowed_commands: vec!["echo".into()],
+            ..SecurityPolicy::default()
+        });
+        let ctx = ExecutionContext::test_default(security);
+        let result = tool
+            .execute(json!({"command": "echo $(whoami)"}), &ctx)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("blocked by security policy")
         );
     }
 

@@ -48,6 +48,12 @@ impl Tool for FileWriteTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
 
+            if !ctx.security.is_path_allowed(path) {
+                return Ok(failed_tool_result(
+                    "blocked by security policy: path not allowed",
+                ));
+            }
+
             let content = args
                 .get("content")
                 .and_then(|v| v.as_str())
@@ -93,6 +99,12 @@ impl Tool for FileWriteTool {
             };
 
             let resolved_target = resolved_parent.join(file_name);
+
+            if !ctx.security.is_resolved_path_allowed(&resolved_parent) {
+                return Ok(failed_tool_result(
+                    "blocked by security policy: resolved path escapes workspace",
+                ));
+            }
 
             // If the target already exists and is a symlink, refuse to follow it
             if let Ok(meta) = tokio::fs::symlink_metadata(&resolved_target).await
@@ -224,6 +236,71 @@ mod tests {
         let ctx = ExecutionContext::test_default(test_security_policy(std::env::temp_dir()));
         let result = tool.execute(json!({"path": "file.txt"}), &ctx).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn file_write_rejects_path_traversal() {
+        let dir = std::env::temp_dir().join("asteroniris_test_file_write_traversal");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let tool = FileWriteTool::new();
+        let ctx = ExecutionContext::test_default(test_security_policy(dir.clone()));
+        let result = tool
+            .execute(
+                json!({"path": "../../etc/evil.txt", "content": "pwned"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("blocked by security policy")
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn file_write_rejects_symlink_escape() {
+        let workspace = std::env::temp_dir().join("asteroniris_test_file_write_symlink");
+        let outside = std::env::temp_dir().join("asteroniris_test_file_write_symlink_outside");
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        let _ = tokio::fs::remove_dir_all(&outside).await;
+        tokio::fs::create_dir_all(&workspace).await.unwrap();
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+
+        #[cfg(unix)]
+        {
+            tokio::fs::symlink(&outside, workspace.join("escape_dir"))
+                .await
+                .unwrap();
+
+            let tool = FileWriteTool::new();
+            let ctx = ExecutionContext::test_default(test_security_policy(workspace.clone()));
+            let result = tool
+                .execute(
+                    json!({"path": "escape_dir/evil.txt", "content": "pwned"}),
+                    &ctx,
+                )
+                .await
+                .unwrap();
+            assert!(!result.success);
+            assert!(
+                result
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .contains("blocked by security policy")
+            );
+        }
+
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        let _ = tokio::fs::remove_dir_all(&outside).await;
     }
 
     #[tokio::test]

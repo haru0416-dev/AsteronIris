@@ -1,4 +1,4 @@
-use asteroniris::core::planner::{DagContract, DagEdge, DagNode};
+use asteroniris::planner::{DagContract, DagEdge, DagNode};
 
 #[test]
 fn planner_dag_valid() {

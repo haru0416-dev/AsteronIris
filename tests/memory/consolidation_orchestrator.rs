@@ -3,15 +3,15 @@ use std::time::Duration;
 
 use anyhow::Result;
 use asteroniris::config::Config;
-use asteroniris::core::agent::loop_::{
+use asteroniris::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
 };
-use asteroniris::core::memory::traits::MemoryLayer;
-use asteroniris::core::memory::{
+use asteroniris::memory::traits::MemoryLayer;
+use asteroniris::memory::{
     CONSOLIDATION_SLOT_KEY, ConsolidationDisposition, ConsolidationInput, Memory, MemoryEventInput,
     MemoryEventType, MemorySource, PrivacyLevel, RecallQuery, SqliteMemory, run_consolidation_once,
 };
-use asteroniris::core::providers::Provider;
+use asteroniris::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
 use chrono::{Duration as ChronoDuration, Utc};
@@ -56,7 +56,7 @@ impl Memory for DelayedConsolidationMemory {
         input: MemoryEventInput,
     ) -> Pin<
         Box<
-            dyn Future<Output = anyhow::Result<asteroniris::core::memory::MemoryEvent>> + Send + '_,
+            dyn Future<Output = anyhow::Result<asteroniris::memory::MemoryEvent>> + Send + '_,
         >,
     > {
         Box::pin(async move {
@@ -72,7 +72,7 @@ impl Memory for DelayedConsolidationMemory {
         query: RecallQuery,
     ) -> Pin<
         Box<
-            dyn Future<Output = anyhow::Result<Vec<asteroniris::core::memory::MemoryRecallItem>>>
+            dyn Future<Output = anyhow::Result<Vec<asteroniris::memory::MemoryRecallItem>>>
                 + Send
                 + '_,
         >,
@@ -86,7 +86,7 @@ impl Memory for DelayedConsolidationMemory {
         slot_key: &'a str,
     ) -> Pin<
         Box<
-            dyn Future<Output = anyhow::Result<Option<asteroniris::core::memory::BeliefSlot>>>
+            dyn Future<Output = anyhow::Result<Option<asteroniris::memory::BeliefSlot>>>
                 + Send
                 + 'a,
         >,
@@ -98,11 +98,11 @@ impl Memory for DelayedConsolidationMemory {
         &'a self,
         entity_id: &'a str,
         slot_key: &'a str,
-        mode: asteroniris::core::memory::ForgetMode,
+        mode: asteroniris::memory::ForgetMode,
         reason: &'a str,
     ) -> Pin<
         Box<
-            dyn Future<Output = anyhow::Result<asteroniris::core::memory::ForgetOutcome>>
+            dyn Future<Output = anyhow::Result<asteroniris::memory::ForgetOutcome>>
                 + Send
                 + 'a,
         >,
@@ -125,7 +125,7 @@ impl Memory for DelayedConsolidationMemory {
 #[tokio::test]
 async fn memory_consolidation_is_idempotent() {
     let temp = TempDir::new().unwrap();
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).unwrap());
+    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).await.unwrap());
     let entity_id = "tenant-alpha:user-1";
 
     memory
@@ -180,7 +180,7 @@ async fn memory_consolidation_runs_async_nonblocking() {
     config.memory.auto_save = true;
     config.persona.enabled_main_session = false;
 
-    let base: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let base: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).await.unwrap());
     let delay = Duration::from_millis(50);
     let mem: Arc<dyn Memory> = Arc::new(DelayedConsolidationMemory {
         inner: base.clone(),
@@ -242,7 +242,7 @@ async fn memory_consolidation_failure_isolated() {
     config.memory.auto_save = true;
     config.persona.enabled_main_session = false;
 
-    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).unwrap());
+    let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(&workspace).await.unwrap());
     let provider = FixedResponseProvider {
         response: "response survives consolidation failure".to_string(),
     };
@@ -281,7 +281,7 @@ async fn memory_consolidation_failure_isolated() {
 #[tokio::test]
 async fn memory_consolidation_long_run() {
     let temp = TempDir::new().expect("tempdir");
-    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).expect("sqlite memory"));
+    let memory: Arc<dyn Memory> = Arc::new(SqliteMemory::new(temp.path()).await.expect("sqlite memory"));
     let entity_id = "tenant-alpha:long-run";
     let cycle_count = 10usize;
 
@@ -374,7 +374,7 @@ async fn memory_consolidation_long_run() {
 #[tokio::test]
 async fn memory_consolidation_long_run_decay_progression() {
     let temp = TempDir::new().expect("tempdir");
-    let memory = SqliteMemory::new(temp.path()).expect("sqlite memory");
+    let memory = SqliteMemory::new(temp.path()).await.expect("sqlite memory");
     let entity_id = "tenant-alpha:decay";
     let now = Utc::now();
 

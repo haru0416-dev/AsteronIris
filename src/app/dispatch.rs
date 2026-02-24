@@ -165,6 +165,8 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         } => run_agent(Arc::clone(&config), message, provider, model, temperature).await,
 
         Commands::Gateway { port, host } => {
+            let port = port.unwrap_or(config.gateway.port);
+            let host = host.unwrap_or_else(|| config.gateway.host.clone());
             if port == 0 {
                 info!("Starting AsteronIris Gateway on {host} (random port)");
             } else {
@@ -174,6 +176,8 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
         }
 
         Commands::Daemon { port, host } => {
+            let port = port.unwrap_or(config.gateway.port);
+            let host = host.unwrap_or_else(|| config.gateway.host.clone());
             if port == 0 {
                 info!("Starting AsteronIris Daemon on {host} (random port)");
             } else {
@@ -191,8 +195,7 @@ pub async fn dispatch(cli: Cli, config: Arc<Config>) -> Result<()> {
             seed: _seed,
             evidence_slug: _evidence_slug,
         } => {
-            // TODO: eval module not yet ported
-            todo!("eval module not yet ported")
+            bail!("eval command is not yet available in v2")
         }
 
         Commands::Evolve { apply } => crate::runtime::evolution::run_cycle(&config, apply),

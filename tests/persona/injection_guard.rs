@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use asteroniris::config::PersonaConfig;
-use asteroniris::core::memory::{Memory, RecallQuery, SqliteMemory};
-use asteroniris::core::persona::state_header::StateHeader;
-use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
+use asteroniris::memory::{Memory, RecallQuery, SqliteMemory};
+use asteroniris::persona::state_header::StateHeader;
+use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use asteroniris::security::writeback_guard::{
     ImmutableStateHeader, WritebackGuardVerdict, validate_writeback_payload,
 };

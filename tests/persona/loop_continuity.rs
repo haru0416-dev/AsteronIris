@@ -3,9 +3,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use asteroniris::config::PersonaConfig;
-use asteroniris::core::memory::{Memory, SqliteMemory};
-use asteroniris::core::persona::state_header::StateHeader;
-use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
+use asteroniris::memory::{Memory, SqliteMemory};
+use asteroniris::persona::state_header::StateHeader;
+use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
 use tempfile::TempDir;
 
 fn state_for_turn(turn: u8) -> StateHeader {

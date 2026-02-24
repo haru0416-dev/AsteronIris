@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use asteroniris::core::agent::augment_prompt_with_trust_boundary;
-use asteroniris::core::tools::middleware::{ExecutionContext, default_middleware_chain};
-use asteroniris::core::tools::{FileReadTool, ShellTool, ToolRegistry};
+use asteroniris::agent::augment_prompt_with_trust_boundary;
+use asteroniris::tools::middleware::{ExecutionContext, default_middleware_chain};
+use asteroniris::tools::{FileReadTool, ShellTool, ToolRegistry};
 use asteroniris::security::{
     AutonomyLevel, EntityRateLimiter, GrantScope, PermissionGrant, PermissionStore, SecurityPolicy,
 };

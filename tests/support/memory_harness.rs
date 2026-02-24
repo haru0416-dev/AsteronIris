@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use asteroniris::core::memory::embeddings::EmbeddingProvider;
-use asteroniris::core::memory::{
+use asteroniris::memory::embeddings::EmbeddingProvider;
+use asteroniris::memory::{
     CapabilitySupport, ForgetMode, LanceDbMemory, MarkdownMemory, Memory, MemoryCapabilityMatrix,
     MemoryCategory, MemoryEventInput, MemoryEventType, MemoryRecallItem, MemorySource,
     PrivacyLevel, RecallQuery, SqliteMemory, backend_capability_matrix,
@@ -88,8 +88,10 @@ impl EmbeddingProvider for DeterministicEmbeddingProvider {
     }
 }
 
-pub fn sqlite_memory_from_path(path: &Path) -> SqliteMemory {
-    SqliteMemory::new(path).expect("sqlite memory backend should initialize")
+pub async fn sqlite_memory_from_path(path: &Path) -> SqliteMemory {
+    SqliteMemory::new(path)
+        .await
+        .expect("sqlite memory backend should initialize")
 }
 
 pub fn markdown_memory_from_path(path: &Path) -> MarkdownMemory {
@@ -110,9 +112,9 @@ pub fn lancedb_memory_from_path(path: &Path) -> LanceDbMemory {
     .expect("lancedb memory backend should initialize with deterministic embedder")
 }
 
-pub fn sqlite_fixture() -> (TempDir, SqliteMemory) {
+pub async fn sqlite_fixture() -> (TempDir, SqliteMemory) {
     let temp_dir = TempDir::new().expect("temp directory should be created");
-    let memory = sqlite_memory_from_path(temp_dir.path());
+    let memory = sqlite_memory_from_path(temp_dir.path()).await;
     (temp_dir, memory)
 }
 

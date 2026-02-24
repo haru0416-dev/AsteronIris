@@ -3,17 +3,17 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use asteroniris::config::{Config, PersonaConfig};
-use asteroniris::core::agent::loop_::{
+use asteroniris::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration,
     run_main_session_turn_for_integration_with_policy,
 };
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, SqliteMemory,
 };
-use asteroniris::core::persona::state_header::StateHeader;
-use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
-use asteroniris::core::providers::Provider;
-use asteroniris::core::tools::{ActionIntent, ActionOperator, NoopOperator};
+use asteroniris::persona::state_header::StateHeader;
+use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
+use asteroniris::providers::Provider;
+use asteroniris::tools::{ActionIntent, ActionOperator, NoopOperator};
 use asteroniris::platform::cron::{self, CronJobKind, CronJobOrigin};
 use asteroniris::runtime::observability::traits::{
     AutonomyLifecycleSignal, Observer, ObserverEvent, ObserverMetric,

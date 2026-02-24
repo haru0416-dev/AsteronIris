@@ -15,7 +15,7 @@ pub(crate) mod openai_compat_auth;
 pub(crate) mod openai_compat_handler;
 pub(crate) mod openai_compat_streaming;
 pub(crate) mod openai_compat_types;
-pub(crate) mod pairing;
+pub mod pairing;
 mod replay_guard;
 mod server;
 mod signature;

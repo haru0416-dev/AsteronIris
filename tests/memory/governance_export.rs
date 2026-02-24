@@ -1,17 +1,19 @@
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     Memory, MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
     SqliteMemory,
 };
-use asteroniris::core::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
+use asteroniris::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-fn fixture() -> (TempDir, Arc<dyn Memory>, Arc<SecurityPolicy>) {
+async fn fixture() -> (TempDir, Arc<dyn Memory>, Arc<SecurityPolicy>) {
     let temp = TempDir::new().expect("temp dir should be created");
-    let memory = SqliteMemory::new(temp.path()).expect("sqlite memory should initialize");
+    let memory = SqliteMemory::new(temp.path())
+        .await
+        .expect("sqlite memory should initialize");
     let security = SecurityPolicy {
         autonomy: AutonomyLevel::Full,
         workspace_dir: temp.path().to_path_buf(),
@@ -46,7 +48,7 @@ async fn seed_slot(
 
 #[tokio::test]
 async fn dsar_export_then_delete_flow() {
-    let (_temp, memory, security) = fixture();
+    let (_temp, memory, security) = fixture().await;
     let entity_id = "tenant-alpha:user-dsar";
     seed_slot(
         memory.as_ref(),

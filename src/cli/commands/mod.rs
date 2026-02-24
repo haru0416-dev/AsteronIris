@@ -74,24 +74,24 @@ pub enum Commands {
 
     /// Start the gateway server (webhooks, websockets)
     Gateway {
-        /// Port to listen on (use 0 for random available port)
-        #[arg(short, long, default_value = "8080")]
-        port: u16,
+        /// Port to listen on (overrides config; use 0 for random available port)
+        #[arg(short, long)]
+        port: Option<u16>,
 
-        /// Host to bind to
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
+        /// Host to bind to (overrides config)
+        #[arg(long)]
+        host: Option<String>,
     },
 
     /// Start long-running autonomous runtime (gateway + channels + heartbeat + scheduler)
     Daemon {
-        /// Port to listen on (use 0 for random available port)
-        #[arg(short, long, default_value = "8080")]
-        port: u16,
+        /// Port to listen on (overrides config; use 0 for random available port)
+        #[arg(short, long)]
+        port: Option<u16>,
 
-        /// Host to bind to
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
+        /// Host to bind to (overrides config)
+        #[arg(long)]
+        host: Option<String>,
     },
 
     /// Manage OS service lifecycle (launchd/systemd user service)

@@ -80,12 +80,74 @@ pub struct SqliteSessionStore {
     pool: SqlitePool,
 }
 
+const SESSION_SCHEMA_META_TABLE: &str = "
+CREATE TABLE IF NOT EXISTS session_schema_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)";
+const SESSION_SCHEMA_VERSION_KEY: &str = "session_schema_version";
+const SESSION_SCHEMA_VERSION: u32 = 1;
+
+async fn ensure_session_schema_version(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(SESSION_SCHEMA_META_TABLE)
+        .execute(pool)
+        .await
+        .context("create session_schema_meta table")?;
+
+    let stored_version: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM session_schema_meta WHERE key = $1")
+            .bind(SESSION_SCHEMA_VERSION_KEY)
+            .fetch_optional(pool)
+            .await
+            .context("load session schema version")?;
+
+    if let Some((value,)) = stored_version {
+        let parsed = value
+            .parse::<u32>()
+            .with_context(|| format!("invalid session schema version value: {value}"))?;
+        anyhow::ensure!(
+            parsed == SESSION_SCHEMA_VERSION,
+            "incompatible session schema version: stored={parsed}, expected={SESSION_SCHEMA_VERSION}. \
+compatibility is disabled; remove session DB and restart."
+        );
+        return Ok(());
+    }
+
+    let legacy_table_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
+         FROM sqlite_master
+         WHERE type = 'table'
+           AND name IN ('sessions', 'chat_messages')",
+    )
+    .fetch_one(pool)
+    .await
+    .context("detect legacy session tables")?;
+
+    if legacy_table_count.0 > 0 {
+        anyhow::bail!(
+            "legacy session database detected without schema version metadata. \
+compatibility is disabled; remove session DB and restart."
+        );
+    }
+
+    sqlx::query("INSERT INTO session_schema_meta (key, value) VALUES ($1, $2)")
+        .bind(SESSION_SCHEMA_VERSION_KEY)
+        .bind(SESSION_SCHEMA_VERSION.to_string())
+        .execute(pool)
+        .await
+        .context("persist session schema version")?;
+
+    Ok(())
+}
+
 impl SqliteSessionStore {
     /// Create a new store with an existing pool and run migrations.
     pub async fn new(pool: SqlitePool) -> Result<Self> {
         sqlx::query("PRAGMA foreign_keys = ON;")
             .execute(&pool)
             .await?;
+
+        ensure_session_schema_version(&pool).await?;
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS sessions (
@@ -511,8 +573,11 @@ impl SessionStore for SqliteSessionStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionStore, SqliteSessionStore};
+    use super::{
+        SESSION_SCHEMA_META_TABLE, SESSION_SCHEMA_VERSION_KEY, SessionStore, SqliteSessionStore,
+    };
     use crate::session::types::{MessageRole, SessionState};
+    use sqlx::SqlitePool;
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn store() -> SqliteSessionStore {
@@ -713,5 +778,49 @@ mod tests {
 
         let still_gone = store.get_messages(&session.id, Some(10)).await.unwrap();
         assert!(still_gone.iter().all(|msg| msg.id != first.id));
+    }
+
+    #[tokio::test]
+    async fn new_rejects_legacy_unversioned_session_database() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE sessions (id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let err = match SqliteSessionStore::new(pool).await {
+            Ok(_) => panic!("legacy unversioned session DB must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("legacy session database detected without schema version metadata"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_rejects_session_schema_version_mismatch() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(SESSION_SCHEMA_META_TABLE)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO session_schema_meta (key, value) VALUES ($1, $2)")
+            .bind(SESSION_SCHEMA_VERSION_KEY)
+            .bind("999")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let err = match SqliteSessionStore::new(pool).await {
+            Ok(_) => panic!("session schema version mismatch must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("incompatible session schema version"),
+            "unexpected error: {err}"
+        );
     }
 }

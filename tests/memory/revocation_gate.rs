@@ -1,7 +1,7 @@
 use super::memory_harness;
 
-use asteroniris::core::agent::loop_::build_context_for_integration;
-use asteroniris::core::memory::{
+use asteroniris::agent::loop_::build_context_for_integration;
+use asteroniris::memory::{
     BeliefSlot, ForgetMode, ForgetOutcome, Memory, MemoryCategory, MemoryEvent, MemoryEventInput,
     MemoryRecallItem, MemorySource, PrivacyLevel, RecallQuery,
 };
@@ -84,7 +84,7 @@ fn insert_stale_retrieval_doc(
 
 #[tokio::test]
 async fn memory_revocation_gate_blocks_replay() {
-    let (tmp, memory) = memory_harness::sqlite_fixture();
+    let (tmp, memory) = memory_harness::sqlite_fixture().await;
     let entity_id = "default";
     let slot_key = "profile.revoked_token";
     let revoked_value = "sk-revoked-123";
@@ -229,7 +229,7 @@ async fn memory_revocation_gate_applies_in_context_builder() {
 
 #[tokio::test]
 async fn memory_revocation_gate_blocks_cached_replay() {
-    let (tmp, memory) = memory_harness::sqlite_fixture();
+    let (tmp, memory) = memory_harness::sqlite_fixture().await;
     let entity_id = "default";
     let slot_key = "profile.cached_replay";
     let stale_value = "stale-replay-value";

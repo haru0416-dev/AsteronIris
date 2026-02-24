@@ -1,14 +1,14 @@
 use super::memory_harness::append_test_event;
 use super::memory_harness::sqlite_fixture;
 use asteroniris::config::Config;
-use asteroniris::core::agent::loop_::build_context_for_integration;
-use asteroniris::core::agent::loop_::{
+use asteroniris::agent::loop_::build_context_for_integration;
+use asteroniris::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration_with_policy,
 };
-use asteroniris::core::memory::{Memory, MemoryCategory, RecallQuery};
-use asteroniris::core::providers::Provider;
-use asteroniris::core::tools::MemoryRecallTool;
-use asteroniris::core::tools::{ExecutionContext, Tool};
+use asteroniris::memory::{Memory, MemoryCategory, RecallQuery};
+use asteroniris::providers::Provider;
+use asteroniris::tools::MemoryRecallTool;
+use asteroniris::tools::{ExecutionContext, Tool};
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::{
     TENANT_DEFAULT_SCOPE_FALLBACK_DENIED_ERROR, TENANT_RECALL_CROSS_SCOPE_DENIED_ERROR,
@@ -62,7 +62,7 @@ impl Provider for CaptureProvider {
 
 #[tokio::test]
 async fn tenant_recall_blocks_cross_scope() {
-    let (_tmp_dir, memory) = sqlite_fixture();
+    let (_tmp_dir, memory) = sqlite_fixture().await;
 
     append_test_event(
         &memory,
@@ -107,7 +107,7 @@ async fn tenant_recall_blocks_cross_scope() {
 
 #[tokio::test]
 async fn tenant_mode_disables_default_fallback() {
-    let (_tmp_dir, memory) = sqlite_fixture();
+    let (_tmp_dir, memory) = sqlite_fixture().await;
 
     append_test_event(
         &memory,
@@ -134,7 +134,7 @@ async fn tenant_mode_disables_default_fallback() {
 
 #[tokio::test]
 async fn tenant_recall_all_entrypoints_allow_same_tenant() {
-    let (_tmp_dir, memory) = sqlite_fixture();
+    let (_tmp_dir, memory) = sqlite_fixture().await;
     let memory: Arc<dyn Memory> = Arc::new(memory);
 
     append_test_event(
@@ -189,7 +189,7 @@ async fn tenant_recall_all_entrypoints_allow_same_tenant() {
 
 #[tokio::test]
 async fn tenant_recall_all_entrypoints_block_cross_scope() {
-    let (_tmp_dir, memory) = sqlite_fixture();
+    let (_tmp_dir, memory) = sqlite_fixture().await;
     let memory: Arc<dyn Memory> = Arc::new(memory);
 
     append_test_event(
@@ -254,7 +254,7 @@ async fn tenant_recall_all_entrypoints_block_cross_scope() {
 
 #[tokio::test]
 async fn tenant_recall_e2e_same_tenant_paths() {
-    let (_tmp_dir, memory) = sqlite_fixture();
+    let (_tmp_dir, memory) = sqlite_fixture().await;
     let memory: Arc<dyn Memory> = Arc::new(memory);
 
     append_test_event(
@@ -331,7 +331,7 @@ async fn tenant_recall_e2e_same_tenant_paths() {
 
 #[tokio::test]
 async fn tenant_recall_e2e_cross_tenant_block() {
-    let (_tmp_dir, memory) = sqlite_fixture();
+    let (_tmp_dir, memory) = sqlite_fixture().await;
     let memory: Arc<dyn Memory> = Arc::new(memory);
 
     append_test_event(

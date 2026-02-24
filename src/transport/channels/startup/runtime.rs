@@ -28,13 +28,13 @@ pub(in super::super) struct ChannelRuntime {
 
 #[allow(clippy::too_many_lines)]
 pub(super) async fn init_channel_runtime(config: &Arc<Config>) -> Result<ChannelRuntime> {
-    // TODO: Port AuthBroker to v2. For now, use direct API key resolution.
+    let config_api_key = config.api_key.clone();
     let provider: Arc<dyn Provider> = Arc::from(
         crate::llm::factory::create_resilient_provider_with_oauth_recovery(
             config,
             config.default_provider.as_deref().unwrap_or("openrouter"),
             &config.reliability,
-            |_name| None::<String>,
+            move |name| crate::llm::factory::resolve_api_key(name, config_api_key.as_deref()),
         )?,
     );
 
@@ -57,7 +57,12 @@ pub(super) async fn init_channel_runtime(config: &Arc<Config>) -> Result<Channel
     ));
 
     let mem: Arc<dyn Memory> = Arc::from(
-        crate::memory::factory::create_memory(&config.memory, &config.workspace_dir, None).await?,
+        crate::memory::factory::create_memory(
+            &config.memory,
+            &config.workspace_dir,
+            config.api_key.as_deref(),
+        )
+        .await?,
     );
 
     let tools = crate::tools::all_tools(Arc::clone(&mem));

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     CapabilitySupport, ForgetMode, ForgetStatus, Memory, MemoryCategory,
     capability_matrix_for_memory, ensure_forget_mode_supported,
 };
@@ -89,7 +89,7 @@ fn ensure_explicit_contract(
     mode: ForgetMode,
     support: CapabilitySupport,
     supported_preflight: bool,
-    outcome: &asteroniris::core::memory::ForgetOutcome,
+    outcome: &asteroniris::memory::ForgetOutcome,
 ) -> Result<&'static str> {
     let mode_name = mode_label(mode);
     match support {
@@ -332,7 +332,7 @@ fn write_report(rows: &[ReportRow], path: &Path) -> Result<()> {
 
 #[tokio::test]
 async fn memory_backend_parity_matrix() {
-    let (_tmp_sqlite, sqlite) = memory_harness::sqlite_fixture();
+    let (_tmp_sqlite, sqlite) = memory_harness::sqlite_fixture().await;
     let (_tmp_lancedb, lancedb) = memory_harness::lancedb_fixture();
     let (_tmp_markdown, markdown) = memory_harness::markdown_fixture();
 
@@ -369,7 +369,7 @@ async fn memory_backend_parity_matrix() {
 
 #[test]
 fn memory_backend_parity_detects_drift() {
-    let simulated = asteroniris::core::memory::ForgetOutcome {
+    let simulated = asteroniris::memory::ForgetOutcome {
         entity_id: "drift".to_string(),
         slot_key: "drift.slot".to_string(),
         mode: ForgetMode::Soft,

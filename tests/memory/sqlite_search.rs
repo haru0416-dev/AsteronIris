@@ -1,12 +1,12 @@
 use super::memory_harness::sqlite_fixture as temp_sqlite;
-use asteroniris::core::memory::traits::Memory;
-use asteroniris::core::memory::{
+use asteroniris::memory::traits::Memory;
+use asteroniris::memory::{
     MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, RecallQuery,
 };
 
 #[tokio::test]
 async fn sqlite_search_returns_keyword_hits() {
-    let (_tmp, mem) = temp_sqlite();
+    let (_tmp, mem) = temp_sqlite().await;
     mem.append_event(MemoryEventInput::new(
         "user-search",
         "notes.favorite_language",
@@ -27,7 +27,7 @@ async fn sqlite_search_returns_keyword_hits() {
 
 #[tokio::test]
 async fn sqlite_search_limit_zero_returns_empty() {
-    let (_tmp, mem) = temp_sqlite();
+    let (_tmp, mem) = temp_sqlite().await;
     let results = mem
         .recall_scoped(RecallQuery::new("any-entity", "anything", 0))
         .await
@@ -37,7 +37,7 @@ async fn sqlite_search_limit_zero_returns_empty() {
 
 #[tokio::test]
 async fn sqlite_recall_phased_delegates_to_scoped() {
-    let (_tmp, mem) = temp_sqlite();
+    let (_tmp, mem) = temp_sqlite().await;
     mem.append_event(MemoryEventInput::new(
         "user-phased",
         "notes.runtime",

@@ -12,14 +12,27 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};
 use std::sync::Arc;
 
+#[allow(clippy::too_many_lines)]
 pub async fn handle_chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse {
-    let auth_disabled = state.openai_compat_api_keys.is_none();
-    let api_keys = state.openai_compat_api_keys.as_deref().unwrap_or(&[]);
-    if !validate_api_key(&headers, api_keys, auth_disabled) {
+    // Primary auth: pairing bearer token (if pairing is active)
+    let pairing_ok = if state.pairing.is_paired() || state.pairing.require_pairing() {
+        bearer_token(&headers).is_some_and(|token| state.pairing.is_authenticated(token))
+    } else {
+        false
+    };
+
+    // Secondary auth: OpenAI-compat API key check
+    let api_key_ok = {
+        let auth_disabled = state.openai_compat_api_keys.is_none();
+        let api_keys = state.openai_compat_api_keys.as_deref().unwrap_or(&[]);
+        validate_api_key(&headers, api_keys, auth_disabled)
+    };
+
+    if !pairing_ok && !api_key_ok {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({

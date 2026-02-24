@@ -1,5 +1,5 @@
 use asteroniris::config::Config;
-use asteroniris::core::memory::{
+use asteroniris::memory::{
     MemoryEventInput, MemoryEventType, MemorySource, PrivacyLevel, create_memory,
 };
 use asteroniris::platform::cron::{CronJob, CronJobKind, CronJobOrigin};

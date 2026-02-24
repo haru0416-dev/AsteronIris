@@ -2,13 +2,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use asteroniris::config::{Config, PersonaConfig};
-use asteroniris::core::agent::loop_::{
+use asteroniris::agent::loop_::{
     IntegrationTurnParams, run_main_session_turn_for_integration,
 };
-use asteroniris::core::memory::{Memory, SqliteMemory};
-use asteroniris::core::persona::state_header::StateHeader;
-use asteroniris::core::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
-use asteroniris::core::providers::Provider;
+use asteroniris::memory::{Memory, SqliteMemory};
+use asteroniris::persona::state_header::StateHeader;
+use asteroniris::persona::state_persistence::BackendCanonicalStateHeaderPersistence;
+use asteroniris::providers::Provider;
 use asteroniris::platform::cron::{self, CronJobKind, CronJobOrigin};
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;

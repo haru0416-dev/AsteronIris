@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use super::memory_harness;
-use asteroniris::core::memory::traits::Memory;
-use asteroniris::core::memory::{
+use asteroniris::memory::traits::Memory;
+use asteroniris::memory::{
     IngestionPipeline, MemoryCategory, MemoryEventInput, MemoryEventType, MemorySource,
     PrivacyLevel, RecallQuery, SignalEnvelope, SourceKind, SqliteIngestionPipeline,
 };
@@ -187,25 +187,25 @@ async fn markdown_append_event_rejects_invalid_slot_taxonomy_pattern() {
 
 #[tokio::test]
 async fn sqlite_recall_phased_matches_scoped() {
-    let (_tmp, sqlite) = memory_harness::sqlite_fixture();
+    let (_tmp, sqlite) = memory_harness::sqlite_fixture().await;
     assert_recall_phased_fallback(&sqlite, "compat:sqlite", "compat.sqlite.fallback").await;
 }
 
 #[tokio::test]
 async fn sqlite_append_event_normalizes_identifiers() {
-    let (_tmp, sqlite) = memory_harness::sqlite_fixture();
+    let (_tmp, sqlite) = memory_harness::sqlite_fixture().await;
     assert_append_event_normalizes_identifiers(&sqlite).await;
 }
 
 #[tokio::test]
 async fn sqlite_append_event_rejects_empty_identifiers() {
-    let (_tmp, sqlite) = memory_harness::sqlite_fixture();
+    let (_tmp, sqlite) = memory_harness::sqlite_fixture().await;
     assert_append_event_rejects_empty_identifiers(&sqlite).await;
 }
 
 #[tokio::test]
 async fn sqlite_append_event_rejects_invalid_slot_taxonomy_pattern() {
-    let (_tmp, sqlite) = memory_harness::sqlite_fixture();
+    let (_tmp, sqlite) = memory_harness::sqlite_fixture().await;
     assert_append_event_rejects_invalid_slot_taxonomy_pattern(&sqlite).await;
 }
 
@@ -267,7 +267,7 @@ async fn ingestion_pipeline_accepts_markdown_backend() {
 
 #[tokio::test]
 async fn ingestion_pipeline_accepts_sqlite_backend() {
-    let (_tmp, sqlite) = memory_harness::sqlite_fixture();
+    let (_tmp, sqlite) = memory_harness::sqlite_fixture().await;
     let memory: Arc<dyn Memory> = Arc::new(sqlite);
     let pipeline = SqliteIngestionPipeline::new(Arc::clone(&memory));
 
@@ -309,14 +309,14 @@ async fn ingestion_pipeline_source_ref_partitioned_by_source_kind_with_markdown_
 
 #[tokio::test]
 async fn ingestion_pipeline_dedup_works_with_sqlite_backend() {
-    let (_tmp, sqlite) = memory_harness::sqlite_fixture();
+    let (_tmp, sqlite) = memory_harness::sqlite_fixture().await;
     let memory: Arc<dyn Memory> = Arc::new(sqlite);
     assert_ingestion_exact_dedup(memory, SourceKind::Api, "compat:sqlite:dedup").await;
 }
 
 #[tokio::test]
 async fn ingestion_pipeline_source_ref_partitioned_by_source_kind_with_sqlite_backend() {
-    let (_tmp, sqlite) = memory_harness::sqlite_fixture();
+    let (_tmp, sqlite) = memory_harness::sqlite_fixture().await;
     let memory: Arc<dyn Memory> = Arc::new(sqlite);
     assert_ingestion_source_ref_partitioned_by_source_kind(memory).await;
 }

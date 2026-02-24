@@ -5,11 +5,34 @@ use crate::security::policy::TenantPolicyContext;
 use crate::tools::ExecutionContext;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
 
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+pub async fn ws_handler(
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if state.pairing.is_paired() || state.pairing.require_pairing() {
+        let token = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|raw| raw.strip_prefix("Bearer "));
+
+        let authenticated = token.is_some_and(|t| state.pairing.is_authenticated(t));
+
+        if !authenticated {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "WebSocket upgrade requires authentication",
+            )
+                .into_response();
+        }
+    }
+
     ws.on_upgrade(move |socket| handle_socket(socket, state))
+        .into_response()
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
