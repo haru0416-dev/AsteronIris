@@ -1,7 +1,7 @@
 use asteroniris::memory::{
     ForgetArtifact, ForgetArtifactRequirement, ForgetMode, ForgetStatus, Memory,
 };
-use rusqlite::Connection;
+use sqlx::SqlitePool;
 
 use super::memory_harness;
 
@@ -199,37 +199,44 @@ async fn memory_delete_contract_sqlite_hard_delete_dsar_authoritative() {
         "retrieval docs should be non-retrievable after hard delete"
     );
 
-    let conn = Connection::open(tmp.path().join("memory").join("brain.db"))
+    let url = format!(
+        "sqlite:{}",
+        tmp.path().join("memory").join("brain.db").display()
+    );
+    let pool = SqlitePool::connect(&url)
+        .await
         .expect("sqlite db should be readable for artifact assertions");
-    let slot_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
-            rusqlite::params!["entity-dsar", "pii.email"],
-            |row| row.get(0),
-        )
-        .expect("belief slot count query should succeed");
-    let retrieval_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM retrieval_units WHERE unit_id = ?1",
-            rusqlite::params!["entity-dsar:pii.email"],
-            |row| row.get(0),
-        )
-        .expect("retrieval docs count query should succeed");
-    let projection_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM retrieval_units
-             WHERE entity_id = '__projection__' AND slot_key = ?1 AND chunk_index = 0",
-            rusqlite::params!["pii.email"],
-            |row| row.get(0),
-        )
-        .expect("projection count query should succeed");
-    let ledger_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM deletion_ledger WHERE entity_id = ?1 AND target_slot_key = ?2 AND phase = 'hard'",
-            rusqlite::params!["entity-dsar", "pii.email"],
-            |row| row.get(0),
-        )
-        .expect("deletion ledger query should succeed");
+    let (slot_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM belief_slots WHERE entity_id = ?1 AND slot_key = ?2",
+    )
+    .bind("entity-dsar")
+    .bind("pii.email")
+    .fetch_one(&pool)
+    .await
+    .expect("belief slot count query should succeed");
+    let (retrieval_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM retrieval_units WHERE unit_id = ?1")
+            .bind("entity-dsar:pii.email")
+            .fetch_one(&pool)
+            .await
+            .expect("retrieval docs count query should succeed");
+    let (projection_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM retrieval_units
+         WHERE entity_id = '__projection__' AND slot_key = ?1 AND chunk_index = 0",
+    )
+    .bind("pii.email")
+    .fetch_one(&pool)
+    .await
+    .expect("projection count query should succeed");
+    let (ledger_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM deletion_ledger \
+         WHERE entity_id = ?1 AND target_slot_key = ?2 AND phase = 'hard'",
+    )
+    .bind("entity-dsar")
+    .bind("pii.email")
+    .fetch_one(&pool)
+    .await
+    .expect("deletion ledger query should succeed");
 
     assert_eq!(slot_count, 0, "slot artifact should be deleted");
     assert_eq!(retrieval_count, 0, "retrieval artifact should be deleted");

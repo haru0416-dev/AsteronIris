@@ -10,7 +10,7 @@ use asteroniris::providers::Provider;
 use asteroniris::security::SecurityPolicy;
 use asteroniris::security::policy::TenantPolicyContext;
 use asteroniris::transport::channels::build_system_prompt;
-use rusqlite::{Connection, params};
+use sqlx::SqlitePool;
 use std::future::Future;
 use std::pin::Pin;
 use tempfile::TempDir;
@@ -35,16 +35,18 @@ impl Provider for FixedResponseProvider {
     }
 }
 
-fn event_metadata(conn: &Connection, entity_id: &str, slot_key: &str) -> (String, String, String) {
-    conn.query_row(
+async fn event_metadata(pool: &SqlitePool, entity_id: &str, slot_key: &str) -> (String, String, String) {
+    sqlx::query_as(
         "SELECT layer, provenance_source_class, provenance_reference
          FROM memory_events
          WHERE entity_id = ?1 AND slot_key = ?2
          ORDER BY ingested_at DESC
          LIMIT 1",
-        params![entity_id, slot_key],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )
+    .bind(entity_id)
+    .bind(slot_key)
+    .fetch_one(pool)
+    .await
     .unwrap()
 }
 
@@ -85,10 +87,14 @@ async fn memory_autosave_includes_layer_provenance() {
     .unwrap();
     assert!(response.contains("INFERRED_CLAIM"));
 
-    let conn = Connection::open(workspace.join("memory").join("brain.db")).unwrap();
+    let url = format!(
+        "sqlite:{}",
+        workspace.join("memory").join("brain.db").display()
+    );
+    let pool = SqlitePool::connect(&url).await.unwrap();
 
     assert_eq!(
-        event_metadata(&conn, entity_id, "conversation.user_msg"),
+        event_metadata(&pool, entity_id, "conversation.user_msg").await,
         (
             "working".to_string(),
             "explicit_user".to_string(),
@@ -96,7 +102,7 @@ async fn memory_autosave_includes_layer_provenance() {
         )
     );
     assert_eq!(
-        event_metadata(&conn, entity_id, "conversation.assistant_resp"),
+        event_metadata(&pool, entity_id, "conversation.assistant_resp").await,
         (
             "working".to_string(),
             "system".to_string(),
@@ -104,7 +110,7 @@ async fn memory_autosave_includes_layer_provenance() {
         )
     );
     assert_eq!(
-        event_metadata(&conn, entity_id, "inference.preference.language"),
+        event_metadata(&pool, entity_id, "inference.preference.language").await,
         (
             "semantic".to_string(),
             "inferred".to_string(),
@@ -112,7 +118,7 @@ async fn memory_autosave_includes_layer_provenance() {
         )
     );
     assert_eq!(
-        event_metadata(&conn, entity_id, "contradiction.preference.language"),
+        event_metadata(&pool, entity_id, "contradiction.preference.language").await,
         (
             "episodic".to_string(),
             "system".to_string(),

@@ -4,18 +4,21 @@ use asteroniris::memory::{
     SqliteIngestionPipeline, SqliteMemory,
 };
 use chrono::{Duration, Utc};
+use sqlx::SqlitePool;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-fn promotion_status_for(tmp: &TempDir, unit_id: &str) -> Option<String> {
+async fn promotion_status_for(tmp: &TempDir, unit_id: &str) -> Option<String> {
     let db_path = tmp.path().join("memory").join("brain.db");
-    let conn = rusqlite::Connection::open(db_path).expect("open sqlite db");
-    conn.query_row(
-        "SELECT promotion_status FROM retrieval_units WHERE unit_id = ?1",
-        rusqlite::params![unit_id],
-        |row| row.get(0),
-    )
-    .ok()
+    let url = format!("sqlite:{}", db_path.display());
+    let pool = SqlitePool::connect(&url).await.expect("open sqlite db");
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT promotion_status FROM retrieval_units WHERE unit_id = ?1")
+            .bind(unit_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("query promotion_status");
+    row.map(|(s,)| s)
 }
 
 #[tokio::test]
@@ -389,7 +392,10 @@ async fn sqlite_raw_signal_promotes_to_candidate_after_corroboration() {
         .expect("first raw event insert");
 
     let unit_id = format!("{entity_id}:{slot_key}");
-    assert_eq!(promotion_status_for(&tmp, &unit_id).as_deref(), Some("raw"));
+    assert_eq!(
+        promotion_status_for(&tmp, &unit_id).await.as_deref(),
+        Some("raw")
+    );
 
     memory
         .append_event(
@@ -407,7 +413,7 @@ async fn sqlite_raw_signal_promotes_to_candidate_after_corroboration() {
         .expect("corroborating raw event insert");
 
     assert_eq!(
-        promotion_status_for(&tmp, &unit_id).as_deref(),
+        promotion_status_for(&tmp, &unit_id).await.as_deref(),
         Some("candidate")
     );
 }

@@ -29,7 +29,7 @@
 | B-03 | Critical | `/v1/chat/completions` がデフォルトで実質無認証 | `src/transport/gateway/openai_compat_handler.rs`, `src/transport/gateway/server.rs` |
 | B-04 | Critical | `/ws` が認証境界なしで公開されている | `src/transport/gateway/server.rs`, `src/transport/gateway/websocket.rs` |
 | B-05 | High | 統合テスト群が現行公開 API と乖離（`asteroniris::core::*` 参照等） | `src/lib.rs`, `tests/runtime/memory_write_paths.rs` ほか |
-| B-06 | High | `rusqlite` 依存不足により統合テストが不通過 | `tests/memory/delete_contract.rs`, `Cargo.toml` |
+| B-06 | ~~High~~ Resolved | ~~`rusqlite` 依存不足により統合テストが不通過~~ rusqlite → sqlx 移行完了 | `tests/memory/delete_contract.rs`, `Cargo.toml` |
 | B-07 | High | `eval` コマンドが `todo!()` で panic | `src/app/dispatch.rs`, `src/cli/commands/mod.rs` |
 | B-08 | High | API キー解決経路が CLI / Gateway / Channels で不一致 | `src/app/dispatch.rs`, `src/transport/gateway/server.rs`, `src/transport/channels/startup/runtime.rs` |
 | B-09 | Medium | pairing token TTL が設定のみで未実装 | `src/config/schema/gateway.rs`, `src/transport/gateway/pairing.rs` |
@@ -59,7 +59,7 @@
 | T-06 | Tool 実行統一 | CLI/Gateway/Channel/Daemon 全経路で同一ポリシー適用 | 実行経路差異がなくなる |
 | T-07 | Prompt Hook | `hooks: &[]` の常態化を廃止し最低限 hook を標準化 | leak/security hook が全経路で有効 |
 | T-08 | Integration Tests | `asteroniris::core::*` 参照を現行公開 API に移行 | 統合テストのコンパイルエラー解消 |
-| T-09 | Test Dependency | `rusqlite` を `dev-dependencies` へ追加またはテスト改修 | DB 系統合テストが通過 |
+| T-09 | ~~Test Dependency~~ Resolved | ~~`rusqlite` を `dev-dependencies` へ追加またはテスト改修~~ 全テストを sqlx に移行済 | DB 系統合テストが通過 |
 | T-10 | CI Workflow | 実在テスト名へ修正、migration/rollback テストを実体化 | 0 件実行の疑似成功が消える |
 | T-11 | Eval Command | `todo!()` 排除（実装 or 明示的 `bail!`） | `asteroniris eval` 非 panic |
 | T-12 | CLI Config Merge | `host/port/temperature` を未指定時に config 反映 | config の値が実行時有効 |

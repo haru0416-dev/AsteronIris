@@ -51,8 +51,8 @@ pub(super) fn evaluate_memory_slo(workspace_dir: &Path) {
 }
 
 /// Count contradiction-marked events using a synchronous sqlx query via a
-/// blocking Tokio runtime. This mirrors the v1 rusqlite behaviour from the
-/// heartbeat tick path which is already running on a dedicated thread.
+/// blocking Tokio runtime. The heartbeat tick path runs on a dedicated thread,
+/// so we use `block_in_place` to bridge into async sqlx.
 pub(super) fn contradiction_mark_total(workspace_dir: &Path) -> anyhow::Result<Option<u64>> {
     let db_path = workspace_dir.join("memory").join("brain.db");
     if !db_path.exists() {
