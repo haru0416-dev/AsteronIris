@@ -1,12 +1,11 @@
 use super::types::{MediaConfig, MediaFile, MediaType};
-use anyhow::Result;
-use rusqlite::{Connection, params};
+use anyhow::{Context, Result};
+use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 pub struct MediaStore {
     storage_dir: PathBuf,
-    conn: Arc<Mutex<Connection>>,
+    pool: SqlitePool,
     max_file_size: u64,
 }
 
@@ -20,27 +19,29 @@ impl MediaStore {
         tokio::fs::create_dir_all(&storage_dir).await?;
 
         let db_path = storage_dir.join("media.db");
-        let conn = tokio::task::spawn_blocking(move || -> Result<Connection> {
-            let conn = Connection::open(&db_path)?;
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS media_files (
-                    id TEXT PRIMARY KEY,
-                    mime_type TEXT NOT NULL,
-                    media_type TEXT NOT NULL,
-                    filename TEXT,
-                    size_bytes INTEGER NOT NULL,
-                    storage_path TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )",
-                [],
-            )?;
-            Ok(conn)
-        })
-        .await??;
+        let url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let pool = SqlitePool::connect(&url)
+            .await
+            .context("open media database")?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS media_files (
+                id TEXT PRIMARY KEY,
+                mime_type TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                filename TEXT,
+                size_bytes INTEGER NOT NULL,
+                storage_path TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .context("create media_files table")?;
 
         Ok(Self {
             storage_dir,
-            conn: Arc::new(Mutex::new(conn)),
+            pool,
             max_file_size: config.max_file_size_mb * 1_024 * 1_024,
         })
     }
@@ -66,8 +67,26 @@ impl MediaStore {
 
         let created_at = chrono::Utc::now().to_rfc3339();
         let storage_path_str = storage_path.to_string_lossy().into_owned();
+        let size_i64 = i64::try_from(size).context("file size exceeds i64 range")?;
+        let media_type_str = media_type.as_str();
 
-        let media_file = MediaFile {
+        sqlx::query(
+            "INSERT INTO media_files
+                (id, mime_type, media_type, filename, size_bytes, storage_path, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&id)
+        .bind(&mime_type)
+        .bind(media_type_str)
+        .bind(filename)
+        .bind(size_i64)
+        .bind(&storage_path_str)
+        .bind(&created_at)
+        .execute(&self.pool)
+        .await
+        .context("insert media file")?;
+
+        Ok(MediaFile {
             id,
             mime_type,
             media_type,
@@ -75,89 +94,49 @@ impl MediaStore {
             size_bytes: size,
             storage_path: storage_path_str,
             created_at,
-        };
-
-        let file_clone = media_file.clone();
-        let conn = Arc::clone(&self.conn);
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = conn.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
-            let size_i64 = i64::try_from(file_clone.size_bytes)?;
-            conn.execute(
-                "INSERT INTO media_files (id, mime_type, media_type, filename, size_bytes, storage_path, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    file_clone.id,
-                    file_clone.mime_type,
-                    file_clone.media_type.as_str(),
-                    file_clone.filename,
-                    size_i64,
-                    file_clone.storage_path,
-                    file_clone.created_at,
-                ],
-            )?;
-            Ok(())
         })
-        .await??;
-
-        Ok(media_file)
     }
 
     pub async fn retrieve(&self, id: &str) -> Result<(MediaFile, Vec<u8>)> {
-        let conn = Arc::clone(&self.conn);
-        let id_owned = id.to_string();
-        let media_file = tokio::task::spawn_blocking(move || -> Result<MediaFile> {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
-            let mut stmt = conn.prepare(
-                "SELECT id, mime_type, media_type, filename, size_bytes, storage_path, created_at
-                 FROM media_files
-                 WHERE id = ?1",
-            )?;
-            let file = stmt.query_row([&id_owned], |row| {
-                let media_type_str: String = row.get(2)?;
-                let size_i64: i64 = row.get(4)?;
-                let size_bytes = u64::try_from(size_i64).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        4,
-                        rusqlite::types::Type::Integer,
-                        Box::new(e),
-                    )
-                })?;
-                Ok(MediaFile {
-                    id: row.get(0)?,
-                    mime_type: row.get(1)?,
-                    media_type: MediaType::from_kind(&media_type_str),
-                    filename: row.get(3)?,
-                    size_bytes,
-                    storage_path: row.get(5)?,
-                    created_at: row.get(6)?,
-                })
-            })?;
-            Ok(file)
-        })
-        .await??;
+        let row: (String, String, String, Option<String>, i64, String, String) = sqlx::query_as(
+            "SELECT id, mime_type, media_type, filename, size_bytes, storage_path, created_at
+             FROM media_files
+             WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        .context("retrieve media file")?;
+
+        let size_bytes = u64::try_from(row.4).context("stored size_bytes is negative")?;
+
+        let media_file = MediaFile {
+            id: row.0,
+            mime_type: row.1,
+            media_type: MediaType::from_kind(&row.2),
+            filename: row.3,
+            size_bytes,
+            storage_path: row.5,
+            created_at: row.6,
+        };
 
         let data = tokio::fs::read(&media_file.storage_path).await?;
         Ok((media_file, data))
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {
-        let conn = Arc::clone(&self.conn);
-        let id_owned = id.to_string();
-        let storage_path = tokio::task::spawn_blocking(move || -> Result<String> {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
-            let path: String = conn.query_row(
-                "SELECT storage_path FROM media_files WHERE id = ?1",
-                [&id_owned],
-                |row| row.get(0),
-            )?;
-            conn.execute("DELETE FROM media_files WHERE id = ?1", [&id_owned])?;
-            Ok(path)
-        })
-        .await??;
+        let (storage_path,): (String,) =
+            sqlx::query_as("SELECT storage_path FROM media_files WHERE id = ?1")
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await
+                .context("find media file for deletion")?;
+
+        sqlx::query("DELETE FROM media_files WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("delete media file record")?;
 
         let path = Path::new(&storage_path);
         if path.exists() {

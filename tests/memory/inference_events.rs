@@ -4,7 +4,7 @@ use asteroniris::memory::{
     Memory, MemoryCategory, MemoryEventInput, MemoryEventType, MemoryInferenceEvent, MemorySource,
     PrivacyLevel,
 };
-use rusqlite::Connection;
+use sqlx::SqlitePool;
 
 #[tokio::test]
 async fn memory_inferred_claim_persists() {
@@ -159,14 +159,18 @@ async fn memory_conflict_resolver_precedence() {
         .await
         .unwrap();
 
-    let conn = Connection::open(tmp.path().join("memory").join("brain.db")).unwrap();
-    let supersedes_event_id: Option<String> = conn
-        .query_row(
-            "SELECT supersedes_event_id FROM memory_events WHERE event_id = ?1",
-            [&contradiction.event_id],
-            |row| row.get(0),
-        )
-        .unwrap();
+    let url = format!(
+        "sqlite:{}",
+        tmp.path().join("memory").join("brain.db").display()
+    );
+    let pool = SqlitePool::connect(&url).await.unwrap();
+    let (supersedes_event_id,): (Option<String>,) = sqlx::query_as(
+        "SELECT supersedes_event_id FROM memory_events WHERE event_id = ?1",
+    )
+    .bind(&contradiction.event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         supersedes_event_id.as_deref(),
         Some(explicit_high_confidence.event_id.as_str())

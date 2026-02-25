@@ -5,8 +5,8 @@ use asteroniris::memory::{
 use asteroniris::security::{AutonomyLevel, SecurityPolicy};
 use asteroniris::tools::{ExecutionContext, MemoryGovernanceTool, Tool};
 
-use rusqlite::Connection;
 use serde_json::json;
+use sqlx::SqlitePool;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -62,8 +62,11 @@ async fn dsar_delete_completeness_detects_residue() {
     .await;
 
     let db_path = temp.path().join("memory").join("brain.db");
-    let conn = Connection::open(db_path).expect("sqlite db should be accessible");
-    conn.execute_batch(
+    let url = format!("sqlite:{}", db_path.display());
+    let pool = SqlitePool::connect(&url)
+        .await
+        .expect("sqlite db should be accessible");
+    sqlx::raw_sql(
         "CREATE TRIGGER IF NOT EXISTS test_reinsert_retrieval_residue
          AFTER DELETE ON retrieval_units
          WHEN old.unit_id = 'tenant-alpha:user-residue:profile.email'
@@ -125,6 +128,8 @@ async fn dsar_delete_completeness_detects_residue() {
              );
          END;",
     )
+    .execute(&pool)
+    .await
     .expect("residue trigger should be created");
 
     let tool = MemoryGovernanceTool::new(memory.clone());
