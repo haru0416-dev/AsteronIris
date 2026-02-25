@@ -1,7 +1,7 @@
 # AsteronIris アーキテクチャドキュメント
 
 > **目的**: 今後の拡張・最適化・オンボーディングのための包括的な技術リファレンス。  
-> **最終更新**: 2026-02-22  
+> **最終更新**: 2026-02-25
 > **対象バージョン**: 0.1.0 (Rust 2024 edition)
 
 ---
@@ -20,16 +20,19 @@
 10. [トランスポート層](#10-トランスポート層)
 11. [セキュリティシステム](#11-セキュリティシステム)
 12. [プランナーシステム](#12-プランナーシステム)
-13. [セッション管理](#13-セッション管理)
-14. [ペルソナシステム](#14-ペルソナシステム)
-15. [評価システム](#15-評価システム)
-16. [プラグインシステム](#16-プラグインシステム)
-17. [ランタイムシステム](#17-ランタイムシステム)
-18. [設定システム](#18-設定システム)
-19. [テスト構造](#19-テスト構造)
-20. [ビルドとデプロイ](#20-ビルドとデプロイ)
-21. [拡張ガイド](#21-拡張ガイド)
-22. [システム不変条件と運用指針](#22-システム不変条件と運用指針)
+13. [プロセスモデル](#13-プロセスモデル)
+14. [プロンプトシステム](#14-プロンプトシステム)
+15. [サブエージェント](#15-サブエージェント)
+16. [セッション管理](#16-セッション管理)
+17. [ペルソナシステム](#17-ペルソナシステム)
+18. [評価システム](#18-評価システム)
+19. [プラグインシステム](#19-プラグインシステム)
+20. [ランタイムシステム](#20-ランタイムシステム)
+21. [設定システム](#21-設定システム)
+22. [テスト構造](#22-テスト構造)
+23. [ビルドとデプロイ](#23-ビルドとデプロイ)
+24. [拡張ガイド](#24-拡張ガイド)
+25. [システム不変条件と運用指針](#25-システム不変条件と運用指針)
 
 ---
 
@@ -111,7 +114,7 @@ lancedb = { version = "0.26.2", optional = true }
 - **ロジックは書かない** — 集約されたサブモジュールに分離
 
 ```rust
-// src/core/providers/mod.rs — 典型例
+// src/llm/mod.rs — 典型例
 pub mod anthropic;
 pub mod factory;
 pub mod traits;
@@ -195,116 +198,163 @@ src/
 │       ├── tools.rs           # ツール設定
 │       └── tunnel.rs          # トンネル設定
 │
-├── core/                      # AI コアシステム (8 サブシステム)
-│   ├── mod.rs                 # ファサード
-│   │
-│   ├── agent/                 # 会話ループ + ツール実行
-│   │   ├── mod.rs             # run() re-export
-│   │   ├── loop_/             # メイン会話ループ
-│   │   │   ├── mod.rs         # run() エントリポイント
-│   │   │   ├── session.rs     # セッションターン実行
-│   │   │   ├── context.rs     # メモリコンテキスト構築
-│   │   │   ├── inference.rs   # ポストターン推論
-│   │   │   ├── reflect.rs     # ペルソナリフレクション
-│   │   │   ├── verify_repair.rs # 検証/修復エスカレーション
-│   │   │   └── types.rs       # ターンパラメータ型
-│   │   ├── tool_loop.rs       # ToolLoop::run() — ツール反復実行
-│   │   ├── tool_execution.rs  # ツール結果フォーマット・信頼境界
-│   │   └── tool_types.rs      # ツールループ型定義
-│   │
-│   ├── eval/                  # 評価ハーネス
-│   │   ├── mod.rs             # EvalHarness re-export
-│   │   ├── harness.rs         # 決定論的評価ランナー
-│   │   ├── types.rs           # EvalReport, EvalSuiteSpec
-│   │   └── rng.rs             # 再現可能乱数生成器
-│   │
-│   ├── memory/                # プラガブルメモリバックエンド
-│   │   ├── mod.rs             # Memory trait + factory re-export
-│   │   ├── traits.rs          # Memory trait 定義
-│   │   ├── factory.rs         # create_memory() ファクトリ
-│   │   ├── memory_types.rs    # データ構造体定義
-│   │   ├── capability.rs      # バックエンド能力マトリクス
-│   │   ├── chunker.rs         # ドキュメントチャンカー
-│   │   ├── consolidation.rs   # メモリ統合パイプライン
-│   │   ├── embeddings.rs      # EmbeddingProvider trait + factory
-│   │   ├── vector.rs          # ベクトル演算 (cosine similarity, hybrid merge)
-│   │   ├── sqlite/            # SQLite バックエンド
-│   │   │   ├── mod.rs         # SqliteMemory
-│   │   │   ├── schema.rs      # スキーマ (memories, FTS5, embedding_cache, belief_slots)
-│   │   │   ├── repository.rs  # CRUD + 競合解決
-│   │   │   ├── search.rs      # ベクトル + キーワードハイブリッド検索
-│   │   │   ├── events.rs      # イベント処理
-│   │   │   ├── projection.rs  # 検索結果フォーマット
-│   │   │   └── codec.rs       # エンコード/デコード
-│   │   ├── lancedb/           # LanceDB バックエンド (feature-gated)
-│   │   │   ├── mod.rs         # LanceDbMemory
-│   │   │   ├── interface.rs   # LanceDB インターフェース
-│   │   │   ├── query.rs       # クエリ実行
-│   │   │   ├── batch.rs       # バッチ操作
-│   │   │   ├── backfill.rs    # 非同期エンベディングバックフィル
-│   │   │   └── conversions.rs # Arrow 型変換
-│   │   ├── markdown.rs        # Markdown バックエンド (追記専用)
-│   │   └── hygiene/           # メモリ衛生
-│   │       ├── mod.rs         # 衛生オーケストレーション
-│   │       ├── prune.rs       # リテンションポリシー適用
-│   │       ├── filesystem.rs  # 孤立ファイル削除
-│   │       └── state.rs       # 衛生状態管理
-│   │
-│   ├── persona/               # ペルソナ状態管理
+├── agent/                     # 会話ループ + ツール実行
+│   ├── mod.rs                 # run() re-export
+│   ├── hooks.rs               # 推論前フックシステム
+│   ├── hooks_leak.rs          # シークレットリーク検出フック
+│   ├── token_estimate.rs      # トークン数推定
+│   ├── tool_loop.rs           # ToolLoop::run() — ツール反復実行
+│   └── integration/           # メイン会話ループ
+│       ├── mod.rs             # エントリポイント re-export
+│       ├── run.rs             # run() エントリポイント
+│       ├── session.rs         # セッションターン実行
+│       ├── context.rs         # メモリコンテキスト構築
+│       ├── inference.rs       # ポストターン推論
+│       ├── reflect.rs         # ペルソナリフレクション
+│       ├── verify_repair.rs   # 検証/修復エスカレーション
+│       └── types.rs           # ターンパラメータ型
+│
+├── eval/                      # 評価ハーネス
+│   ├── mod.rs                 # EvalHarness re-export
+│   ├── harness.rs             # 決定論的評価ランナー
+│   ├── types.rs               # EvalReport, EvalSuiteSpec
+│   └── rng.rs                 # 再現可能乱数生成器
+│
+├── llm/                       # LLM プロバイダ抽象化
+│   ├── mod.rs                 # Provider + factory re-export
+│   ├── traits.rs              # Provider trait 定義
+│   ├── factory.rs             # create_provider() 等ファクトリ
+│   ├── types.rs               # ProviderResponse, ContentBlock, StopReason
+│   ├── streaming.rs           # ProviderStream, StreamSink trait
+│   ├── scrub.rs               # シークレットスクラビング
+│   ├── reliable.rs            # ReliableProvider (リトライ + フォールバック)
+│   ├── oauth_recovery.rs      # OAuthRecoveryProvider
+│   ├── http_client.rs         # HTTP クライアントビルダー
+│   ├── tool_convert.rs        # ツール変換ユーティリティ
+│   ├── fallback_tools.rs      # フォールバックツール処理
+│   ├── sse.rs                 # Server-Sent Events パーサー
+│   ├── coercion.rs            # レスポンス型強制変換
+│   ├── cooldown.rs            # CooldownTracker (レート制限)
+│   ├── leak_detect.rs         # シークレットリーク検出
+│   ├── manager.rs             # LLM マネージャー
+│   ├── ollama.rs              # Ollama 実装
+│   ├── anthropic/             # Anthropic 実装
 │   │   ├── mod.rs
-│   │   ├── state_header.rs    # StateHeader JSON スキーマ
-│   │   └── state_persistence.rs # ファイルベース永続化
-│   │
-│   ├── planner/               # DAG ベースプラン実行
-│   │   ├── mod.rs             # Plan, PlanExecutor re-export
-│   │   ├── types.rs           # Plan, PlanStep, StepAction, StepStatus
-│   │   ├── dag_contract.rs    # DagContract, DagNode, DagEdge
-│   │   ├── executor.rs        # PlanExecutor, StepRunner trait
-│   │   └── parser.rs          # PlanParser
-│   │
-│   ├── providers/             # LLM プロバイダ抽象化
-│   │   ├── mod.rs             # Provider + factory re-export
-│   │   ├── traits.rs          # Provider trait 定義
-│   │   ├── factory.rs         # create_provider() 等ファクトリ
-│   │   ├── response.rs        # ProviderResponse, ContentBlock, StopReason
-│   │   ├── streaming.rs       # ProviderStream, StreamSink trait
-│   │   ├── scrub.rs           # シークレットスクラビング
-│   │   ├── reliable.rs        # ReliableProvider (リトライ + フォールバック)
-│   │   ├── oauth_recovery.rs  # OAuthRecoveryProvider
-│   │   ├── http_client.rs     # HTTP クライアントビルダー
-│   │   ├── tool_convert.rs    # ツール変換ユーティリティ
-│   │   ├── fallback_tools.rs  # フォールバックツール処理
-│   │   ├── sse.rs             # Server-Sent Events パーサー
-│   │   ├── compatible.rs      # OpenAI 互換プロバイダ
-│   │   ├── anthropic.rs       # Anthropic 実装
-│   │   ├── openai.rs          # OpenAI 実装
-│   │   ├── gemini.rs          # Google Gemini 実装
-│   │   ├── ollama.rs          # Ollama 実装
-│   │   └── openrouter.rs      # OpenRouter 実装
-│   │
-│   ├── sessions/              # セッション管理
-│   │   ├── mod.rs             # SessionManager, SqliteSessionStore re-export
-│   │   ├── types.rs           # Session, ChatMessage, SessionState
-│   │   ├── store.rs           # SessionStore trait + SqliteSessionStore
-│   │   ├── manager.rs         # SessionManager
-│   │   └── compaction.rs      # メッセージコンパクション
-│   │
-│   └── tools/                 # ツール trait + 実装群
-│       ├── mod.rs             # Tool, ToolRegistry re-export
-│       ├── traits.rs          # Tool trait, ActionOperator trait
-│       ├── factory.rs         # default_tools(), all_tools()
-│       ├── registry.rs        # ToolRegistry (HashMap + middleware chain)
-│       ├── middleware.rs       # ToolMiddleware trait + 実装
-│       ├── shell.rs           # ShellTool
-│       ├── file_read.rs       # FileReadTool
-│       ├── file_write.rs      # FileWriteTool
-│       ├── memory_store.rs    # MemoryStoreTool
-│       ├── memory_recall.rs   # MemoryRecallTool
-│       ├── memory_forget.rs   # MemoryForgetTool
-│       ├── memory_governance.rs # MemoryGovernanceTool
-│       ├── browser_open.rs    # BrowserOpenTool
-│       ├── browser/           # BrowserTool (エージェントブラウザ)
-│       └── composio.rs        # ComposioTool (1000+ アプリ統合)
+│   │   └── types.rs
+│   ├── openai/                # OpenAI 実装
+│   │   ├── mod.rs
+│   │   ├── compat.rs          # OpenAI 互換拡張
+│   │   └── types.rs
+│   ├── gemini/                # Google Gemini 実装
+│   │   ├── mod.rs
+│   │   └── types.rs
+│   ├── openrouter/            # OpenRouter 実装
+│   │   └── mod.rs
+│   └── compatible/            # OpenAI 互換プロバイダ (25+ API)
+│       ├── mod.rs
+│       └── types.rs
+│
+├── memory/                    # プラガブルメモリバックエンド
+│   ├── mod.rs                 # Memory trait + factory re-export
+│   ├── traits.rs              # Memory trait 定義
+│   ├── factory.rs             # create_memory() ファクトリ
+│   ├── capability.rs          # バックエンド能力マトリクス
+│   ├── chunker.rs             # ドキュメントチャンカー
+│   ├── consolidation.rs       # メモリ統合パイプライン
+│   ├── embeddings.rs          # EmbeddingProvider trait + factory
+│   ├── vector.rs              # ベクトル演算 (cosine similarity, hybrid merge)
+│   ├── associations.rs        # メモリ関連付け
+│   ├── sqlite/                # SQLite バックエンド
+│   │   ├── mod.rs             # SqliteMemory
+│   │   ├── schema.rs          # スキーマ (memories, FTS5, embedding_cache, belief_slots)
+│   │   ├── repository.rs      # CRUD + 競合解決
+│   │   ├── search.rs          # ベクトル + キーワードハイブリッド検索
+│   │   ├── events.rs          # イベント処理
+│   │   ├── projection.rs      # 検索結果フォーマット
+│   │   └── codec.rs           # エンコード/デコード
+│   ├── lancedb/               # LanceDB バックエンド (feature-gated)
+│   │   ├── mod.rs             # LanceDbMemory
+│   │   ├── interface.rs       # LanceDB インターフェース
+│   │   ├── query.rs           # クエリ実行
+│   │   ├── batch.rs           # バッチ操作
+│   │   ├── backfill.rs        # 非同期エンベディングバックフィル
+│   │   └── conversions.rs     # Arrow 型変換
+│   ├── markdown/              # Markdown バックエンド (追記専用)
+│   │   └── mod.rs
+│   ├── ingestion/             # メモリ取り込みパイプライン
+│   │   ├── mod.rs
+│   │   ├── pipeline.rs        # 取り込みパイプライン
+│   │   └── signal_envelope.rs # シグナルエンベロープ
+│   ├── types/                 # 共有型定義
+│   │   ├── mod.rs
+│   │   ├── forget.rs          # ForgetMode, ForgetOutcome
+│   │   └── ingress.rs         # IngressSignal
+│   └── hygiene/               # メモリ衛生
+│       ├── mod.rs             # 衛生オーケストレーション
+│       ├── prune.rs           # リテンションポリシー適用
+│       ├── filesystem.rs      # 孤立ファイル削除
+│       └── state.rs           # 衛生状態管理
+│
+├── persona/                   # ペルソナ状態管理
+│   ├── mod.rs
+│   ├── person_identity.rs     # エンティティID生成・正規化
+│   ├── state_header.rs        # StateHeader JSON スキーマ
+│   └── state_persistence.rs   # バックエンド永続化
+│
+├── planner/                   # DAG ベースプラン実行
+│   ├── mod.rs                 # Plan, PlanExecutor re-export
+│   ├── types.rs               # Plan, PlanStep, StepAction, StepStatus
+│   ├── dag_contract.rs        # DagContract, DagNode, DagEdge
+│   ├── executor.rs            # PlanExecutor, StepRunner trait
+│   └── parser.rs              # PlanParser
+│
+├── process/                   # プロセスモデル (イベント駆動ワーカー)
+│   ├── mod.rs
+│   ├── branch.rs              # 実行ブランチライフサイクル
+│   ├── channel_proc.rs        # チャンネルプロセス管理
+│   ├── compactor.rs           # メモリ・コンテキスト圧縮
+│   ├── cortex.rs              # メモリ蒸留ループ
+│   ├── deps.rs                # 共有依存関係 (ProcessDeps)
+│   ├── events.rs              # ProcessEvent, event_bus()
+│   └── worker.rs              # WorkerParams, WorkerResult, run_worker()
+│
+├── prompt/                    # プロンプト構築
+│   ├── mod.rs
+│   ├── builder.rs             # build_system_prompt() 等
+│   └── engine.rs              # TeraEngine (テンプレートエンジン)
+│
+├── session/                   # セッション管理
+│   ├── mod.rs                 # SessionManager, SqliteSessionStore re-export
+│   ├── types.rs               # Session, ChatMessage, SessionState
+│   ├── store.rs               # SessionStore trait + SqliteSessionStore
+│   ├── manager.rs             # SessionManager
+│   └── compaction.rs          # メッセージコンパクション
+│
+├── subagents/                 # サブエージェント調整
+│   ├── mod.rs                 # SubagentRuntime
+│   ├── coordination.rs        # CoordinationManager, CoordinationSession
+│   ├── dispatch.rs            # 並列ロールディスパッチ
+│   └── roles.rs               # AgentRole, RoleConfig
+│
+└── tools/                     # ツール trait + 実装群
+    ├── mod.rs                 # Tool, ToolRegistry re-export
+    ├── traits.rs              # Tool trait, ActionOperator trait
+    ├── factory.rs             # default_tools(), all_tools()
+    ├── registry.rs            # ToolRegistry (HashMap + middleware chain)
+    ├── middleware.rs          # ToolMiddleware trait + 実装
+    ├── shell.rs               # ShellTool
+    ├── file_read.rs           # FileReadTool
+    ├── file_write.rs          # FileWriteTool
+    ├── action_intent.rs       # アクション意図分類
+    ├── common.rs              # 共有ユーティリティ
+    ├── isolation.rs           # 実行分離
+    ├── types.rs               # ToolResult, ToolSpec 等
+    └── memory/                # メモリ操作ツール群
+        ├── mod.rs
+        ├── forget.rs          # MemoryForgetTool
+        ├── governance.rs      # MemoryGovernanceTool
+        ├── recall.rs          # MemoryRecallTool
+        └── store.rs           # MemoryStoreTool
 │
 ├── transport/                 # 外部 I/O
 │   ├── mod.rs
@@ -485,7 +535,7 @@ src/
 
 ### 4.1 Provider trait
 
-**ファイル**: `src/core/providers/traits.rs`
+**ファイル**: `src/llm/traits.rs`
 
 ```rust
 #[async_trait]
@@ -539,7 +589,7 @@ pub trait Provider: Send + Sync {
 
 ### 4.2 Memory trait
 
-**ファイル**: `src/core/memory/traits.rs`
+**ファイル**: `src/memory/traits.rs`
 
 ```rust
 #[async_trait]
@@ -563,7 +613,7 @@ pub trait Memory: Send + Sync {
 
 ### 4.3 Tool trait
 
-**ファイル**: `src/core/tools/traits.rs`
+**ファイル**: `src/tools/traits.rs`
 
 ```rust
 #[async_trait]
@@ -604,17 +654,17 @@ pub trait Channel: Send + Sync {
 
 | トレイト            | ファイル                          | 目的                           |
 | ------------------- | --------------------------------- | ------------------------------ |
-| `ToolMiddleware`    | `core/tools/middleware.rs`        | ツール実行前後のインターセプト |
-| `ActionOperator`    | `core/tools/traits.rs`            | 外部アクション実行             |
+| `ToolMiddleware`    | `tools/middleware.rs`        | ツール実行前後のインターセプト |
+| `ActionOperator`    | `tools/traits.rs`            | 外部アクション実行             |
 | `ApprovalBroker`    | `security/approval.rs`            | ツール実行承認リクエスト処理   |
 | `RuntimeAdapter`    | `runtime/environment/traits.rs`   | プラットフォーム抽象化         |
 | `Tunnel`            | `runtime/tunnel/traits.rs`        | トンネルプロバイダ抽象化       |
 | `Observer`          | `runtime/observability/traits.rs` | 可観測性バックエンド           |
 | `UsageTracker`      | `runtime/usage/tracker.rs`        | 使用量追跡                     |
-| `SessionStore`      | `core/sessions/store.rs`          | セッション永続化               |
-| `EmbeddingProvider` | `core/memory/embeddings.rs`       | エンベディングモデル抽象化     |
-| `StreamSink`        | `core/providers/streaming.rs`     | ストリーミングレスポンスシンク |
-| `StepRunner`        | `core/planner/executor.rs`        | プランステップ実行             |
+| `SessionStore`      | `session/store.rs`          | セッション永続化               |
+| `EmbeddingProvider` | `memory/embeddings.rs`       | エンベディングモデル抽象化     |
+| `StreamSink`        | `llm/streaming.rs`     | ストリーミングレスポンスシンク |
+| `StepRunner`        | `planner/executor.rs`        | プランステップ実行             |
 | `Scout`             | `plugins/skillforge/scout.rs`     | スキル発見                     |
 
 ---
@@ -625,7 +675,7 @@ pub trait Channel: Send + Sync {
 
 | 関数                                                                                 | ファイル                    | 説明                                            |
 | ------------------------------------------------------------------------------------ | --------------------------- | ----------------------------------------------- |
-| `create_provider(name, api_key)`                                                     | `core/providers/factory.rs` | プロバイダ名から `Box<dyn Provider>` を生成     |
+| `create_provider(name, api_key)`                                                     | `llm/factory.rs` | プロバイダ名から `Box<dyn Provider>` を生成     |
 | `create_resilient_provider(name, api_key, reliability)`                              | 同上                        | リトライ + フォールバックチェーン付きプロバイダ |
 | `create_resilient_provider_with_resolver(name, reliability, resolver)`               | 同上                        | API キーリゾルバ付きの耐障害プロバイダ          |
 | `create_provider_with_oauth_recovery(config, name, api_key)`                         | 同上                        | OAuth トークンリフレッシュ付きプロバイダ        |
@@ -643,19 +693,19 @@ pub trait Channel: Send + Sync {
 
 | 関数                                                        | ファイル                    | 説明                         |
 | ----------------------------------------------------------- | --------------------------- | ---------------------------- |
-| `create_memory(config, workspace_dir, api_key)`             | `core/memory/factory.rs`    | メモリバックエンド生成       |
-| `create_embedding_provider(provider, api_key, model, dims)` | `core/memory/embeddings.rs` | エンベディングプロバイダ生成 |
-| `persist_inference_events(memory, events)`                  | `core/memory/factory.rs`    | 推論イベント永続化           |
+| `create_memory(config, workspace_dir, api_key)`             | `memory/factory.rs`    | メモリバックエンド生成       |
+| `create_embedding_provider(provider, api_key, model, dims)` | `memory/embeddings.rs` | エンベディングプロバイダ生成 |
+| `persist_inference_events(memory, events)`                  | `memory/factory.rs`    | 推論イベント永続化           |
 
 ### ツール系
 
 | 関数                                                                                  | ファイル                   | 説明                                                  |
 | ------------------------------------------------------------------------------------- | -------------------------- | ----------------------------------------------------- |
-| `default_tools(security)`                                                             | `core/tools/factory.rs`    | デフォルトツールセット (shell, file_read, file_write) |
+| `default_tools(security)`                                                             | `tools/factory.rs`    | デフォルトツールセット (shell, file_read, file_write) |
 | `all_tools(security, memory, composio_key, browser_config, tools_config, mcp_config)` | 同上                       | 全ツール (設定に基づく条件付き)                       |
 | `default_action_operator(security)`                                                   | 同上                       | NoopOperator                                          |
 | `tool_descriptions(browser_enabled, composio_enabled, mcp_config)`                    | 同上                       | システムプロンプト用ツール説明                        |
-| `default_middleware_chain(...)`                                                       | `core/tools/middleware.rs` | デフォルトミドルウェアスタック                        |
+| `default_middleware_chain(...)`                                                       | `tools/middleware.rs` | デフォルトミドルウェアスタック                        |
 
 ### トランスポート系
 
@@ -732,7 +782,7 @@ pub trait Channel: Send + Sync {
 
 ### 6.2 エントリポイント
 
-**ファイル**: `src/core/agent/loop_/mod.rs`
+**ファイル**: `src/agent/integration/mod.rs`
 
 `run()` 関数が会話ループのエントリポイント:
 
@@ -745,7 +795,7 @@ pub trait Channel: Send + Sync {
 
 ### 6.3 ツールループ詳細
 
-**ファイル**: `src/core/agent/tool_loop.rs`
+**ファイル**: `src/agent/tool_loop.rs`
 
 `ToolLoop::run()` の反復フロー:
 
@@ -797,7 +847,7 @@ loop {
 
 ### 6.4 ツール実行フロー
 
-**ファイル**: `src/core/tools/registry.rs`
+**ファイル**: `src/tools/registry.rs`
 
 `ToolRegistry::execute(name, args, ctx)`:
 
@@ -902,7 +952,7 @@ pub struct MemoryEventInput {
 
 ### 7.2 SQLite バックエンド（デフォルト）
 
-**ファイル**: `src/core/memory/sqlite/`
+**ファイル**: `src/memory/sqlite/`
 
 #### スキーマ (`schema.rs`)
 
@@ -958,7 +1008,7 @@ pub struct MemoryEventInput {
 
 ### 7.3 LanceDB バックエンド（feature-gated）
 
-**ファイル**: `src/core/memory/lancedb/`
+**ファイル**: `src/memory/lancedb/`
 
 - Arrow ネイティブカラムナ型ベクトル DB
 - 非同期バックフィルワーカー（指数バックオフ: 200ms → 30s、最大5リトライ）
@@ -973,7 +1023,7 @@ pub struct MemoryEventInput {
 
 ### 7.4 Markdown バックエンド
 
-**ファイル**: `src/core/memory/markdown.rs`
+**ファイル**: `src/memory/markdown.rs`
 
 - `workspace/MEMORY.md` — キュレートされた長期メモリ
 - `workspace/memory/YYYY-MM-DD.md` — 日次ログ（追記専用）
@@ -988,7 +1038,7 @@ pub struct MemoryEventInput {
 
 ### 7.5 エンベディングシステム
 
-**ファイル**: `src/core/memory/embeddings.rs`
+**ファイル**: `src/memory/embeddings.rs`
 
 ```rust
 pub trait EmbeddingProvider: Send + Sync {
@@ -1014,7 +1064,7 @@ pub trait EmbeddingProvider: Send + Sync {
 
 ### 7.6 メモリ統合 (Consolidation)
 
-**ファイル**: `src/core/memory/consolidation.rs`
+**ファイル**: `src/memory/consolidation.rs`
 
 Working/Episodic メモリを Semantic サマリーに変換:
 
@@ -1025,7 +1075,7 @@ Working/Episodic メモリを Semantic サマリーに変換:
 
 ### 7.7 メモリ衛生 (Hygiene)
 
-**ファイル**: `src/core/memory/hygiene/`
+**ファイル**: `src/memory/hygiene/`
 
 **リテンション階層**:
 | レイヤー | 保持期間 |
@@ -1072,7 +1122,7 @@ Working/Episodic メモリを Semantic サマリーに変換:
 
 ### 8.1 プロバイダアーキテクチャ
 
-**ファイル**: `src/core/providers/`
+**ファイル**: `src/llm/`
 
 ```
 create_provider(name)
@@ -1134,7 +1184,7 @@ pub enum StreamEvent {
 
 ### 8.4 シークレットスクラビング
 
-**ファイル**: `src/core/providers/scrub.rs`
+**ファイル**: `src/llm/scrub.rs`
 
 検出パターン (25+):
 `sk-`, `xoxb-`, `xoxp-`, `xoxs-`, `xoxa-`, `xapp-`, `ghp_`, `github_pat_`, `hf_`, `glpat-`, `ya29.`, `AIza`, `Authorization: Bearer`, `api_key=`, `access_token=`, `refresh_token=`, `id_token=`, JSON バリアント等
@@ -1143,7 +1193,7 @@ pub enum StreamEvent {
 
 ### 8.5 ReliableProvider
 
-**ファイル**: `src/core/providers/reliable.rs`
+**ファイル**: `src/llm/reliable.rs`
 
 ```rust
 pub struct ReliableProvider {
@@ -1179,7 +1229,7 @@ pub struct ReliableProvider {
 
 ### 9.2 ToolRegistry
 
-**ファイル**: `src/core/tools/registry.rs`
+**ファイル**: `src/tools/registry.rs`
 
 ```rust
 pub struct ToolRegistry {
@@ -1515,7 +1565,7 @@ pub enum RiskLevel { Low, Medium, High }
 
 ## 12. プランナーシステム
 
-**ファイル**: `src/core/planner/`
+**ファイル**: `src/planner/`
 
 ### データ構造
 
@@ -1586,9 +1636,152 @@ pub trait StepRunner: Send + Sync {
 
 ---
 
-## 13. セッション管理
+## 13. プロセスモデル
 
-**ファイル**: `src/core/sessions/`
+**ファイル**: `src/process/`
+
+プロセスモデルはイベント駆動型ワーカーアーキテクチャを実装し、マルチチャネル並行処理を可能にする。
+
+### イベントバス
+
+```rust
+// src/process/events.rs
+pub enum ProcessEvent {
+    WorkerStarted { entity_id: String, turn: u32 },
+    ToolExecuted { entity_id: String, tool_name: String, success: bool },
+    WorkerCompleted { entity_id: String, turn: u32, tokens_used: Option<u32> },
+    ContextCompacted { entity_id: String, level: u8 },
+    CortexBulletinUpdated,
+    BranchCreated { entity_id: String },
+    BranchClosed { entity_id: String },
+    Error { entity_id: String, message: String },
+}
+
+pub type EventSender = broadcast::Sender<ProcessEvent>;
+pub type EventReceiver = broadcast::Receiver<ProcessEvent>;
+pub fn event_bus(capacity: usize) -> (EventSender, EventReceiver)
+```
+
+### ワーカー
+
+```rust
+// src/process/worker.rs
+pub struct WorkerParams {
+    pub entity_id: String,
+    pub system_prompt: String,
+    pub user_message: String,
+    pub image_content: Option<Vec<ImageContent>>,
+    pub model: String,
+    pub temperature: f64,
+    pub max_tool_iterations: u32,
+    pub conversation_history: Vec<ProviderMessage>,
+    pub stream_sink: Option<Arc<dyn StreamSink>>,
+}
+pub struct WorkerResult { pub tool_loop_result: ToolLoopResult, pub entity_id: String }
+pub async fn run_worker(deps: Arc<ProcessDeps>, params: WorkerParams, events: EventSender) -> WorkerResult
+```
+
+### Cortex ループ
+
+`src/process/cortex.rs` はバックグラウンドで定期的に実行されるメモリ蒸留ループ:
+
+- `run_cortex_loop(deps, events, interval, shutdown)` — バックグラウンドタスク
+- `generate_bulletin(deps, entity_id)` — 最新コンテキスト要約を生成
+
+### ProcessDeps
+
+`src/process/deps.rs` の `ProcessDeps` は全コンポーネントが共有する依存関係バンドル:
+`provider`, `memory`, `session_manager`, `security`, `tool_registry`, `config` など。
+
+---
+
+## 14. プロンプトシステム
+
+**ファイル**: `src/prompt/`
+
+```rust
+// src/prompt/builder.rs
+pub fn build_system_prompt(
+    persona: Option<&PersonaConfig>,
+    tool_descriptions: &str,
+    locale: &str,
+) -> String
+
+pub fn build_consolidation_prompt(events: &[MemoryEvent]) -> String
+
+pub fn build_compaction_prompt(messages: &[ChatMessage]) -> String
+```
+
+`TeraEngine` (`src/prompt/engine.rs`) は Tera テンプレートエンジンをラップし、
+変数展開・条件分岐・ループを使ったプロンプトテンプレートを処理する。
+
+---
+
+## 15. サブエージェント
+
+**ファイル**: `src/subagents/`
+
+```rust
+// src/subagents/mod.rs
+pub struct SubagentRuntime {
+    provider: Arc<dyn Provider>,
+    system_prompt: String,
+    default_model: String,
+    default_temperature: f64,
+    runs: Mutex<HashMap<String, SubagentRunEntry>>,
+}
+
+pub enum SubagentRunStatus { Running, Completed, Failed, Cancelled }
+pub struct SubagentRunSnapshot {
+    pub run_id: String,
+    pub label: String,
+    pub task: String,
+    pub model: String,
+    pub status: SubagentRunStatus,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    pub started_at: u64,
+    pub finished_at: Option<u64>,
+}
+
+impl SubagentRuntime {
+    pub fn new(provider, system_prompt, model, temperature) -> Self;
+    pub async fn run_inline(&self, label, task, model_override) -> Result<String>;
+    pub fn spawn(&self, label, task, model_override) -> String;  // → run_id
+    pub fn get(&self, run_id: &str) -> Option<SubagentRunSnapshot>;
+    pub fn list(&self) -> Vec<SubagentRunSnapshot>;
+    pub fn cancel(&self, run_id: &str) -> bool;
+}
+```
+
+```rust
+// src/subagents/coordination.rs
+pub struct CoordinationSession {
+    pub session_id: String,
+    pub roles: Vec<RoleConfig>,
+    pub shared_context: Vec<ProviderMessage>,
+    pub created_at: u64,
+}
+pub struct CoordinationManager { /* ... */ }
+
+// src/subagents/roles.rs
+pub enum AgentRole { Planner, Executor, Reviewer, Critic, Custom(String) }
+pub struct RoleConfig {
+    pub role: AgentRole,
+    pub system_prompt_override: Option<String>,
+    pub model_override: Option<String>,
+    pub temperature_override: Option<f64>,
+    pub timeout_secs: Option<u64>,
+}
+```
+
+`dispatch.rs` は複数ロールを並列実行し、結果を集約する。
+
+---
+
+## 16. セッション管理
+
+**ファイル**: `src/session/`
 
 ### SessionStore trait
 
@@ -1657,9 +1850,9 @@ SQLite ベースの実装:
 
 ---
 
-## 14. ペルソナシステム
+## 17. ペルソナシステム
 
-**ファイル**: `src/core/persona/`
+**ファイル**: `src/persona/`
 
 ### StateHeader
 
@@ -1688,9 +1881,9 @@ SQLite ベースの実装:
 
 ---
 
-## 15. 評価システム
+## 18. 評価システム
 
-**ファイル**: `src/core/eval/`
+**ファイル**: `src/eval/`
 
 ### EvalHarness
 
@@ -1739,7 +1932,7 @@ pub struct EvalSuiteSummary {
 
 ---
 
-## 16. プラグインシステム
+## 19. プラグインシステム
 
 ### 16.1 SkillForge
 
@@ -1789,7 +1982,7 @@ pub struct EvalSuiteSummary {
 
 ---
 
-## 17. ランタイムシステム
+## 20. ランタイムシステム
 
 ### 17.1 環境アダプタ
 
@@ -1861,7 +2054,7 @@ pub trait Observer: Send + Sync {
 
 ---
 
-## 18. 設定システム
+## 21. 設定システム
 
 ### 18.1 Config 構造
 
@@ -1942,7 +2135,7 @@ encrypt = true
 
 ---
 
-## 19. テスト構造
+## 22. テスト構造
 
 ### インテグレーションテスト
 
@@ -1991,7 +2184,7 @@ BACKEND=sqlite cargo test --test memory   # バックエンド指定
 
 ---
 
-## 20. ビルドとデプロイ
+## 23. ビルドとデプロイ
 
 ### ビルドプロファイル
 
@@ -2036,7 +2229,7 @@ docker build -t asteroniris .
 
 ---
 
-## 21. 拡張ガイド
+## 24. 拡張ガイド
 
 ### 新しいチャネルの追加
 
@@ -2048,24 +2241,24 @@ docker build -t asteroniris .
 
 ### 新しいプロバイダの追加
 
-1. `src/core/providers/<name>.rs` に `Provider` trait を実装
-2. `src/core/providers/factory.rs` の `create_provider()` match に追加
-3. `src/core/providers/mod.rs` で `pub mod` re-export
+1. `src/llm/<name>.rs` に `Provider` trait を実装
+2. `src/llm/factory.rs` の `create_provider()` match に追加
+3. `src/llm/mod.rs` で `pub mod` re-export
 4. API キー解決: `resolve_api_key()` にプロバイダ固有環境変数を追加
 
 ### 新しいツールの追加
 
-1. `src/core/tools/<name>.rs` に `Tool` trait を実装
-2. `src/core/tools/factory.rs` の `all_tools()` に追加
+1. `src/tools/<name>.rs` に `Tool` trait を実装
+2. `src/tools/factory.rs` の `all_tools()` に追加
 3. `tool_descriptions()` にツール説明を追加
-4. `src/core/tools/mod.rs` で `pub use` re-export
+4. `src/tools/mod.rs` で `pub use` re-export
 
 ### 新しいメモリバックエンドの追加
 
-1. `src/core/memory/<name>/` ディレクトリに `Memory` trait を実装
-2. `src/core/memory/factory.rs` の `create_memory()` match に追加
-3. `src/core/memory/capability.rs` に能力マトリクスを追加
-4. `src/core/memory/mod.rs` で re-export
+1. `src/memory/<name>/` ディレクトリに `Memory` trait を実装
+2. `src/memory/factory.rs` の `create_memory()` match に追加
+3. `src/memory/capability.rs` に能力マトリクスを追加
+4. `src/memory/mod.rs` で re-export
 
 ### 新しいトンネルの追加
 
@@ -2075,7 +2268,7 @@ docker build -t asteroniris .
 
 ---
 
-## 22. システム不変条件と運用指針
+## 25. システム不変条件と運用指針
 
 ### 22.1 並行性モデル
 
