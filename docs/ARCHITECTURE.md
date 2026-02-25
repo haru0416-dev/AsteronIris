@@ -48,7 +48,7 @@ AsteronIris は **Rust 製のセキュア・拡張可能な AI アシスタン�
 | 非同期ランタイム   | Tokio (`rt-multi-thread`)                               |
 | HTTP サーバ        | Axum (HTTP/1 + WebSocket)                               |
 | HTTP クライアント  | reqwest (rustls)                                        |
-| 永続化             | rusqlite (SQLite), LanceDB (Arrow-native vector DB)     |
+| 永続化             | sqlx 0.8 + SQLite (メイン), rusqlite (media/storage のみ), LanceDB (vector DB) |
 | シリアライズ       | serde + serde_json, TOML                                |
 | 暗号化             | ChaCha20-Poly1305 (AEAD), HMAC-SHA256                   |
 | Lint               | clippy pedantic (`-D warnings`)                         |
@@ -76,7 +76,8 @@ src/lib.rs   →  ライブラリとして全 pub モジュールを re-export
 tokio = { version = "1", features = ["rt-multi-thread", "macros", ...] }
 axum = { version = "0.8", features = ["http1", "json", "tokio", "query", "ws"] }
 reqwest = { version = "0.13", features = ["json", "rustls", "multipart", "stream"] }
-rusqlite = { version = "0.38" }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }  # メイン DB ライブラリ
+rusqlite = { version = "0.31", features = ["bundled"] }              # media/storage.rs のみ
 serde / serde_json = "1"
 chacha20poly1305 = "0.10"
 clap = { version = "4.5", features = ["derive"] }
