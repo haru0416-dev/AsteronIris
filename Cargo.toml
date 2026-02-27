@@ -66,7 +66,7 @@ hex  = { version = "0.4", default-features = false, features = ["alloc"] }
 subtle = { version = "2", default-features = false }
 
 # Cryptographic RNG for token generation
-rand = { version = "0.9", default-features = false, features = ["std", "thread_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "thread_rng"] }
 
 # Zeroize secret key buffers on drop
 zeroize = { version = "1", default-features = false, features = ["derive"] }
